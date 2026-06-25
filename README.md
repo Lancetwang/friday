@@ -13,10 +13,10 @@ flowchart TD
     CLI["friday CLI"] --> Loader["load soul/user/AGENTS/memory"]
     Loader --> Agent["agent_core.Agent"]
     Agent --> Tools["tools"]
-    Tools --> Read["read_file"]
-    Tools --> Write["write_file"]
-    Tools --> Edit["edit_file"]
-    Tools --> Shell["run_shell"]
+    Tools --> Read["read_file: line-windowed reads"]
+    Tools --> Write["write_file: full overwrite"]
+    Tools --> Edit["edit_file: line range or exact text"]
+    Tools --> Shell["run_shell: PowerShell on Windows"]
     Tools --> Memory["read_memory / remember"]
     Agent --> Session[".friday/sessions/*.jsonl"]
 ```
@@ -83,6 +83,13 @@ It asks for confirmation. Use `friday reset --yes` only when you are sure.
 - `.friday/sessions/*.jsonl`: local chat logs.
 
 Bundled defaults live in `src/friday/prompts/` and are copied to `~/.friday/` by `friday init`.
+
+## Tools
+
+- `read_file(path, start_line=1, line_count=120, max_chars=6000)`
+- `write_file(path, content)` overwrites the whole file.
+- `edit_file(path, replacement, start_line=0, end_line=0, old_text="")` edits a line range, inserts when `end_line=0`, or replaces one exact text match.
+- `run_shell(command, timeout_seconds=60, max_chars=8000)` runs in the workspace.
 
 ## Validate
 

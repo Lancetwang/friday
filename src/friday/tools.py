@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -25,21 +26,31 @@ def build_tools(workspace: Path, friday_dir: Path):
     def read_file(
         path: Annotated[str, "Path inside the workspace."],
         start_line: Annotated[int, "1-based line number to start reading from."] = 1,
+        line_count: Annotated[int, "Maximum number of lines to read."] = 120,
         max_chars: Annotated[int, "Maximum characters to return."] = 6000,
     ) -> dict:
         file_path = in_workspace(path)
         text = file_path.read_text(encoding="utf-8")
         lines = text.splitlines()
         start = max(1, start_line)
+        limit = max(1, line_count)
         out: list[str] = []
         size = 0
-        for number, line in enumerate(lines[start - 1 :], start=start):
+        for number, line in enumerate(lines[start - 1 : start - 1 + limit], start=start):
             rendered = f"{number}: {line}"
             if out and size + len(rendered) + 1 > max_chars:
                 break
             out.append(rendered)
             size += len(rendered) + 1
-        return {"path": str(file_path), "line_count": len(lines), "content": "\n".join(out)}
+        end = start + len(out) - 1 if out else start - 1
+        return {
+            "path": str(file_path),
+            "total_lines": len(lines),
+            "start_line": start,
+            "end_line": end,
+            "truncated": end < len(lines),
+            "content": "\n".join(out),
+        }
 
     @tool(description="Create or overwrite a UTF-8 text file inside the current workspace.")
     def write_file(
@@ -47,23 +58,42 @@ def build_tools(workspace: Path, friday_dir: Path):
         content: Annotated[str, "Full file content."],
     ) -> dict:
         file_path = in_workspace(path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content, encoding="utf-8")
+        _write_text(file_path, content)
         return {"path": str(file_path), "chars": len(content), "lines": len(content.splitlines())}
 
-    @tool(description="Replace exact text in a UTF-8 text file inside the current workspace.")
+    @tool(description="Edit a UTF-8 text file by line range or exact text inside the current workspace.")
     def edit_file(
         path: Annotated[str, "Path inside the workspace."],
-        old_text: Annotated[str, "Exact text to replace."],
-        new_text: Annotated[str, "Replacement text."],
+        replacement: Annotated[str, "Replacement text."],
+        start_line: Annotated[int, "1-based first line to replace. Use with end_line."] = 0,
+        end_line: Annotated[int, "1-based last line to replace, inclusive. Use 0 to insert before start_line."] = 0,
+        old_text: Annotated[str, "Exact text to replace when not using line range."] = "",
     ) -> dict:
         file_path = in_workspace(path)
         text = file_path.read_text(encoding="utf-8")
+        if start_line > 0:
+            newline = "\n" if text.endswith("\n") else ""
+            lines = text.splitlines()
+            start = min(start_line, len(lines) + 1)
+            end = min(max(end_line, start - 1), len(lines))
+            replacement_lines = replacement.splitlines()
+            new_lines = [*lines[: start - 1], *replacement_lines, *lines[end:]]
+            _write_text(file_path, _join_lines(new_lines, bool(new_lines) and bool(newline)))
+            return {
+                "path": str(file_path),
+                "mode": "line_range",
+                "start_line": start,
+                "end_line": end,
+                "replacement_lines": len(replacement_lines),
+                "total_lines": len(new_lines),
+            }
+        if not old_text:
+            raise ValueError("Provide start_line/end_line or old_text.")
         count = text.count(old_text)
         if count != 1:
             raise ValueError(f"Expected exactly one match, found {count}.")
-        file_path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
-        return {"path": str(file_path), "replacements": 1}
+        _write_text(file_path, text.replace(old_text, replacement, 1))
+        return {"path": str(file_path), "mode": "exact_text", "replacements": 1}
 
     @tool(description="Run a shell command in the current workspace. Uses PowerShell on Windows.")
     def run_shell(
@@ -75,15 +105,19 @@ def build_tools(workspace: Path, friday_dir: Path):
             cmd = ["powershell", "-NoProfile", "-Command", command]
         else:
             cmd = ["bash", "-lc", command]
-        completed = subprocess.run(
-            cmd,
-            cwd=workspace,
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-        )
+        try:
+            completed = subprocess.run(
+                cmd,
+                cwd=workspace,
+                text=True,
+                capture_output=True,
+                timeout=max(1, timeout_seconds),
+            )
+        except subprocess.TimeoutExpired as error:
+            output = ((error.stdout or "") + (error.stderr or ""))[-max_chars:]
+            return {"exit_code": None, "timed_out": True, "output": output}
         output = (completed.stdout + completed.stderr)[-max_chars:]
-        return {"exit_code": completed.returncode, "output": output}
+        return {"exit_code": completed.returncode, "timed_out": False, "output": output}
 
     @tool(description="Read Friday memory notes.")
     def read_memory(
@@ -105,3 +139,17 @@ def build_tools(workspace: Path, friday_dir: Path):
         return {"scope": scope, "path": str(path)}
 
     return [read_file, write_file, edit_file, run_shell, read_memory, remember]
+
+
+def _join_lines(lines: list[str], trailing_newline: bool) -> str:
+    if not lines:
+        return ""
+    return "\n".join(lines) + ("\n" if trailing_newline else "")
+
+
+def _write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=path.parent) as file:
+        file.write(content)
+        temp_path = Path(file.name)
+    temp_path.replace(path)

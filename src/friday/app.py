@@ -119,6 +119,7 @@ def _runtime_notes() -> str:
     return """
 Available tools are read_file, write_file, edit_file, run_shell, read_memory, and remember.
 Use read_file before editing unfamiliar files.
+Use edit_file for partial changes and write_file only when replacing the whole file.
 Use remember only for durable facts or preferences worth keeping.
 For Windows shell commands, prefer PowerShell syntax.
 """.strip()
