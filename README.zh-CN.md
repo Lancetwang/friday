@@ -28,6 +28,8 @@ uv sync
 Copy-Item .env.example .env
 ```
 
+`agent-core-runtime` 会自动从 GitHub 下载，不需要本地放一个相邻的 core 仓库。
+
 填写 `.env`：
 
 ```text

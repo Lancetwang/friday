@@ -5,11 +5,12 @@ requires-python = ">=3.12"
 [[package]]
 name = "agent-core-runtime"
 version = "0.1.0"
-source = { editable = "../agent-core-runtime" }
+source = { url = "https://github.com/Lancetwang/agent-core-runtime/archive/64e12019f06eb57f289bf90065ff3d994eb247d3.zip" }
 dependencies = [
     { name = "openai" },
     { name = "python-dotenv" },
 ]
+sdist = { hash = "sha256:6f656817394e99bc0adfc20fcd8b9eddb05569e970df1a00df8e2e66b476b7d1" }
 
 [package.metadata]
 requires-dist = [
@@ -75,7 +76,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "agent-core-runtime", editable = "../agent-core-runtime" }]
+requires-dist = [{ name = "agent-core-runtime", url = "https://github.com/Lancetwang/agent-core-runtime/archive/64e12019f06eb57f289bf90065ff3d994eb247d3.zip" }]
 
 [[package]]
 name = "h11"

@@ -28,6 +28,8 @@ uv sync
 Copy-Item .env.example .env
 ```
 
+`agent-core-runtime` is pulled automatically from GitHub; no sibling local repo is required.
+
 Fill `.env`:
 
 ```text

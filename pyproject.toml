@@ -5,11 +5,8 @@ description = "Friday, a personal CLI agent built on agent-core-runtime."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "agent-core-runtime",
+    "agent-core-runtime @ https://github.com/Lancetwang/agent-core-runtime/archive/64e12019f06eb57f289bf90065ff3d994eb247d3.zip",
 ]
-
-[tool.uv.sources]
-agent-core-runtime = { path = "../agent-core-runtime", editable = true }
 
 [project.scripts]
 friday = "friday.cli:main"
@@ -20,3 +17,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/friday"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
