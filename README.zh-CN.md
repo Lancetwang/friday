@@ -36,20 +36,34 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 ```
 
+安装全局 `friday` 命令：
+
+```powershell
+uv tool install -e .
+```
+
 ## 使用
 
 ```powershell
-uv run friday init
-uv run friday ask "summarize this project"
-uv run friday chat
-uv run friday memory
+friday init
+friday ask "summarize this project"
+friday chat
+friday memory
+friday reset
 ```
 
 LLM 默认流式输出。关闭流式：
 
 ```powershell
-uv run friday --no-stream ask "hello"
+friday --no-stream ask "hello"
 ```
+
+在 `friday chat` 里可以使用斜杆命令：
+
+- `/help`
+- `/memory`
+- `/reset`
+- `/exit`
 
 ## 文件
 

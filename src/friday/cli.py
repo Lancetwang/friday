@@ -4,12 +4,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, init_project, save_turn
+from friday.app import build_friday, build_instructions, init_project, reset_friday, save_turn
 
 
 def main(argv: list[str] | None = None) -> None:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    _configure_stdio()
 
     parser = argparse.ArgumentParser(prog="friday", description="Friday personal CLI agent.")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output.")
@@ -22,6 +21,7 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("memory", help="Print effective instruction context.")
+    sub.add_parser("reset", help="Clear Friday memory and session state.")
 
     args = parser.parse_args(argv)
     command = args.command or "chat"
@@ -38,6 +38,13 @@ def main(argv: list[str] | None = None) -> None:
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
         return
 
+    if command == "reset":
+        removed = reset_friday()
+        print("reset Friday")
+        for path in removed:
+            print(f"removed {path}")
+        return
+
     agent, context = build_friday(stream=stream)
 
     if command == "ask":
@@ -47,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "chat":
-        print("Friday. Type 'exit' to quit.")
+        print("Friday. Type /help for commands.")
         while True:
             try:
                 text = input("> ").strip()
@@ -58,11 +65,39 @@ def main(argv: list[str] | None = None) -> None:
                 return
             if not text:
                 continue
+            if text.startswith("/"):
+                agent, context = _slash(text, stream, agent, context)
+                continue
             answer = _ask(agent, context, text, stream)
             _save(context, text, answer)
         return
 
     parser.error(f"unknown command: {command}")
+
+
+def _configure_stdio() -> None:
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _slash(text: str, stream: bool, agent, context):
+    command = text[1:].strip().lower()
+    if command in {"help", "?"}:
+        print("/help, /memory, /reset, /exit")
+    elif command == "memory":
+        print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
+    elif command == "reset":
+        removed = reset_friday()
+        print("reset Friday")
+        for path in removed:
+            print(f"removed {path}")
+        agent, context = build_friday(stream=stream)
+    elif command in {"exit", "quit", "q"}:
+        raise SystemExit
+    else:
+        print(f"unknown slash command: /{command}")
+    return agent, context
 
 
 def _ask(agent, context, text: str, stream: bool) -> str:

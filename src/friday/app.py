@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
@@ -38,8 +39,9 @@ def build_instructions(workspace: Path, friday_dir: Path) -> str:
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
 
 
-def init_project(workspace: Path | None = None) -> list[Path]:
+def init_project(workspace: Path | None = None, *, user_home: Path | None = None) -> list[Path]:
     root = (workspace or Path.cwd()).resolve()
+    home = user_home or Path.home()
     friday_dir = root / ".friday"
     friday_dir.mkdir(exist_ok=True)
     created = []
@@ -50,12 +52,28 @@ def init_project(workspace: Path | None = None) -> list[Path]:
         if not path.exists():
             path.write_text(content, encoding="utf-8")
             created.append(path)
-    user_file = Path.home() / ".friday" / "user.md"
-    user_file.parent.mkdir(exist_ok=True)
+    user_file = home / ".friday" / "user.md"
+    user_file.parent.mkdir(parents=True, exist_ok=True)
     if not user_file.exists():
         user_file.write_text("# User Profile\n\nPreferred language, style, and long-term preferences.\n", encoding="utf-8")
         created.append(user_file)
     return created
+
+
+def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None) -> list[Path]:
+    root = (workspace or Path.cwd()).resolve()
+    home = user_home or Path.home()
+    removed = []
+    project_state = root / ".friday"
+    user_memory = home / ".friday" / "MEMORY.md"
+    if project_state.exists():
+        shutil.rmtree(project_state)
+        removed.append(project_state)
+    if user_memory.exists():
+        user_memory.unlink()
+        removed.append(user_memory)
+    init_project(root, user_home=home)
+    return removed
 
 
 def save_turn(workspace: Path, user: str, assistant: str, events: list[dict[str, Any]]) -> Path:

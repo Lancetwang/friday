@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from friday.app import reset_friday
 from friday.tools import build_tools
 
 
@@ -31,6 +32,21 @@ class ToolTests(unittest.TestCase):
             tools["remember"]("Friday should be concise.", "project")
             memory = tools["read_memory"]("project")
             self.assertIn("Friday should be concise.", memory["content"])
+
+
+class ResetTests(unittest.TestCase):
+    def test_reset_clears_project_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".friday"
+            (state / "sessions").mkdir(parents=True)
+            (state / "MEMORY.md").write_text("# Memory\nold", encoding="utf-8")
+            (state / "sessions" / "x.jsonl").write_text("{}", encoding="utf-8")
+
+            reset_friday(root, user_home=root / "home")
+
+            self.assertEqual((state / "MEMORY.md").read_text(encoding="utf-8"), "# Project Memory\n")
+            self.assertFalse((state / "sessions").exists())
 
 
 if __name__ == "__main__":

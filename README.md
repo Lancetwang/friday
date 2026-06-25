@@ -36,20 +36,34 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 ```
 
+Install the `friday` command:
+
+```powershell
+uv tool install -e .
+```
+
 ## Use
 
 ```powershell
-uv run friday init
-uv run friday ask "summarize this project"
-uv run friday chat
-uv run friday memory
+friday init
+friday ask "summarize this project"
+friday chat
+friday memory
+friday reset
 ```
 
 LLM output streams by default. Use `--no-stream` before the command:
 
 ```powershell
-uv run friday --no-stream ask "hello"
+friday --no-stream ask "hello"
 ```
+
+Inside `friday chat`, use slash commands:
+
+- `/help`
+- `/memory`
+- `/reset`
+- `/exit`
 
 ## Files
 
