@@ -48,6 +48,7 @@ uv tool install -e .
 friday init
 friday ask "summarize this project"
 friday chat
+friday tui
 friday memory
 friday reset
 ```
@@ -65,14 +66,23 @@ friday --no-stream ask "hello"
 - `/reset`
 - `/exit`
 
+`friday reset` 会删除两类状态：
+
+- 项目运行状态：`<workspace>/.friday`
+- 全局 Friday 状态：`~/.friday`
+
+它会先要求确认。确定要清空时可以用 `friday reset --yes`。
+
 ## 文件
 
-- `src/friday/prompts/soul.md`：Friday 的基础人格和运行规则。
+- `~/.friday/soul.md`：Friday 的基础人格和运行规则。
 - `~/.friday/user.md`：你的个人偏好。
 - `~/.friday/MEMORY.md`：全局记忆。
 - `AGENTS.md`：项目指令，兼容 Codex 风格的项目指导。
 - `.friday/MEMORY.md`：项目记忆。
 - `.friday/sessions/*.jsonl`：本地聊天日志。
+
+内置默认模板在 `src/friday/prompts/`，`friday init` 会把它们复制到 `~/.friday/`。
 
 ## 验证
 

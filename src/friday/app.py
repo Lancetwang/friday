@@ -28,11 +28,12 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
 
 
 def build_instructions(workspace: Path, friday_dir: Path) -> str:
+    user_dir = Path.home() / ".friday"
     parts = [
-        ("Soul", _read_resource("soul.md")),
+        ("Soul", _read_optional(user_dir / "soul.md") or _read_resource("soul.md")),
         ("Runtime", _runtime_notes()),
-        ("User", _read_optional(Path.home() / ".friday" / "user.md")),
-        ("User Memory", _read_optional(Path.home() / ".friday" / "MEMORY.md")),
+        ("User", _read_optional(user_dir / "user.md")),
+        ("User Memory", _read_optional(user_dir / "MEMORY.md")),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
         ("Project Memory", _read_optional(friday_dir / "MEMORY.md")),
     ]
@@ -52,26 +53,31 @@ def init_project(workspace: Path | None = None, *, user_home: Path | None = None
         if not path.exists():
             path.write_text(content, encoding="utf-8")
             created.append(path)
-    user_file = home / ".friday" / "user.md"
-    user_file.parent.mkdir(parents=True, exist_ok=True)
-    if not user_file.exists():
-        user_file.write_text("# User Profile\n\nPreferred language, style, and long-term preferences.\n", encoding="utf-8")
-        created.append(user_file)
+    user_dir = home / ".friday"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    for path, content in {
+        user_dir / "soul.md": _read_resource("soul.md"),
+        user_dir / "user.md": _read_resource("user.md"),
+        user_dir / "MEMORY.md": "# User Memory\n",
+    }.items():
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
+            created.append(path)
     return created
 
 
-def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None) -> list[Path]:
+def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None, include_user: bool = True) -> list[Path]:
     root = (workspace or Path.cwd()).resolve()
     home = user_home or Path.home()
     removed = []
     project_state = root / ".friday"
-    user_memory = home / ".friday" / "MEMORY.md"
+    user_state = home / ".friday"
     if project_state.exists():
         shutil.rmtree(project_state)
         removed.append(project_state)
-    if user_memory.exists():
-        user_memory.unlink()
-        removed.append(user_memory)
+    if include_user and user_state.exists():
+        shutil.rmtree(user_state)
+        removed.append(user_state)
     init_project(root, user_home=home)
     return removed
 

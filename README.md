@@ -48,6 +48,7 @@ uv tool install -e .
 friday init
 friday ask "summarize this project"
 friday chat
+friday tui
 friday memory
 friday reset
 ```
@@ -65,14 +66,23 @@ Inside `friday chat`, use slash commands:
 - `/reset`
 - `/exit`
 
+`friday reset` deletes both:
+
+- project runtime state: `<workspace>/.friday`
+- global Friday state: `~/.friday`
+
+It asks for confirmation. Use `friday reset --yes` only when you are sure.
+
 ## Files
 
-- `src/friday/prompts/soul.md`: Friday's base personality and operating rules.
+- `~/.friday/soul.md`: Friday's base personality and operating rules.
 - `~/.friday/user.md`: your personal preferences.
 - `~/.friday/MEMORY.md`: global memory.
 - `AGENTS.md`: project instructions, compatible with Codex-style project guidance.
 - `.friday/MEMORY.md`: project memory.
 - `.friday/sessions/*.jsonl`: local chat logs.
+
+Bundled defaults live in `src/friday/prompts/` and are copied to `~/.friday/` by `friday init`.
 
 ## Validate
 

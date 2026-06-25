@@ -20,8 +20,10 @@ def main(argv: list[str] | None = None) -> None:
     ask.add_argument("text", nargs="+")
 
     sub.add_parser("chat", help="Start an interactive chat.")
+    sub.add_parser("tui", help="Start a simple terminal UI.")
     sub.add_parser("memory", help="Print effective instruction context.")
-    sub.add_parser("reset", help="Clear Friday memory and session state.")
+    reset = sub.add_parser("reset", help="Clear Friday memory and session state.")
+    reset.add_argument("-y", "--yes", action="store_true", help="Skip reset confirmation.")
 
     args = parser.parse_args(argv)
     command = args.command or "chat"
@@ -39,10 +41,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "reset":
-        removed = reset_friday()
-        print("reset Friday")
-        for path in removed:
-            print(f"removed {path}")
+        _reset(args.yes)
         return
 
     agent, context = build_friday(stream=stream)
@@ -53,8 +52,8 @@ def main(argv: list[str] | None = None) -> None:
         _save(context, text, answer)
         return
 
-    if command == "chat":
-        print("Friday. Type /help for commands.")
+    if command in {"chat", "tui"}:
+        _banner(command == "tui")
         while True:
             try:
                 text = input("> ").strip()
@@ -68,8 +67,13 @@ def main(argv: list[str] | None = None) -> None:
             if text.startswith("/"):
                 agent, context = _slash(text, stream, agent, context)
                 continue
+            if command == "tui":
+                print("─" * 72)
+                print("Friday")
             answer = _ask(agent, context, text, stream)
             _save(context, text, answer)
+            if command == "tui":
+                print("─" * 72)
         return
 
     parser.error(f"unknown command: {command}")
@@ -81,6 +85,17 @@ def _configure_stdio() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _banner(tui: bool) -> None:
+    if not tui:
+        print("Friday. Type /help for commands.")
+        return
+    print("╭" + "─" * 70 + "╮")
+    print("│ Friday".ljust(71) + "│")
+    print(f"│ {Path.cwd().resolve()}".ljust(71) + "│")
+    print("│ /help  /memory  /reset  /exit".ljust(71) + "│")
+    print("╰" + "─" * 70 + "╯")
+
+
 def _slash(text: str, stream: bool, agent, context):
     command = text[1:].strip().lower()
     if command in {"help", "?"}:
@@ -88,16 +103,33 @@ def _slash(text: str, stream: bool, agent, context):
     elif command == "memory":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
     elif command == "reset":
-        removed = reset_friday()
-        print("reset Friday")
-        for path in removed:
-            print(f"removed {path}")
-        agent, context = build_friday(stream=stream)
+        if _reset(False):
+            agent, context = build_friday(stream=stream)
     elif command in {"exit", "quit", "q"}:
         raise SystemExit
     else:
         print(f"unknown slash command: /{command}")
     return agent, context
+
+
+def _reset(yes: bool) -> bool:
+    targets = [
+        Path.cwd().resolve() / ".friday",
+        Path.home() / ".friday",
+    ]
+    print("This will delete Friday project state and global Friday user state:")
+    for path in targets:
+        print(f"- {path}")
+    if not yes:
+        confirm = input("Type RESET to continue: ").strip()
+        if confirm != "RESET":
+            print("cancelled")
+            return False
+    removed = reset_friday(include_user=True)
+    print("reset Friday")
+    for path in removed:
+        print(f"removed {path}")
+    return True
 
 
 def _ask(agent, context, text: str, stream: bool) -> str:
