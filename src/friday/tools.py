@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import re
 import subprocess
 import tempfile
 from datetime import datetime
@@ -22,7 +23,7 @@ def build_tools(workspace: Path, friday_dir: Path):
             raise ValueError(f"Path escapes workspace: {path}")
         return resolved
 
-    @tool(description="Read a UTF-8 text file inside the current workspace.")
+    @tool(description="Read a UTF-8 text file inside the current workspace.", name="Read")
     def read_file(
         path: Annotated[str, "Path inside the workspace."],
         start_line: Annotated[int, "1-based line number to start reading from."] = 1,
@@ -52,7 +53,7 @@ def build_tools(workspace: Path, friday_dir: Path):
             "content": "\n".join(out),
         }
 
-    @tool(description="Create or overwrite a UTF-8 text file inside the current workspace.")
+    @tool(description="Create or overwrite a UTF-8 text file inside the current workspace.", name="Write")
     def write_file(
         path: Annotated[str, "Path inside the workspace."],
         content: Annotated[str, "Full file content."],
@@ -61,7 +62,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         _write_text(file_path, content)
         return {"path": str(file_path), "chars": len(content), "lines": len(content.splitlines())}
 
-    @tool(description="Edit a UTF-8 text file by line range or exact text inside the current workspace.")
+    @tool(description="Edit a UTF-8 text file by line range or exact text inside the current workspace.", name="Edit")
     def edit_file(
         path: Annotated[str, "Path inside the workspace."],
         replacement: Annotated[str, "Replacement text."],
@@ -95,7 +96,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         _write_text(file_path, text.replace(old_text, replacement, 1))
         return {"path": str(file_path), "mode": "exact_text", "replacements": 1}
 
-    @tool(description="Run a shell command in the current workspace. Uses PowerShell on Windows.")
+    @tool(description="Run a shell command in the current workspace. Uses PowerShell on Windows.", name="Bash")
     def run_shell(
         command: Annotated[str, "Shell command to run."],
         timeout_seconds: Annotated[int, "Timeout in seconds."] = 60,
@@ -119,6 +120,53 @@ def build_tools(workspace: Path, friday_dir: Path):
         output = (completed.stdout + completed.stderr)[-max_chars:]
         return {"exit_code": completed.returncode, "timed_out": False, "output": output}
 
+    @tool(description="Find files and directories by glob pattern inside the current workspace.", name="Glob")
+    def glob_files(
+        pattern: Annotated[str, "Glob pattern such as '**/*.py'."],
+        max_results: Annotated[int, "Maximum paths to return."] = 200,
+    ) -> dict:
+        matches = []
+        for path in sorted(workspace.glob(pattern)):
+            resolved = path.resolve()
+            if resolved != workspace and workspace not in resolved.parents:
+                continue
+            matches.append(str(resolved.relative_to(workspace)))
+            if len(matches) >= max(1, max_results):
+                break
+        return {"pattern": pattern, "count": len(matches), "paths": matches}
+
+    @tool(description="Search UTF-8 text files by regular expression inside the current workspace.", name="Grep")
+    def grep_files(
+        pattern: Annotated[str, "Python regular expression to search for."],
+        path_glob: Annotated[str, "Files to search, for example '**/*.py'."] = "**/*",
+        max_results: Annotated[int, "Maximum matches to return."] = 100,
+        max_chars: Annotated[int, "Maximum characters per matched line."] = 240,
+    ) -> dict:
+        regex = re.compile(pattern)
+        matches = []
+        for path in sorted(workspace.glob(path_glob)):
+            if not path.is_file():
+                continue
+            resolved = path.resolve()
+            if resolved != workspace and workspace not in resolved.parents:
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except UnicodeDecodeError:
+                continue
+            for number, line in enumerate(lines, start=1):
+                if regex.search(line):
+                    matches.append(
+                        {
+                            "path": str(resolved.relative_to(workspace)),
+                            "line": number,
+                            "text": line[:max_chars],
+                        }
+                    )
+                    if len(matches) >= max(1, max_results):
+                        return {"pattern": pattern, "count": len(matches), "matches": matches}
+        return {"pattern": pattern, "count": len(matches), "matches": matches}
+
     @tool(description="Read Friday memory notes.")
     def read_memory(
         scope: Annotated[Literal["project", "user"], "Memory scope to read."] = "project",
@@ -138,7 +186,7 @@ def build_tools(workspace: Path, friday_dir: Path):
             file.write(f"\n- {stamp}: {note.strip()}\n")
         return {"scope": scope, "path": str(path)}
 
-    return [read_file, write_file, edit_file, run_shell, read_memory, remember]
+    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, read_memory, remember]
 
 
 def _join_lines(lines: list[str], trailing_newline: bool) -> str:

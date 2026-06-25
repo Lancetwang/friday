@@ -13,10 +13,12 @@ flowchart TD
     CLI["friday CLI"] --> Loader["load soul/user/AGENTS/memory"]
     Loader --> Agent["agent_core.Agent"]
     Agent --> Tools["tools"]
-    Tools --> Read["read_file: line-windowed reads"]
-    Tools --> Write["write_file: full overwrite"]
-    Tools --> Edit["edit_file: line range or exact text"]
-    Tools --> Shell["run_shell: PowerShell on Windows"]
+    Tools --> Read["Read: line-windowed reads"]
+    Tools --> Write["Write: full overwrite"]
+    Tools --> Edit["Edit: line range or exact text"]
+    Tools --> Shell["Bash: PowerShell on Windows"]
+    Tools --> Glob["Glob: path search"]
+    Tools --> Grep["Grep: content search"]
     Tools --> Memory["read_memory / remember"]
     Agent --> Session[".friday/sessions/*.jsonl"]
 ```
@@ -88,10 +90,12 @@ Bundled defaults live in `src/friday/prompts/` and are copied to `~/.friday/` by
 
 ## Tools
 
-- `read_file(path, start_line=1, line_count=120, max_chars=6000)`
-- `write_file(path, content)` overwrites the whole file.
-- `edit_file(path, replacement, start_line=0, end_line=0, old_text="")` edits a line range, inserts when `end_line=0`, or replaces one exact text match.
-- `run_shell(command, timeout_seconds=60, max_chars=8000)` runs in the workspace.
+- `Read(path, start_line=1, line_count=120, max_chars=6000)`
+- `Write(path, content)` overwrites the whole file.
+- `Edit(path, replacement, start_line=0, end_line=0, old_text="")` edits a line range, inserts when `end_line=0`, or replaces one exact text match.
+- `Bash(command, timeout_seconds=60, max_chars=8000)` runs in the workspace. On Windows it uses PowerShell.
+- `Glob(pattern, max_results=200)` finds paths.
+- `Grep(pattern, path_glob="**/*", max_results=100, max_chars=240)` searches text file contents.
 
 ## Validate
 

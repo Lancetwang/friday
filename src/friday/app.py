@@ -117,9 +117,10 @@ def _project_instruction_files(workspace: Path) -> list[str]:
 
 def _runtime_notes() -> str:
     return """
-Available tools are read_file, write_file, edit_file, run_shell, read_memory, and remember.
-Use read_file before editing unfamiliar files.
-Use edit_file for partial changes and write_file only when replacing the whole file.
+Available tools are Read, Write, Edit, Bash, Glob, Grep, read_memory, and remember.
+Use Glob to find paths and Grep to search file contents.
+Use Read before editing unfamiliar files.
+Use Edit for partial changes and Write only when replacing the whole file.
 Use remember only for durable facts or preferences worth keeping.
-For Windows shell commands, prefer PowerShell syntax.
+Bash runs PowerShell on Windows, so prefer PowerShell syntax.
 """.strip()

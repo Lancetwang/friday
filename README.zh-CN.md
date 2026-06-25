@@ -13,10 +13,12 @@ flowchart TD
     CLI["friday CLI"] --> Loader["加载 soul/user/AGENTS/memory"]
     Loader --> Agent["agent_core.Agent"]
     Agent --> Tools["工具"]
-    Tools --> Read["read_file: 按行窗口读取"]
-    Tools --> Write["write_file: 完整覆盖写入"]
-    Tools --> Edit["edit_file: 行范围或精确文本编辑"]
-    Tools --> Shell["run_shell: Windows 使用 PowerShell"]
+    Tools --> Read["Read: 按行窗口读取"]
+    Tools --> Write["Write: 完整覆盖写入"]
+    Tools --> Edit["Edit: 行范围或精确文本编辑"]
+    Tools --> Shell["Bash: Windows 使用 PowerShell"]
+    Tools --> Glob["Glob: 路径查找"]
+    Tools --> Grep["Grep: 内容查找"]
     Tools --> Memory["read_memory / remember"]
     Agent --> Session[".friday/sessions/*.jsonl"]
 ```
@@ -88,10 +90,12 @@ friday --no-stream ask "hello"
 
 ## 工具
 
-- `read_file(path, start_line=1, line_count=120, max_chars=6000)`
-- `write_file(path, content)` 会覆盖整个文件。
-- `edit_file(path, replacement, start_line=0, end_line=0, old_text="")` 可以编辑行范围，`end_line=0` 时插入，也可以替换唯一匹配的精确文本。
-- `run_shell(command, timeout_seconds=60, max_chars=8000)` 在当前工作区运行命令。
+- `Read(path, start_line=1, line_count=120, max_chars=6000)`
+- `Write(path, content)` 会覆盖整个文件。
+- `Edit(path, replacement, start_line=0, end_line=0, old_text="")` 可以编辑行范围，`end_line=0` 时插入，也可以替换唯一匹配的精确文本。
+- `Bash(command, timeout_seconds=60, max_chars=8000)` 在当前工作区运行命令。Windows 下使用 PowerShell。
+- `Glob(pattern, max_results=200)` 查找路径。
+- `Grep(pattern, path_glob="**/*", max_results=100, max_chars=240)` 搜索文本文件内容。
 
 ## 验证
 
