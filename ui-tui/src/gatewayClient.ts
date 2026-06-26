@@ -18,9 +18,10 @@ export class GatewayClient extends EventEmitter {
     const python = process.env.FRIDAY_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
     const env = { ...process.env }
     const root = process.env.FRIDAY_ROOT
+    const cwd = process.env.FRIDAY_CWD || process.cwd()
 
     this.proc = spawn(python, ['-m', 'friday.tui_gateway'], {
-      cwd: process.cwd(),
+      cwd,
       env: root ? { ...env, PYTHONPATH: env.PYTHONPATH ? `${root}${process.platform === 'win32' ? ';' : ':'}${env.PYTHONPATH}` : root } : env,
       stdio: ['pipe', 'pipe', 'pipe']
     })
