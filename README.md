@@ -43,6 +43,8 @@ Friday builds the model context in a stable order for prefix caching:
 
 Bundled default files live in `src/friday/prompt_templates/`. They are copied to `~/.friday/` by `friday init`; runtime uses the editable home files.
 
+Large project instruction files are truncated in the startup prompt. Nested `AGENTS.md` files are loaded lazily when Friday touches files in that directory, and each nested file is only injected once per session.
+
 ## Memory
 
 Friday separates memory by purpose:
@@ -54,6 +56,8 @@ Friday separates memory by purpose:
 - `AGENTS.md`: project rules, not memory.
 
 The `Memory` tool can `read`, `add`, `replace`, or `remove` entries. Writes hit disk immediately, but the startup prompt is a frozen snapshot; new memory naturally appears in the next session.
+
+`/compact` summarizes the live conversation into a fresh context without writing memory. Memory is durable knowledge; compact output is disposable session state.
 
 ## Tools
 

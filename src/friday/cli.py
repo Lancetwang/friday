@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, init_project, reset_friday, save_turn
+from friday.app import build_friday, build_instructions, compact_friday, init_project, reset_friday, save_turn
 from friday.tui import FridayTUI
 
 
@@ -88,9 +88,13 @@ def _configure_stdio() -> None:
 def _slash(text: str, stream: bool, agent, context):
     command = text[1:].strip().lower()
     if command in {"help", "?"}:
-        print("/help, /memory, /reset, /exit")
+        print("/help, /memory, /compact, /reset, /exit")
     elif command == "memory":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
+    elif command == "compact":
+        agent, context, summary = compact_friday(agent, context, stream=stream)
+        print("compacted conversation:")
+        print(summary)
     elif command == "reset":
         if _reset(False):
             agent, context = build_friday(stream=stream)

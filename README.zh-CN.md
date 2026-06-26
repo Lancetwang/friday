@@ -43,6 +43,8 @@ Friday 会按稳定顺序组装模型上下文，方便 prefix caching：
 
 内置默认文件放在 `src/friday/prompt_templates/`。`friday init` 会把它们复制到 `~/.friday/`，运行时使用 home 目录下可编辑的文件。
 
+过大的项目指令文件会在启动 prompt 中截断。嵌套目录里的 `AGENTS.md` 会在 Friday 触达该目录文件时按需加载，并且每个嵌套文件每个 session 只注入一次。
+
 ## 记忆
 
 Friday 按用途区分记忆：
@@ -54,6 +56,8 @@ Friday 按用途区分记忆：
 - `AGENTS.md`：项目规则，不是记忆。
 
 `Memory` 工具可以 `read`、`add`、`replace` 或 `remove` 条目。写入会立刻落盘，但启动 prompt 是冻结快照；新的长期记忆会在下一次会话自然生效。
+
+`/compact` 会把当前对话压缩到一个新的上下文里，但不会写入 memory。Memory 是长期知识；compact 结果只是可丢弃的会话状态。
 
 ## 工具
 

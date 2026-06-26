@@ -11,6 +11,7 @@ from agent_core import tool
 
 USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
+CONTEXT_FILE_LIMIT = 8000
 
 
 def build_tools(workspace: Path, friday_dir: Path):
@@ -18,12 +19,19 @@ def build_tools(workspace: Path, friday_dir: Path):
     friday_dir.mkdir(parents=True, exist_ok=True)
     user_dir = Path.home() / ".friday"
     user_dir.mkdir(parents=True, exist_ok=True)
+    loaded_context_files: set[Path] = set()
 
     def in_workspace(path: str) -> Path:
         resolved = (workspace / path).resolve()
         if resolved != workspace and workspace not in resolved.parents:
             raise ValueError(f"Path escapes workspace: {path}")
         return resolved
+
+    def with_context(result: dict, paths: list[Path]) -> dict:
+        context = _context_for_paths(workspace, paths, loaded_context_files)
+        if context:
+            result["context"] = context
+        return result
 
     @tool(description="Read a UTF-8 text file inside the current workspace.", name="Read")
     def read_file(
@@ -46,14 +54,14 @@ def build_tools(workspace: Path, friday_dir: Path):
             out.append(rendered)
             size += len(rendered) + 1
         end = start + len(out) - 1 if out else start - 1
-        return {
+        return with_context({
             "path": str(file_path),
             "total_lines": len(lines),
             "start_line": start,
             "end_line": end,
             "truncated": end < len(lines),
             "content": "\n".join(out),
-        }
+        }, [file_path])
 
     @tool(description="Create or overwrite a UTF-8 text file inside the current workspace.", name="Write")
     def write_file(
@@ -62,7 +70,7 @@ def build_tools(workspace: Path, friday_dir: Path):
     ) -> dict:
         file_path = in_workspace(path)
         _write_text(file_path, content)
-        return {"path": str(file_path), "chars": len(content), "lines": len(content.splitlines())}
+        return with_context({"path": str(file_path), "chars": len(content), "lines": len(content.splitlines())}, [file_path])
 
     @tool(description="Edit a UTF-8 text file by line range or exact text inside the current workspace.", name="Edit")
     def edit_file(
@@ -82,21 +90,21 @@ def build_tools(workspace: Path, friday_dir: Path):
             replacement_lines = replacement.splitlines()
             new_lines = [*lines[: start - 1], *replacement_lines, *lines[end:]]
             _write_text(file_path, _join_lines(new_lines, bool(new_lines) and bool(newline)))
-            return {
+            return with_context({
                 "path": str(file_path),
                 "mode": "line_range",
                 "start_line": start,
                 "end_line": end,
                 "replacement_lines": len(replacement_lines),
                 "total_lines": len(new_lines),
-            }
+            }, [file_path])
         if not old_text:
             raise ValueError("Provide start_line/end_line or old_text.")
         count = text.count(old_text)
         if count != 1:
             raise ValueError(f"Expected exactly one match, found {count}.")
         _write_text(file_path, text.replace(old_text, replacement, 1))
-        return {"path": str(file_path), "mode": "exact_text", "replacements": 1}
+        return with_context({"path": str(file_path), "mode": "exact_text", "replacements": 1}, [file_path])
 
     @tool(description="Run a shell command in the current workspace. Uses PowerShell on Windows.", name="Bash")
     def run_shell(
@@ -135,7 +143,7 @@ def build_tools(workspace: Path, friday_dir: Path):
             matches.append(str(resolved.relative_to(workspace)))
             if len(matches) >= max(1, max_results):
                 break
-        return {"pattern": pattern, "count": len(matches), "paths": matches}
+        return with_context({"pattern": pattern, "count": len(matches), "paths": matches}, [workspace / path for path in matches])
 
     @tool(description="Search UTF-8 text files by regular expression inside the current workspace.", name="Grep")
     def grep_files(
@@ -166,8 +174,14 @@ def build_tools(workspace: Path, friday_dir: Path):
                         }
                     )
                     if len(matches) >= max(1, max_results):
-                        return {"pattern": pattern, "count": len(matches), "matches": matches}
-        return {"pattern": pattern, "count": len(matches), "matches": matches}
+                        return with_context(
+                            {"pattern": pattern, "count": len(matches), "matches": matches},
+                            [workspace / match["path"] for match in matches],
+                        )
+        return with_context(
+            {"pattern": pattern, "count": len(matches), "matches": matches},
+            [workspace / match["path"] for match in matches],
+        )
 
     @tool(description="Read or update Friday memory files.", name="Memory")
     def memory(
@@ -222,6 +236,33 @@ def _write_text(path: Path, content: str) -> None:
         file.write(content)
         temp_path = Path(file.name)
     temp_path.replace(path)
+
+
+def _context_for_paths(workspace: Path, paths: list[Path], loaded: set[Path]) -> list[dict[str, str]]:
+    found = []
+    for path in paths:
+        resolved = path.resolve()
+        current = resolved if resolved.is_dir() else resolved.parent
+        for parent in reversed([current, *current.parents]):
+            if parent == workspace or workspace not in parent.parents:
+                continue
+            context_file = parent / "AGENTS.md"
+            if context_file.exists() and context_file not in loaded:
+                loaded.add(context_file)
+                found.append(
+                    {
+                        "path": str(context_file.relative_to(workspace)),
+                        "content": _read_limited(context_file, CONTEXT_FILE_LIMIT),
+                    }
+                )
+    return found
+
+
+def _read_limited(path: Path, limit: int) -> str:
+    text = path.read_text(encoding="utf-8")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + f"\n\n[truncated: read {path} directly for the rest]"
 
 
 def _memory_target(target: str, user_dir: Path, friday_dir: Path) -> tuple[Path, int]:

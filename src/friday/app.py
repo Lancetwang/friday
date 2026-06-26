@@ -12,6 +12,14 @@ from agent_core import Agent, RunContext
 
 from friday.tools import build_tools
 
+PROJECT_INSTRUCTIONS_LIMIT = 12000
+COMPACT_PROMPT = """
+Summarize the conversation so far for continuing the same task.
+
+Keep only live working context: user goals, decisions, files touched, commands run, test status, blockers, and next steps.
+Do not write memory. Do not restate stable system, tool, user, or project instructions.
+""".strip()
+
 
 def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
@@ -41,6 +49,20 @@ def build_instructions(workspace: Path, friday_dir: Path) -> str:
         ("Project Memory", _read_optional(friday_dir / "MEMORY.md")),
     ]
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
+
+
+def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on_delta: Any = None) -> tuple[Agent, RunContext, str]:
+    summary = agent.chat(
+        COMPACT_PROMPT,
+        context=context,
+        max_steps=6,
+        stream=False,
+        on_delta=on_delta,
+    )
+    workspace = Path(context.metadata["workspace"])
+    new_agent, new_context = build_friday(workspace, stream=stream)
+    new_context.add_message("system", f"## Conversation Summary\n{summary}")
+    return new_agent, new_context, summary
 
 
 def init_project(workspace: Path | None = None, *, user_home: Path | None = None) -> list[Path]:
@@ -127,7 +149,14 @@ def _project_instruction_files(workspace: Path) -> list[str]:
             path = parent / name
             if path.exists():
                 paths.append(path)
-    return [f"### {path}\n{path.read_text(encoding='utf-8')}" for path in reversed(paths)]
+    return [f"### {path}\n{_read_limited(path, PROJECT_INSTRUCTIONS_LIMIT)}" for path in reversed(paths)]
+
+
+def _read_limited(path: Path, limit: int) -> str:
+    text = path.read_text(encoding="utf-8")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + f"\n\n[truncated: read {path} directly for the rest]"
 
 
 def _runtime_notes() -> str:
