@@ -25,14 +25,13 @@ BAR = "white on #30363d"
 class FridayTUI:
     def __init__(self, *, stream: bool) -> None:
         self.console = Console()
-        self.stream = stream
         self.agent, self.context = build_friday(stream=stream)
         self.context.on_event = self.on_event
-        self._streaming = False
 
     def run(self) -> None:
         self.banner()
         while True:
+            self._input_lines()
             text = self.console.input(f"[bold {BLUE}]> [/]").strip()
             if text.lower() in {"exit", "quit", "q", "/exit"}:
                 return
@@ -48,7 +47,7 @@ class FridayTUI:
         body.add_column(width=30)
         body.add_column(width=1)
         body.add_column(ratio=1)
-        body.add_row(Text(_logo(), style=f"bold {BLUE}"), Text("│", style=CYAN), self._home())
+        body.add_row(self._logo(), Text("|", style=CYAN), self._home())
         self.console.print(
             Panel(
                 body,
@@ -64,12 +63,12 @@ class FridayTUI:
         table.add_column()
         table.add_row(Text("Tips for getting started", style=f"bold {BLUE}"))
         table.add_row(Text("Press / to use commands. Use @ in messages to mention files.", style="bold"))
-        table.add_row(Text("Use Shift+Enter in your terminal for multiline input when supported.", style="bold"))
-        table.add_row(Text("─" * max(20, self.console.width - 44), style=f"dim {CYAN}"))
+        table.add_row(Text("Shift+Enter adds a new line when your terminal supports it.", style="bold"))
+        table.add_row(self._rule(width_offset=44))
         table.add_row(Text("Recent activity", style=f"bold {BLUE}"))
         for item in _recent_activity(Path.cwd()):
             table.add_row(Text(item, style="bold"))
-        table.add_row(Text("─" * max(20, self.console.width - 44), style=f"dim {CYAN}"))
+        table.add_row(self._rule(width_offset=44))
         table.add_row(Text(_status_line(), style=f"bold {BLUE}"))
         table.add_row(Text(str(Path.cwd().resolve()), style="bold"))
         return table
@@ -93,23 +92,18 @@ class FridayTUI:
             return
         removed = reset_friday(include_user=True)
         self.console.print(_bar("Reset " + (", ".join(str(path) for path in removed) or "nothing removed")))
-        self.agent, self.context = build_friday(stream=self.stream)
+        self.agent, self.context = build_friday(stream=False)
         self.context.on_event = self.on_event
 
     def ask(self, text: str) -> None:
-        self.console.print(_bar("> " + text))
-        self.console.print("• ", style=f"dim {BLUE}", end="")
         answer = self.agent.chat(
             text,
             context=self.context,
             max_steps=20,
-            on_delta=self.on_delta if self.stream else None,
+            stream=False,
         )
-        if self.stream:
-            self.console.print()
-        else:
-            self.console.print(Markdown(answer))
-        self.console.print(Text("─" * self.console.width, style=CYAN))
+        self.console.print(Markdown(answer))
+        self.console.print(self._rule())
         save_turn(
             Path(self.context.metadata["workspace"]),
             text,
@@ -117,24 +111,30 @@ class FridayTUI:
             [event.to_dict() for event in self.context.events[-20:]],
         )
 
-    def on_delta(self, text: str) -> None:
-        self._streaming = True
-        self.console.out(text, end="")
-
     def on_event(self, event: AgentEvent) -> None:
         if event.type == "tool.call":
-            if self._streaming:
-                self.console.print()
-                self._streaming = False
             name = event.data.get("name", "")
             arguments = _short_json(event.data.get("arguments", {}), self.console.width - len(name) - 12)
-            self.console.print(_bar(f"Tool {name} {arguments}"))
+            self.console.print(_bar(f"Tool {name} {arguments}", limit=self.console.width))
         elif event.type == "tool.result" and event.data.get("is_error"):
             self.console.print(_bar(f"Tool error {event.data.get('content', '')}", style="white on #7f1d1d"))
 
+    def _input_lines(self) -> None:
+        self.console.print(self._rule())
 
-def _bar(text: str, *, style: str = BAR) -> Text:
-    clipped = _middle_truncate(text.replace("\n", " "), 120)
+    def _rule(self, *, width_offset: int = 0) -> Text:
+        return Text("-" * max(20, self.console.width - width_offset), style=CYAN)
+
+    def _logo(self) -> Text:
+        text = Text()
+        text.append("FRIDAY\n", style=f"bold {BLUE}")
+        text.append("CODE\n", style=f"bold {BLUE}")
+        text.append(f"v{__version__}", style=DIM)
+        return text
+
+
+def _bar(text: str, *, style: str = BAR, limit: int = 120) -> Text:
+    clipped = _middle_truncate(text.replace("\n", " "), limit)
     return Text(clipped, style=style)
 
 
@@ -166,15 +166,4 @@ def _recent_activity(workspace: Path, limit: int = 3) -> list[str]:
 
 def _status_line() -> str:
     model = os.getenv("LLM_MODEL", "model from .env")
-    return f"{model} · local workspace"
-
-
-def _logo() -> str:
-    return """
-███████╗
-██╔════╝
-█████╗
-██╔══╝
-██║
-╚═╝
-""".strip("\n")
+    return f"{model} - local workspace"
