@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, reset_friday
 from friday.tools import build_tools
@@ -171,6 +172,13 @@ class CompactTests(unittest.TestCase):
             def chat(self, *args, **kwargs) -> str:
                 return "Continue with the memory harness work."
 
+        class FakeContext:
+            def __init__(self) -> None:
+                self.messages = []
+
+            def add_message(self, role: str, content: str) -> None:
+                self.messages.append({"role": role, "content": content})
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             friday_dir = root / ".friday"
@@ -181,7 +189,8 @@ class CompactTests(unittest.TestCase):
 
             context = type("Context", (), {})()
             context.metadata = {"workspace": str(root)}
-            agent, new_context, summary = compact_friday(FakeAgent(), context, stream=False)
+            with patch("friday.app.build_friday", return_value=(object(), FakeContext())):
+                agent, new_context, summary = compact_friday(FakeAgent(), context, stream=False)
 
             self.assertEqual(summary, "Continue with the memory harness work.")
             self.assertIn("Conversation Summary", new_context.messages[-1]["content"])
