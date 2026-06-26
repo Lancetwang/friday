@@ -4,11 +4,14 @@ import platform
 import re
 import subprocess
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
 from agent_core import tool
+
+USER_LIMIT = 1500
+MEMORY_LIMIT = 2500
+CONTEXT_FILE_LIMIT = 8000
 
 
 def build_tools(workspace: Path, friday_dir: Path):
@@ -16,12 +19,19 @@ def build_tools(workspace: Path, friday_dir: Path):
     friday_dir.mkdir(parents=True, exist_ok=True)
     user_dir = Path.home() / ".friday"
     user_dir.mkdir(parents=True, exist_ok=True)
+    loaded_context_files: set[Path] = set()
 
     def in_workspace(path: str) -> Path:
         resolved = (workspace / path).resolve()
         if resolved != workspace and workspace not in resolved.parents:
             raise ValueError(f"Path escapes workspace: {path}")
         return resolved
+
+    def with_context(result: dict, paths: list[Path]) -> dict:
+        context = _context_for_paths(workspace, paths, loaded_context_files)
+        if context:
+            result["context"] = context
+        return result
 
     @tool(description="Read a UTF-8 text file inside the current workspace.", name="Read")
     def read_file(
@@ -44,14 +54,14 @@ def build_tools(workspace: Path, friday_dir: Path):
             out.append(rendered)
             size += len(rendered) + 1
         end = start + len(out) - 1 if out else start - 1
-        return {
+        return with_context({
             "path": str(file_path),
             "total_lines": len(lines),
             "start_line": start,
             "end_line": end,
             "truncated": end < len(lines),
             "content": "\n".join(out),
-        }
+        }, [file_path])
 
     @tool(description="Create or overwrite a UTF-8 text file inside the current workspace.", name="Write")
     def write_file(
@@ -60,7 +70,7 @@ def build_tools(workspace: Path, friday_dir: Path):
     ) -> dict:
         file_path = in_workspace(path)
         _write_text(file_path, content)
-        return {"path": str(file_path), "chars": len(content), "lines": len(content.splitlines())}
+        return with_context({"path": str(file_path), "chars": len(content), "lines": len(content.splitlines())}, [file_path])
 
     @tool(description="Edit a UTF-8 text file by line range or exact text inside the current workspace.", name="Edit")
     def edit_file(
@@ -80,21 +90,21 @@ def build_tools(workspace: Path, friday_dir: Path):
             replacement_lines = replacement.splitlines()
             new_lines = [*lines[: start - 1], *replacement_lines, *lines[end:]]
             _write_text(file_path, _join_lines(new_lines, bool(new_lines) and bool(newline)))
-            return {
+            return with_context({
                 "path": str(file_path),
                 "mode": "line_range",
                 "start_line": start,
                 "end_line": end,
                 "replacement_lines": len(replacement_lines),
                 "total_lines": len(new_lines),
-            }
+            }, [file_path])
         if not old_text:
             raise ValueError("Provide start_line/end_line or old_text.")
         count = text.count(old_text)
         if count != 1:
             raise ValueError(f"Expected exactly one match, found {count}.")
         _write_text(file_path, text.replace(old_text, replacement, 1))
-        return {"path": str(file_path), "mode": "exact_text", "replacements": 1}
+        return with_context({"path": str(file_path), "mode": "exact_text", "replacements": 1}, [file_path])
 
     @tool(description="Run a shell command in the current workspace. Uses PowerShell on Windows.", name="Bash")
     def run_shell(
@@ -133,7 +143,7 @@ def build_tools(workspace: Path, friday_dir: Path):
             matches.append(str(resolved.relative_to(workspace)))
             if len(matches) >= max(1, max_results):
                 break
-        return {"pattern": pattern, "count": len(matches), "paths": matches}
+        return with_context({"pattern": pattern, "count": len(matches), "paths": matches}, [workspace / path for path in matches])
 
     @tool(description="Search UTF-8 text files by regular expression inside the current workspace.", name="Grep")
     def grep_files(
@@ -164,29 +174,54 @@ def build_tools(workspace: Path, friday_dir: Path):
                         }
                     )
                     if len(matches) >= max(1, max_results):
-                        return {"pattern": pattern, "count": len(matches), "matches": matches}
-        return {"pattern": pattern, "count": len(matches), "matches": matches}
+                        return with_context(
+                            {"pattern": pattern, "count": len(matches), "matches": matches},
+                            [workspace / match["path"] for match in matches],
+                        )
+        return with_context(
+            {"pattern": pattern, "count": len(matches), "matches": matches},
+            [workspace / match["path"] for match in matches],
+        )
 
-    @tool(description="Read Friday memory notes.")
-    def read_memory(
-        scope: Annotated[Literal["project", "user"], "Memory scope to read."] = "project",
+    @tool(description="Read or update Friday memory files.", name="Memory")
+    def memory(
+        action: Annotated[Literal["read", "add", "replace", "remove"], "Memory action to perform."],
+        target: Annotated[Literal["user", "global", "project"], "user=USER.md, global=global MEMORY.md, project=workspace MEMORY.md."],
+        content: Annotated[str, "New note text, replacement text, or exact text to remove."] = "",
+        old_text: Annotated[str, "Exact text to replace when action is replace."] = "",
     ) -> dict:
-        path = friday_dir / "MEMORY.md" if scope == "project" else user_dir / "MEMORY.md"
-        return {"scope": scope, "path": str(path), "content": path.read_text(encoding="utf-8") if path.exists() else ""}
-
-    @tool(description="Append a short note to Friday memory.")
-    def remember(
-        note: Annotated[str, "Short memory note to append."],
-        scope: Annotated[Literal["project", "user"], "Memory scope to update."] = "project",
-    ) -> dict:
-        path = friday_dir / "MEMORY.md" if scope == "project" else user_dir / "MEMORY.md"
+        path, limit = _memory_target(target, user_dir, friday_dir)
         path.parent.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        with path.open("a", encoding="utf-8") as file:
-            file.write(f"\n- {stamp}: {note.strip()}\n")
-        return {"scope": scope, "path": str(path)}
+        current = path.read_text(encoding="utf-8") if path.exists() else _memory_header(target)
 
-    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, read_memory, remember]
+        if action == "read":
+            return {"target": target, "path": str(path), "content": current, "chars": len(current)}
+
+        if not content.strip():
+            raise ValueError("content is required.")
+        if action == "add":
+            updated = current.rstrip() + f"\n- {content.strip()}\n"
+        elif action == "replace":
+            if not old_text:
+                raise ValueError("old_text is required for replace.")
+            count = current.count(old_text)
+            if count != 1:
+                raise ValueError(f"Expected exactly one match, found {count}.")
+            updated = current.replace(old_text, content, 1)
+        elif action == "remove":
+            count = current.count(content)
+            if count != 1:
+                raise ValueError(f"Expected exactly one match, found {count}.")
+            updated = current.replace(content, "", 1)
+        else:
+            raise ValueError(f"Unknown memory action: {action}")
+
+        if len(updated) > limit:
+            raise ValueError(f"{target} memory would exceed {limit} characters; replace or remove old entries first.")
+        _write_text(path, updated)
+        return {"target": target, "path": str(path), "chars": len(updated)}
+
+    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, memory]
 
 
 def _join_lines(lines: list[str], trailing_newline: bool) -> str:
@@ -201,3 +236,48 @@ def _write_text(path: Path, content: str) -> None:
         file.write(content)
         temp_path = Path(file.name)
     temp_path.replace(path)
+
+
+def _context_for_paths(workspace: Path, paths: list[Path], loaded: set[Path]) -> list[dict[str, str]]:
+    found = []
+    for path in paths:
+        resolved = path.resolve()
+        current = resolved if resolved.is_dir() else resolved.parent
+        for parent in reversed([current, *current.parents]):
+            if parent == workspace or workspace not in parent.parents:
+                continue
+            context_file = parent / "AGENTS.md"
+            if context_file.exists() and context_file not in loaded:
+                loaded.add(context_file)
+                found.append(
+                    {
+                        "path": str(context_file.relative_to(workspace)),
+                        "content": _read_limited(context_file, CONTEXT_FILE_LIMIT),
+                    }
+                )
+    return found
+
+
+def _read_limited(path: Path, limit: int) -> str:
+    text = path.read_text(encoding="utf-8")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + f"\n\n[truncated: read {path} directly for the rest]"
+
+
+def _memory_target(target: str, user_dir: Path, friday_dir: Path) -> tuple[Path, int]:
+    if target == "user":
+        return user_dir / "USER.md", USER_LIMIT
+    if target == "global":
+        return user_dir / "MEMORY.md", MEMORY_LIMIT
+    if target == "project":
+        return friday_dir / "MEMORY.md", MEMORY_LIMIT
+    raise ValueError(f"Unknown memory target: {target}")
+
+
+def _memory_header(target: str) -> str:
+    if target == "user":
+        return "# User Profile\n"
+    if target == "global":
+        return "# User Memory\n"
+    return "# Project Memory\n"

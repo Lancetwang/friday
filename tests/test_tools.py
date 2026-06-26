@@ -3,8 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from friday.app import build_instructions, reset_friday
+from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, reset_friday
 from friday.tools import build_tools
 
 
@@ -70,14 +71,35 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(grep["count"], 2)
             self.assertEqual(grep["matches"][0]["line"], 2)
 
-    def test_memory_appends(self) -> None:
+    def test_memory_tool_updates_scoped_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
-            tools["remember"]("Friday should be concise.", "project")
-            memory = tools["read_memory"]("project")
+            tools["Memory"]("add", "project", "Friday should be concise.")
+            memory = tools["Memory"]("read", "project")
             self.assertIn("Friday should be concise.", memory["content"])
+
+            tools["Memory"]("replace", "project", "Friday should stay concise.", "Friday should be concise.")
+            self.assertIn("Friday should stay concise.", tools["Memory"]("read", "project")["content"])
+
+            tools["Memory"]("remove", "project", "Friday should stay concise.")
+            self.assertNotIn("Friday should stay concise.", tools["Memory"]("read", "project")["content"])
+
+    def test_nested_agents_context_is_loaded_once_for_touched_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "AGENTS.md").write_text("src rules", encoding="utf-8")
+            (root / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            first = tools["Read"]("src/app.py")
+            second = tools["Read"]("src/app.py")
+
+            self.assertEqual(first["context"][0]["path"].replace("\\", "/"), "src/AGENTS.md")
+            self.assertIn("src rules", first["context"][0]["content"])
+            self.assertNotIn("context", second)
 
 
 class ResetTests(unittest.TestCase):
@@ -92,15 +114,34 @@ class ResetTests(unittest.TestCase):
             (state / "MEMORY.md").write_text("# Memory\nold", encoding="utf-8")
             (state / "sessions" / "x.jsonl").write_text("{}", encoding="utf-8")
             (global_state / "MEMORY.md").write_text("old", encoding="utf-8")
-            (global_state / "user.md").write_text("old", encoding="utf-8")
-            (global_state / "soul.md").write_text("old", encoding="utf-8")
+            (global_state / "USER.md").write_text("old", encoding="utf-8")
+            (global_state / "SOUL.md").write_text("old", encoding="utf-8")
 
             reset_friday(root, user_home=home)
 
             self.assertEqual((state / "MEMORY.md").read_text(encoding="utf-8"), "# Project Memory\n")
             self.assertFalse((state / "sessions").exists())
             self.assertEqual((global_state / "MEMORY.md").read_text(encoding="utf-8"), "# User Memory\n")
-            self.assertIn("Friday Soul", (global_state / "soul.md").read_text(encoding="utf-8"))
+            self.assertIn("Friday Soul", (global_state / "SOUL.md").read_text(encoding="utf-8"))
+
+    def test_init_migrates_legacy_prompt_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            user_dir = home / ".friday"
+            user_dir.mkdir(parents=True)
+            (user_dir / "soul.md").write_text("legacy soul", encoding="utf-8")
+            (user_dir / "user.md").write_text("legacy user", encoding="utf-8")
+
+            init_project(root, user_home=home)
+
+            self.assertEqual((user_dir / "SOUL.md").read_text(encoding="utf-8"), "legacy soul")
+            self.assertEqual((user_dir / "USER.md").read_text(encoding="utf-8"), "legacy user")
+            names = {path.name for path in user_dir.iterdir()}
+            self.assertIn("SOUL.md", names)
+            self.assertIn("USER.md", names)
+            self.assertNotIn("soul.md", names)
+            self.assertNotIn("user.md", names)
 
 
 class PromptTests(unittest.TestCase):
@@ -114,6 +155,46 @@ class PromptTests(unittest.TestCase):
             self.assertLess(text.index("## Runtime"), text.index("## Tool Guidance"))
             self.assertLess(text.index("## Tool Guidance"), text.index("## Project Instructions"))
             self.assertLess(text.index("## Project Instructions"), text.index("## Environment"))
+
+    def test_large_project_instructions_are_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text("x" * (PROJECT_INSTRUCTIONS_LIMIT + 100), encoding="utf-8")
+            text = build_instructions(root, root / ".friday")
+
+            self.assertIn("[truncated:", text)
+            self.assertLess(len(text), PROJECT_INSTRUCTIONS_LIMIT + 3000)
+
+
+class CompactTests(unittest.TestCase):
+    def test_compact_rebuilds_context_without_writing_memory(self) -> None:
+        class FakeAgent:
+            def chat(self, *args, **kwargs) -> str:
+                return "Continue with the memory harness work."
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.messages = []
+
+            def add_message(self, role: str, content: str) -> None:
+                self.messages.append({"role": role, "content": content})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            friday_dir = root / ".friday"
+            friday_dir.mkdir()
+            (friday_dir / "MEMORY.md").write_text("# Project Memory\n", encoding="utf-8")
+            tools = {tool.name: tool for tool in build_tools(root, friday_dir)}
+            old_context = tools["Memory"]("read", "project")
+
+            context = type("Context", (), {})()
+            context.metadata = {"workspace": str(root)}
+            with patch("friday.app.build_friday", return_value=(object(), FakeContext())):
+                agent, new_context, summary = compact_friday(FakeAgent(), context, stream=False)
+
+            self.assertEqual(summary, "Continue with the memory harness work.")
+            self.assertIn("Conversation Summary", new_context.messages[-1]["content"])
+            self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])
 
 
 if __name__ == "__main__":
