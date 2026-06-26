@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from friday.app import build_instructions, reset_friday
+from friday.app import build_instructions, init_project, reset_friday
 from friday.tools import build_tools
 
 
@@ -70,14 +70,20 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(grep["count"], 2)
             self.assertEqual(grep["matches"][0]["line"], 2)
 
-    def test_memory_appends(self) -> None:
+    def test_memory_tool_updates_scoped_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
-            tools["remember"]("Friday should be concise.", "project")
-            memory = tools["read_memory"]("project")
+            tools["Memory"]("add", "project", "Friday should be concise.")
+            memory = tools["Memory"]("read", "project")
             self.assertIn("Friday should be concise.", memory["content"])
+
+            tools["Memory"]("replace", "project", "Friday should stay concise.", "Friday should be concise.")
+            self.assertIn("Friday should stay concise.", tools["Memory"]("read", "project")["content"])
+
+            tools["Memory"]("remove", "project", "Friday should stay concise.")
+            self.assertNotIn("Friday should stay concise.", tools["Memory"]("read", "project")["content"])
 
 
 class ResetTests(unittest.TestCase):
@@ -92,15 +98,34 @@ class ResetTests(unittest.TestCase):
             (state / "MEMORY.md").write_text("# Memory\nold", encoding="utf-8")
             (state / "sessions" / "x.jsonl").write_text("{}", encoding="utf-8")
             (global_state / "MEMORY.md").write_text("old", encoding="utf-8")
-            (global_state / "user.md").write_text("old", encoding="utf-8")
-            (global_state / "soul.md").write_text("old", encoding="utf-8")
+            (global_state / "USER.md").write_text("old", encoding="utf-8")
+            (global_state / "SOUL.md").write_text("old", encoding="utf-8")
 
             reset_friday(root, user_home=home)
 
             self.assertEqual((state / "MEMORY.md").read_text(encoding="utf-8"), "# Project Memory\n")
             self.assertFalse((state / "sessions").exists())
             self.assertEqual((global_state / "MEMORY.md").read_text(encoding="utf-8"), "# User Memory\n")
-            self.assertIn("Friday Soul", (global_state / "soul.md").read_text(encoding="utf-8"))
+            self.assertIn("Friday Soul", (global_state / "SOUL.md").read_text(encoding="utf-8"))
+
+    def test_init_migrates_legacy_prompt_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            user_dir = home / ".friday"
+            user_dir.mkdir(parents=True)
+            (user_dir / "soul.md").write_text("legacy soul", encoding="utf-8")
+            (user_dir / "user.md").write_text("legacy user", encoding="utf-8")
+
+            init_project(root, user_home=home)
+
+            self.assertEqual((user_dir / "SOUL.md").read_text(encoding="utf-8"), "legacy soul")
+            self.assertEqual((user_dir / "USER.md").read_text(encoding="utf-8"), "legacy user")
+            names = {path.name for path in user_dir.iterdir()}
+            self.assertIn("SOUL.md", names)
+            self.assertIn("USER.md", names)
+            self.assertNotIn("soul.md", names)
+            self.assertNotIn("user.md", names)
 
 
 class PromptTests(unittest.TestCase):

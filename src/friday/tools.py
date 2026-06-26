@@ -4,11 +4,13 @@ import platform
 import re
 import subprocess
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
 from agent_core import tool
+
+USER_LIMIT = 1500
+MEMORY_LIMIT = 2500
 
 
 def build_tools(workspace: Path, friday_dir: Path):
@@ -167,26 +169,45 @@ def build_tools(workspace: Path, friday_dir: Path):
                         return {"pattern": pattern, "count": len(matches), "matches": matches}
         return {"pattern": pattern, "count": len(matches), "matches": matches}
 
-    @tool(description="Read Friday memory notes.")
-    def read_memory(
-        scope: Annotated[Literal["project", "user"], "Memory scope to read."] = "project",
+    @tool(description="Read or update Friday memory files.", name="Memory")
+    def memory(
+        action: Annotated[Literal["read", "add", "replace", "remove"], "Memory action to perform."],
+        target: Annotated[Literal["user", "global", "project"], "user=USER.md, global=global MEMORY.md, project=workspace MEMORY.md."],
+        content: Annotated[str, "New note text, replacement text, or exact text to remove."] = "",
+        old_text: Annotated[str, "Exact text to replace when action is replace."] = "",
     ) -> dict:
-        path = friday_dir / "MEMORY.md" if scope == "project" else user_dir / "MEMORY.md"
-        return {"scope": scope, "path": str(path), "content": path.read_text(encoding="utf-8") if path.exists() else ""}
-
-    @tool(description="Append a short note to Friday memory.")
-    def remember(
-        note: Annotated[str, "Short memory note to append."],
-        scope: Annotated[Literal["project", "user"], "Memory scope to update."] = "project",
-    ) -> dict:
-        path = friday_dir / "MEMORY.md" if scope == "project" else user_dir / "MEMORY.md"
+        path, limit = _memory_target(target, user_dir, friday_dir)
         path.parent.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        with path.open("a", encoding="utf-8") as file:
-            file.write(f"\n- {stamp}: {note.strip()}\n")
-        return {"scope": scope, "path": str(path)}
+        current = path.read_text(encoding="utf-8") if path.exists() else _memory_header(target)
 
-    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, read_memory, remember]
+        if action == "read":
+            return {"target": target, "path": str(path), "content": current, "chars": len(current)}
+
+        if not content.strip():
+            raise ValueError("content is required.")
+        if action == "add":
+            updated = current.rstrip() + f"\n- {content.strip()}\n"
+        elif action == "replace":
+            if not old_text:
+                raise ValueError("old_text is required for replace.")
+            count = current.count(old_text)
+            if count != 1:
+                raise ValueError(f"Expected exactly one match, found {count}.")
+            updated = current.replace(old_text, content, 1)
+        elif action == "remove":
+            count = current.count(content)
+            if count != 1:
+                raise ValueError(f"Expected exactly one match, found {count}.")
+            updated = current.replace(content, "", 1)
+        else:
+            raise ValueError(f"Unknown memory action: {action}")
+
+        if len(updated) > limit:
+            raise ValueError(f"{target} memory would exceed {limit} characters; replace or remove old entries first.")
+        _write_text(path, updated)
+        return {"target": target, "path": str(path), "chars": len(updated)}
+
+    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, memory]
 
 
 def _join_lines(lines: list[str], trailing_newline: bool) -> str:
@@ -201,3 +222,21 @@ def _write_text(path: Path, content: str) -> None:
         file.write(content)
         temp_path = Path(file.name)
     temp_path.replace(path)
+
+
+def _memory_target(target: str, user_dir: Path, friday_dir: Path) -> tuple[Path, int]:
+    if target == "user":
+        return user_dir / "USER.md", USER_LIMIT
+    if target == "global":
+        return user_dir / "MEMORY.md", MEMORY_LIMIT
+    if target == "project":
+        return friday_dir / "MEMORY.md", MEMORY_LIMIT
+    raise ValueError(f"Unknown memory target: {target}")
+
+
+def _memory_header(target: str) -> str:
+    if target == "user":
+        return "# User Profile\n"
+    if target == "global":
+        return "# User Memory\n"
+    return "# Project Memory\n"

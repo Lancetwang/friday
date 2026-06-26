@@ -1,0 +1,1 @@
+"""Bundled Friday prompt templates."""

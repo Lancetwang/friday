@@ -31,13 +31,13 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
 def build_instructions(workspace: Path, friday_dir: Path) -> str:
     user_dir = Path.home() / ".friday"
     parts = [
-        ("Soul", _read_optional(user_dir / "soul.md") or _read_resource("soul.md")),
+        ("Soul", _read_optional(user_dir / "SOUL.md") or _read_optional(user_dir / "soul.md") or _read_resource("SOUL.md")),
         ("Runtime", _runtime_notes()),
         ("Tool Guidance", _tool_guidance()),
-        ("User", _read_optional(user_dir / "user.md")),
+        ("User Profile", _read_optional(user_dir / "USER.md") or _read_optional(user_dir / "user.md")),
+        ("Global Memory", _read_optional(user_dir / "MEMORY.md")),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
         ("Environment", _environment(workspace)),
-        ("User Memory", _read_optional(user_dir / "MEMORY.md")),
         ("Project Memory", _read_optional(friday_dir / "MEMORY.md")),
     ]
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
@@ -58,9 +58,17 @@ def init_project(workspace: Path | None = None, *, user_home: Path | None = None
             created.append(path)
     user_dir = home / ".friday"
     user_dir.mkdir(parents=True, exist_ok=True)
+    for old_name, new_name in (("soul.md", "SOUL.md"), ("user.md", "USER.md")):
+        old_path = user_dir / old_name
+        new_path = user_dir / new_name
+        if old_path.exists() and not _exists_exact(new_path):
+            temp_path = user_dir / f".{new_name}.tmp"
+            old_path.replace(temp_path)
+            temp_path.replace(new_path)
+            created.append(new_path)
     for path, content in {
-        user_dir / "soul.md": _read_resource("soul.md"),
-        user_dir / "user.md": _read_resource("user.md"),
+        user_dir / "SOUL.md": _read_resource("SOUL.md"),
+        user_dir / "USER.md": _read_resource("USER.md"),
         user_dir / "MEMORY.md": "# User Memory\n",
     }.items():
         if not path.exists():
@@ -101,11 +109,15 @@ def save_turn(workspace: Path, user: str, assistant: str, events: list[dict[str,
 
 
 def _read_resource(name: str) -> str:
-    return (files("friday.prompts") / name).read_text(encoding="utf-8")
+    return (files("friday.prompt_templates") / name).read_text(encoding="utf-8")
 
 
 def _read_optional(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def _exists_exact(path: Path) -> bool:
+    return path.exists() and any(child.name == path.name for child in path.parent.iterdir())
 
 
 def _project_instruction_files(workspace: Path) -> list[str]:
@@ -120,8 +132,10 @@ def _project_instruction_files(workspace: Path) -> list[str]:
 
 def _runtime_notes() -> str:
     return """
-Available tools are Read, Write, Edit, Bash, Glob, Grep, read_memory, and remember.
-Use remember only for durable facts or preferences worth keeping.
+Available tools are Read, Write, Edit, Bash, Glob, Grep, and Memory.
+Use Memory only for durable user preferences, cross-project facts, or project decisions worth keeping.
+Memory targets: user updates USER.md, global updates global MEMORY.md, project updates workspace .friday/MEMORY.md.
+Memory writes affect disk immediately, but the frozen startup prompt sees them next session.
 Bash runs PowerShell on Windows, so prefer PowerShell syntax.
 """.strip()
 

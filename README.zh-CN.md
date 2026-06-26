@@ -7,7 +7,7 @@ Friday 是一个个人 CLI agent，由两部分组成：
 - `agent-core-runtime`：负责 `Agent`、工具调用、流式输出和运行上下文的轻量 runtime。
 - Friday harness：负责本地 prompt 组装、记忆文件、项目指令和 CLI 工具，把 core runtime 变成一个可用的个人编码助手。
 
-这个仓库的重点不是终端皮肤，而是展示如何基于一个很小的自研 core runtime，搭建一个真实可用的个人 agent，而不是依赖庞大的 agent 框架。
+这个仓库的重点是展示如何基于一个很小的自研 core runtime，搭建一个真实可用的个人 agent，而不是依赖庞大的 agent 框架。
 
 ## 架构
 
@@ -24,8 +24,8 @@ flowchart TD
     Tools --> Files["Read / Write / Edit"]
     Tools --> Search["Glob / Grep"]
     Tools --> Shell["Bash"]
-    Tools --> Memory["read_memory / remember"]
-    State --> Global["~/.friday"]
+    Tools --> Memory["Memory"]
+    State --> Home["~/.friday"]
     State --> Project["<workspace>/.friday"]
 ```
 
@@ -33,14 +33,27 @@ flowchart TD
 
 Friday 会按稳定顺序组装模型上下文，方便 prefix caching：
 
-1. `soul.md`：稳定的人格和运行规则。
-2. runtime/tool guidance：说明工具能力和使用方式。
-3. `user.md`：用户偏好。
-4. `AGENTS.md`：项目级指令。
-5. 环境信息：工作区、平台、shell。
-6. 记忆：全局记忆和项目记忆。
+1. `SOUL.md`：Friday 是谁。
+2. Runtime 和工具使用规则。
+3. `USER.md`：用户是谁，以及用户偏好如何工作。
+4. 全局 `MEMORY.md`：跨项目事实和长期经验。
+5. `AGENTS.md`：项目指令。
+6. 环境信息：工作区、平台、shell。
+7. 项目 `.friday/MEMORY.md`：项目决策和本地上下文。
 
-全局文件放在 `~/.friday`，项目状态放在 `<workspace>/.friday`。
+内置默认文件放在 `src/friday/prompt_templates/`。`friday init` 会把它们复制到 `~/.friday/`，运行时使用 home 目录下可编辑的文件。
+
+## 记忆
+
+Friday 按用途区分记忆：
+
+- `SOUL.md`：Friday 的身份和工作风格。
+- `USER.md`：稳定的用户画像和偏好。
+- `~/.friday/MEMORY.md`：跨项目的全局记忆。
+- `<workspace>/.friday/MEMORY.md`：只属于当前项目的记忆。
+- `AGENTS.md`：项目规则，不是记忆。
+
+`Memory` 工具可以 `read`、`add`、`replace` 或 `remove` 条目。写入会立刻落盘，但启动 prompt 是冻结快照；新的长期记忆会在下一次会话自然生效。
 
 ## 工具
 
@@ -52,7 +65,7 @@ Friday 默认提供一组小工具：
 - `Bash`：运行 shell 命令。Windows 下使用 PowerShell。
 - `Glob`：按路径模式查找文件。
 - `Grep`：搜索文件内容。
-- `read_memory` / `remember`：读取和更新长期记忆。
+- `Memory`：读取或更新用户、全局、项目记忆。
 
 ## 安装
 
