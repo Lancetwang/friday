@@ -2,26 +2,57 @@
 
 [English README](README.md)
 
-Friday 是一个基于 `agent-core-runtime` 的个人 CLI agent。
+Friday 是一个个人 CLI agent，由两部分组成：
 
-它不做多人系统，也不做平台化抽象：一个用户、一台机器、本地文件、本地记忆，通过 core runtime 调 OpenAI-compatible 模型。
+- `agent-core-runtime`：负责 `Agent`、工具调用、流式输出和运行上下文的轻量 runtime。
+- Friday harness：负责本地 prompt 组装、记忆文件、项目指令和 CLI 工具，把 core runtime 变成一个可用的个人编码助手。
 
-## 结构
+这个仓库的重点不是终端皮肤，而是展示如何基于一个很小的自研 core runtime，搭建一个真实可用的个人 agent，而不是依赖庞大的 agent 框架。
+
+## 架构
 
 ```mermaid
 flowchart TD
-    CLI["friday CLI"] --> Loader["加载 soul/user/AGENTS/memory"]
-    Loader --> Agent["agent_core.Agent"]
-    Agent --> Tools["工具"]
-    Tools --> Read["Read: 按行窗口读取"]
-    Tools --> Write["Write: 完整覆盖写入"]
-    Tools --> Edit["Edit: 行范围或精确文本编辑"]
-    Tools --> Shell["Bash: Windows 使用 PowerShell"]
-    Tools --> Glob["Glob: 路径查找"]
-    Tools --> Grep["Grep: 内容查找"]
+    User["用户"] --> CLI["friday CLI / TUI"]
+    CLI --> Harness["Friday harness"]
+    Harness --> Prompt["Prompt 组装"]
+    Harness --> State["本地状态"]
+    Harness --> Runtime["agent-core-runtime"]
+    Runtime --> Agent["Agent"]
+    Agent --> LLM["OpenAI-compatible LLM"]
+    Agent --> Tools["工具执行器"]
+    Tools --> Files["Read / Write / Edit"]
+    Tools --> Search["Glob / Grep"]
+    Tools --> Shell["Bash"]
     Tools --> Memory["read_memory / remember"]
-    Agent --> Session[".friday/sessions/*.jsonl"]
+    State --> Global["~/.friday"]
+    State --> Project["<workspace>/.friday"]
 ```
+
+## Harness
+
+Friday 会按稳定顺序组装模型上下文，方便 prefix caching：
+
+1. `soul.md`：稳定的人格和运行规则。
+2. runtime/tool guidance：说明工具能力和使用方式。
+3. `user.md`：用户偏好。
+4. `AGENTS.md`：项目级指令。
+5. 环境信息：工作区、平台、shell。
+6. 记忆：全局记忆和项目记忆。
+
+全局文件放在 `~/.friday`，项目状态放在 `<workspace>/.friday`。
+
+## 工具
+
+Friday 默认提供一组小工具：
+
+- `Read`：按行窗口读取文件。
+- `Write`：覆盖写入文件。
+- `Edit`：按行范围或精确文本匹配编辑文件。
+- `Bash`：运行 shell 命令。Windows 下使用 PowerShell。
+- `Glob`：按路径模式查找文件。
+- `Grep`：搜索文件内容。
+- `read_memory` / `remember`：读取和更新长期记忆。
 
 ## 安装
 
@@ -29,8 +60,6 @@ flowchart TD
 uv sync
 Copy-Item .env.example .env
 ```
-
-`agent-core-runtime` 会自动从 GitHub 下载，不需要本地放一个相邻的 core 仓库。
 
 填写 `.env`：
 
@@ -40,13 +69,13 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 ```
 
-安装全局 `friday` 命令：
+安装命令：
 
 ```powershell
 uv tool install -e .
 ```
 
-## 使用
+## 命令
 
 ```powershell
 friday init
@@ -57,49 +86,7 @@ friday memory
 friday reset
 ```
 
-`friday tui` 是蓝色的 Rich 终端界面，会在工具调用发生时实时显示工具名和参数。
-
-LLM 默认流式输出。关闭流式：
-
-```powershell
-friday --no-stream ask "hello"
-```
-
-在 `friday chat` 里可以使用斜杆命令：
-
-- `/help`
-- `/memory`
-- `/reset`
-- `/exit`
-
-`friday reset` 会删除两类状态：
-
-- 项目运行状态：`<workspace>/.friday`
-- 全局 Friday 状态：`~/.friday`
-
-它会先要求确认。确定要清空时可以用 `friday reset --yes`。
-
-## 文件
-
-- `~/.friday/soul.md`：Friday 的基础人格和运行规则。
-- `~/.friday/user.md`：你的个人偏好。
-- `~/.friday/MEMORY.md`：全局记忆。
-- `AGENTS.md`：项目指令，兼容 Codex 风格的项目指导。
-- `.friday/MEMORY.md`：项目记忆。
-- `.friday/sessions/*.jsonl`：本地聊天日志。
-
-内置默认模板在 `src/friday/prompts/`，`friday init` 会把它们复制到 `~/.friday/`。
-
-Prompt 组装顺序按 prefix caching 设计：稳定的核心指令在前，然后是用户/项目指令，最后才是环境和记忆。
-
-## 工具
-
-- `Read(path, start_line=1, line_count=120, max_chars=6000)`
-- `Write(path, content)` 会覆盖整个文件。
-- `Edit(path, replacement, start_line=0, end_line=0, old_text="")` 可以编辑行范围，`end_line=0` 时插入，也可以替换唯一匹配的精确文本。
-- `Bash(command, timeout_seconds=60, max_chars=8000)` 在当前工作区运行命令。Windows 下使用 PowerShell。
-- `Glob(pattern, max_results=200)` 查找路径。
-- `Grep(pattern, path_glob="**/*", max_results=100, max_chars=240)` 搜索文本文件内容。
+使用 `friday --no-stream ...` 可以关闭流式输出。`friday reset` 会在确认后清空项目状态和全局 Friday 状态。
 
 ## 验证
 

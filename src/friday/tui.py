@@ -221,7 +221,7 @@ def _robot_icon() -> Text:
     text = Text()
     for row in pattern:
         for char in row:
-            text.append("[]" if char == "1" else "  ", style=f"bold {BLUE}" if char == "1" else "")
+            text.append("  ", style=f"on {BLUE}" if char == "1" else "")
         text.append("\n")
     return text
 

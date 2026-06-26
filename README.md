@@ -2,26 +2,57 @@
 
 [中文说明](README.zh-CN.md)
 
-Friday is a personal CLI agent built on `agent-core-runtime`.
+Friday is a personal CLI agent built with two pieces:
 
-It is intentionally small: one user, one machine, local files, local memory, and OpenAI-compatible models through the core runtime.
+- `agent-core-runtime`: the lightweight runtime for `Agent`, tool calling, streaming, and run context.
+- Friday harness: the local prompt stack, memory files, project instructions, and CLI tools that turn the runtime into a useful coding assistant.
 
-## Shape
+The point of this repo is not the terminal skin. The point is showing how a real personal agent can be assembled on top of a small core runtime without depending on a large agent framework.
+
+## Architecture
 
 ```mermaid
 flowchart TD
-    CLI["friday CLI"] --> Loader["load soul/user/AGENTS/memory"]
-    Loader --> Agent["agent_core.Agent"]
-    Agent --> Tools["tools"]
-    Tools --> Read["Read: line-windowed reads"]
-    Tools --> Write["Write: full overwrite"]
-    Tools --> Edit["Edit: line range or exact text"]
-    Tools --> Shell["Bash: PowerShell on Windows"]
-    Tools --> Glob["Glob: path search"]
-    Tools --> Grep["Grep: content search"]
+    User["User"] --> CLI["friday CLI / TUI"]
+    CLI --> Harness["Friday harness"]
+    Harness --> Prompt["Prompt stack"]
+    Harness --> State["Local state"]
+    Harness --> Runtime["agent-core-runtime"]
+    Runtime --> Agent["Agent"]
+    Agent --> LLM["OpenAI-compatible LLM"]
+    Agent --> Tools["Tool executor"]
+    Tools --> Files["Read / Write / Edit"]
+    Tools --> Search["Glob / Grep"]
+    Tools --> Shell["Bash"]
     Tools --> Memory["read_memory / remember"]
-    Agent --> Session[".friday/sessions/*.jsonl"]
+    State --> Global["~/.friday"]
+    State --> Project["<workspace>/.friday"]
 ```
+
+## Harness
+
+Friday builds the model context in a stable order for prefix caching:
+
+1. `soul.md`: durable identity and operating rules.
+2. Runtime/tool guidance: how the available tools should be used.
+3. `user.md`: personal preferences.
+4. `AGENTS.md`: project-level instructions.
+5. Environment notes: workspace, platform, shell.
+6. Memory: global and project memory.
+
+Global files live under `~/.friday`. Project state lives under `<workspace>/.friday`.
+
+## Tools
+
+Friday ships with a small default tool set:
+
+- `Read`: read a line window from a file.
+- `Write`: overwrite a file.
+- `Edit`: edit by line range or exact text match.
+- `Bash`: run shell commands. On Windows this uses PowerShell.
+- `Glob`: find files by path pattern.
+- `Grep`: search file contents.
+- `read_memory` / `remember`: inspect and update durable memory.
 
 ## Install
 
@@ -29,8 +60,6 @@ flowchart TD
 uv sync
 Copy-Item .env.example .env
 ```
-
-`agent-core-runtime` is pulled automatically from GitHub; no sibling local repo is required.
 
 Fill `.env`:
 
@@ -40,13 +69,13 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 ```
 
-Install the `friday` command:
+Install the command:
 
 ```powershell
 uv tool install -e .
 ```
 
-## Use
+## Commands
 
 ```powershell
 friday init
@@ -57,49 +86,7 @@ friday memory
 friday reset
 ```
 
-`friday tui` is the blue Rich-powered interface. It shows tool calls inline as they happen.
-
-LLM output streams by default. Use `--no-stream` before the command:
-
-```powershell
-friday --no-stream ask "hello"
-```
-
-Inside `friday chat`, use slash commands:
-
-- `/help`
-- `/memory`
-- `/reset`
-- `/exit`
-
-`friday reset` deletes both:
-
-- project runtime state: `<workspace>/.friday`
-- global Friday state: `~/.friday`
-
-It asks for confirmation. Use `friday reset --yes` only when you are sure.
-
-## Files
-
-- `~/.friday/soul.md`: Friday's base personality and operating rules.
-- `~/.friday/user.md`: your personal preferences.
-- `~/.friday/MEMORY.md`: global memory.
-- `AGENTS.md`: project instructions, compatible with Codex-style project guidance.
-- `.friday/MEMORY.md`: project memory.
-- `.friday/sessions/*.jsonl`: local chat logs.
-
-Bundled defaults live in `src/friday/prompts/` and are copied to `~/.friday/` by `friday init`.
-
-Prompt sections are ordered for prefix caching: stable core instructions first, then user/project instructions, then environment and memory.
-
-## Tools
-
-- `Read(path, start_line=1, line_count=120, max_chars=6000)`
-- `Write(path, content)` overwrites the whole file.
-- `Edit(path, replacement, start_line=0, end_line=0, old_text="")` edits a line range, inserts when `end_line=0`, or replaces one exact text match.
-- `Bash(command, timeout_seconds=60, max_chars=8000)` runs in the workspace. On Windows it uses PowerShell.
-- `Glob(pattern, max_results=200)` finds paths.
-- `Grep(pattern, path_glob="**/*", max_results=100, max_chars=240)` searches text file contents.
+Use `friday --no-stream ...` to disable streaming. `friday reset` clears both project state and global Friday state after confirmation.
 
 ## Validate
 
