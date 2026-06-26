@@ -9,6 +9,15 @@ Friday 是一个个人 CLI agent，由两部分组成：
 
 这个仓库的重点是展示如何基于一个很小的自研 core runtime，搭建一个真实可用的个人 agent，而不是依赖庞大的 agent 框架。
 
+## 特性
+
+- 默认感知工作区：在任意目录运行 `friday`，该目录就是 agent 的工作目录。
+- Harness 优先的上下文设计：身份、用户画像、长期记忆、项目规则和环境信息按稳定顺序组装，方便 prefix caching。
+- Agent 只做路由：启动 prompt 保持克制，项目文件、嵌套指令、记忆和工具按需进入上下文。
+- 分层记忆：用户、全局、项目记忆彼此独立，和可丢弃的 compact 会话摘要分开。
+- 小工具集：读写编辑文件、shell、glob、grep、memory 覆盖核心编码循环，不依赖庞大框架。
+- 本地状态：项目状态在 `<workspace>/.friday`，用户状态在 `~/.friday`。
+
 ## 架构
 
 ```mermaid
@@ -76,6 +85,9 @@ Friday 默认提供一组小工具：
 ```powershell
 uv sync
 Copy-Item .env.example .env
+cd ui-tui
+npm install
+cd ..
 ```
 
 填写 `.env`：
@@ -86,24 +98,25 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 ```
 
-安装命令：
+准备好后可以全局安装命令：
 
 ```powershell
 uv tool install -e .
 ```
 
-## 命令
+本地开发时，仓库里也提供了 `friday.cmd`。把仓库目录加入 `PATH`，或用完整路径调用它，它会以你当前所在目录作为 Friday 工作区。
+
+## 使用
 
 ```powershell
+friday
 friday init
 friday ask "summarize this project"
-friday chat
-friday tui
 friday memory
 friday reset
 ```
 
-使用 `friday --no-stream ...` 可以关闭流式输出。`friday reset` 会在确认后清空项目状态和全局 Friday 状态。
+裸 `friday` 会在当前目录启动终端 agent。`friday reset` 会在确认后清空项目状态和全局 Friday 状态。
 
 ## 验证
 

@@ -9,6 +9,15 @@ Friday is a personal CLI agent built with two pieces:
 
 The point of this repo is showing how a real personal agent can be assembled on top of a small core runtime without depending on a large agent framework.
 
+## Features
+
+- Workspace-aware by default: run `friday` from any directory and that directory becomes the agent workspace.
+- Harness-first context design: identity, user profile, durable memory, project rules, and environment notes are layered in a stable order for prefix caching.
+- Agent-as-router: the startup prompt stays small while project files, nested instructions, memory, and tools are pulled in only when needed.
+- Layered memory: user, global, and project memory are separate from disposable conversation compaction.
+- Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
+- Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
+
 ## Architecture
 
 ```mermaid
@@ -76,6 +85,9 @@ Friday ships with a small default tool set:
 ```powershell
 uv sync
 Copy-Item .env.example .env
+cd ui-tui
+npm install
+cd ..
 ```
 
 Fill `.env`:
@@ -86,24 +98,25 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 ```
 
-Install the command:
+Install the command globally when ready:
 
 ```powershell
 uv tool install -e .
 ```
 
-## Commands
+For local development on Windows, this repo also includes `friday.cmd`. Put the repo directory on `PATH`, or call it by full path, and it will run Friday against your current directory.
+
+## Usage
 
 ```powershell
+friday
 friday init
 friday ask "summarize this project"
-friday chat
-friday tui
 friday memory
 friday reset
 ```
 
-Use `friday --no-stream ...` to disable streaming. `friday reset` clears both project state and global Friday state after confirmation.
+Bare `friday` starts the terminal agent in the current directory. `friday reset` clears both project state and global Friday state after confirmation.
 
 ## Validate
 

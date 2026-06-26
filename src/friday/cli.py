@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> None:
     reset.add_argument("-y", "--yes", action="store_true", help="Skip reset confirmation.")
 
     args = parser.parse_args(argv)
-    command = args.command or "chat"
+    command = args.command or "tui"
     stream = not args.no_stream
 
     if command == "init":

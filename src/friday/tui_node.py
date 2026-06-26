@@ -14,9 +14,10 @@ def run_tui() -> None:
     ui = root / "ui-tui"
     entry = ui / "dist" / "entry.js"
     env = os.environ.copy()
+    launch_cwd = Path(env.get("FRIDAY_CWD", Path.cwd())).resolve()
     env.setdefault("FRIDAY_PYTHON", sys.executable)
     env.setdefault("FRIDAY_ROOT", str(root))
-    env.setdefault("FRIDAY_CWD", str(root))
+    env["FRIDAY_CWD"] = str(launch_cwd)
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
 

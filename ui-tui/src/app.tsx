@@ -1,15 +1,35 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Box, Text, useApp, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 
 import type { GatewayClient } from './gatewayClient.js'
+import { Markdown, type Theme } from './markdown.js'
 import type { GatewayEvent, Message, SessionInfo } from './types.js'
 
-const accent = '#39c5bb'
-const blue = '#2f81f7'
-const dim = '#9aa4b2'
-const white = '#f0f6fc'
-const dark = '#30363d'
+const theme: Theme = {
+  accent: '#2F81F7',
+  code: '#93C5FD',
+  dim: '#7AA2D6',
+  error: '#F85149',
+  ok: '#3FB950',
+  panelBg: '#E5E7EB',
+  panelText: '#111827',
+  text: '#DBEAFE',
+  warn: '#D29922'
+}
+
+const primary = '#1D4ED8'
+
+const HELP_TEXT = `# Friday commands
+
+| Command | What it does |
+| --- | --- |
+| \`/help\` | Show this command reference. |
+| \`/details\` | Toggle verbose tool arguments in the status line. |
+| \`/memory\` | Print the effective prompt, including user, project, and memory context. |
+| \`/reset\` | Clear Friday project state and global Friday user state. |
+| \`/exit\` | Close the TUI. \`/quit\` works too. |
+`
 
 export function App({ gateway }: { gateway: GatewayClient }) {
   const app = useApp()
@@ -28,18 +48,18 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'message.delta') {
         setStreaming(text => text + event.payload.text)
       } else if (event.type === 'message.complete') {
-        setMessages(items => [...items, { role: 'assistant', text: event.payload.text }])
+        setMessages(items => [...items, { metrics: event.payload.metrics, role: 'assistant', text: event.payload.text }])
         setStreaming('')
         setBusy(false)
       } else if (event.type === 'tool.start') {
         const suffix = details && event.payload.arguments ? ` ${JSON.stringify(event.payload.arguments)}` : ''
-        setActivity(`Tool ${event.payload.name}${suffix}`)
+        setActivity(`tool ${event.payload.name}${suffix}`)
       } else if (event.type === 'tool.complete') {
-        setActivity(event.payload.error ? `Tool ${event.payload.name} failed` : '')
+        setActivity(event.payload.error ? `tool ${event.payload.name} failed` : '')
       } else if (event.type === 'gateway.stderr') {
         setActivity(event.payload.line)
       } else if (event.type === 'gateway.protocol_error') {
-        setActivity(`Protocol noise: ${event.payload.preview}`)
+        setActivity(`protocol noise: ${event.payload.preview}`)
       }
     }
 
@@ -61,13 +81,18 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     }
   })
 
+  const commandContext = useMemo(
+    () => ({ app, details, gateway, setDetails, setMessages }),
+    [app, details, gateway]
+  )
+
   const submit = (value: string) => {
     const text = cleanInput(value)
     if (!text || busy) {
       return
     }
     setInput('')
-    if (runCommand(text, { app, details, gateway, setDetails, setMessages })) {
+    if (runCommand(text, commandContext)) {
       return
     }
 
@@ -82,16 +107,13 @@ export function App({ gateway }: { gateway: GatewayClient }) {
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Header info={info} busy={busy} details={details} />
-      <Box flexDirection="column" marginTop={1} minHeight={8}>
-        {messages.slice(-8).map((message, index) => <MessageLine key={index} message={message} />)}
-        {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} /> : null}
+      <Header info={info} />
+      <Box flexDirection="column" marginTop={1}>
+        {messages.slice(-10).map((message, index) => <MessageLine key={index} message={message} />)}
+        {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} streaming /> : null}
       </Box>
-      <StatusLine activity={activity} busy={busy} />
-      <Box borderColor={busy ? 'yellow' : accent} borderStyle="round" marginTop={1} paddingX={1}>
-        <Text color={busy ? 'yellow' : blue}>{busy ? 'wait ' : '> '}</Text>
-        <TextInput focus={!busy} onChange={setInput} onSubmit={submit} placeholder="Ask Friday" value={input} />
-      </Box>
+      <StatusRule activity={activity} busy={busy} details={details} info={info} />
+      <Composer busy={busy} input={input} onChange={setInput} onSubmit={submit} />
     </Box>
   )
 }
@@ -124,63 +146,122 @@ function runCommand(
     gateway.kill()
     app.exit()
   } else if (command.startsWith('/help')) {
-    setMessages(items => [...items, { role: 'system', text: 'Commands: /help /details /memory /reset /exit' }])
+    setMessages(items => [...items, { role: 'system', text: HELP_TEXT }])
   } else if (command.startsWith('/details')) {
     setDetails(value => !value)
-    setMessages(items => [...items, { role: 'system', text: `Tool details ${details ? 'off' : 'on'}` }])
+    setMessages(items => [...items, { role: 'system', text: `Tool details ${details ? 'off' : 'on'}.` }])
   } else if (command.startsWith('/memory')) {
     void gateway.request<{ text: string }>('prompt.get').then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
     )
   } else if (command.startsWith('/reset')) {
-    void gateway.request('session.reset').then(() => setMessages(items => [...items, { role: 'system', text: 'Reset Friday' }]))
+    void gateway.request('session.reset').then(() => setMessages(items => [...items, { role: 'system', text: 'Reset Friday.' }]))
   } else {
-    setMessages(items => [...items, { role: 'system', text: `Unknown command: ${command}` }])
+    setMessages(items => [...items, { role: 'system', text: `Unknown command: ${command}. Try /help.` }])
   }
   return true
 }
 
-function Header({ info, busy, details }: { busy: boolean; details: boolean; info: SessionInfo | null }) {
+function Header({ info }: { info: SessionInfo | null }) {
   const cwd = info?.cwd ?? process.cwd()
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text bold color={primary}>Friday</Text>
+        <Text color={theme.dim}> agent </Text>
+        <Text color={theme.accent}>/help</Text>
+        <Text color={theme.dim}> for commands</Text>
+      </Box>
+      <Text color={theme.dim} wrap="truncate-end">{cwd}</Text>
+    </Box>
+  )
+}
+
+function MessageLine({ message, streaming = false }: { message: Message; streaming?: boolean }) {
+  const role = roleMeta(message.role)
+  const assistantTheme = message.role === 'assistant'
+    ? { ...theme, accent: primary, code: primary, dim: '#4B5563', text: theme.panelText }
+    : theme
+  return (
+    <Box flexDirection="column" marginBottom={message.role === 'user' ? 1 : 0} marginTop={message.role === 'user' ? 1 : 0}>
+      <Box>
+        <Box width={4}>
+          <Text bold={message.role === 'user'} color={role.color}>{role.glyph}</Text>
+        </Box>
+        <Box flexDirection="column">
+          {streaming ? <Text color={theme.dim}>streaming...</Text> : null}
+          {message.role === 'user' ? (
+            <Text color={role.color}>{message.text}</Text>
+          ) : (
+            <>
+              {message.role === 'assistant' ? (
+                <Box backgroundColor={theme.panelBg} flexDirection="column" paddingX={1}>
+                  <Markdown text={message.text} theme={assistantTheme} />
+                </Box>
+              ) : (
+                <Markdown text={message.text} theme={assistantTheme} />
+              )}
+              {message.metrics ? <Metrics metrics={message.metrics} /> : null}
+            </>
+          )}
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
+function roleMeta(role: Message['role']) {
+  if (role === 'user') {
+    return { color: primary, glyph: 'YOU' }
+  }
+  if (role === 'assistant') {
+    return { color: theme.text, glyph: 'FRI' }
+  }
+  if (role === 'tool') {
+    return { color: theme.warn, glyph: 'TOO' }
+  }
+  return { color: theme.dim, glyph: 'SYS' }
+}
+
+function StatusRule({ activity, busy, details, info }: { activity: string; busy: boolean; details: boolean; info: SessionInfo | null }) {
+  const left = activity || (busy ? 'thinking' : 'ready')
+  const model = info?.model ?? 'loading model'
   const tools = info?.tools.length ?? 0
   return (
-    <Box borderColor={accent} borderStyle="round" flexDirection="column" paddingX={2} paddingY={1}>
+    <Box height={1} marginTop={1}>
+      <Text color={theme.dim}>-- </Text>
+      <Text color={busy ? theme.warn : theme.ok}>{left}</Text>
+      <Text color={theme.dim}> | {shortModel(model)} | {tools} tools | details {details ? 'on' : 'off'}</Text>
+    </Box>
+  )
+}
+
+function Composer({ busy, input, onChange, onSubmit }: { busy: boolean; input: string; onChange: (value: string) => void; onSubmit: (value: string) => void }) {
+  const rule = '━'.repeat(Math.max(20, (process.stdout.columns ?? 80) - 2))
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={theme.dim}>{rule}</Text>
       <Box>
-        <Text bold color={blue}>Friday</Text>
-        <Text color={dim}> | </Text>
-        <Text color={busy ? 'yellow' : 'green'}>{busy ? 'busy' : 'ready'}</Text>
-        <Text color={dim}> | {info?.model ?? 'loading model'} | {tools} tools | details {details ? 'on' : 'off'}</Text>
+        <Text color={busy ? theme.warn : theme.accent}>{busy ? '...' : '>'} </Text>
+        <TextInput focus={!busy} onChange={onChange} onSubmit={onSubmit} placeholder="Ask Friday or type /help" value={input} />
       </Box>
-      <Text color={white}>{cwd}</Text>
-      <Box marginTop={1}>
-        <Text color={dim}>/help</Text>
-        <Text color={dim}>  /details</Text>
-        <Text color={dim}>  /memory</Text>
-        <Text color={dim}>  /reset</Text>
-        <Text color={dim}>  /exit</Text>
-      </Box>
+      <Text color={theme.dim}>{rule}</Text>
     </Box>
   )
 }
 
-function MessageLine({ message }: { message: Message }) {
-  const color = message.role === 'user' ? blue : message.role === 'assistant' ? white : message.role === 'tool' ? 'yellow' : dim
-  const label = message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Friday' : message.role === 'system' ? 'System' : message.role
+function Metrics({ metrics }: { metrics: NonNullable<Message['metrics']> }) {
+  const mark = metrics.estimated_tokens ? '~' : ''
+  const input = metrics.input_tokens == null ? 'n/a' : `${mark}${metrics.input_tokens}`
+  const output = metrics.output_tokens == null ? 'n/a' : `${mark}${metrics.output_tokens}`
+  const seconds = metrics.elapsed_ms == null ? 'n/a' : `${(metrics.elapsed_ms / 1000).toFixed(1)}s`
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text bold color={color}>{label}</Text>
-      <Box borderColor={message.role === 'system' ? dark : color} borderStyle="single" paddingX={1}>
-        <Text color={message.role === 'system' ? dim : white}>{message.text}</Text>
-      </Box>
-    </Box>
+    <Text color={theme.dim}>
+      in {input} | out {output} | {seconds}
+    </Text>
   )
 }
 
-function StatusLine({ activity, busy }: { activity: string; busy: boolean }) {
-  const text = activity || (busy ? 'Friday is thinking...' : 'Ready')
-  return (
-    <Box>
-      <Text backgroundColor={dark} color={busy ? 'yellow' : white}> {text} </Text>
-    </Box>
-  )
+function shortModel(model: string) {
+  return model.split('/').pop()?.replace(/[-_]/g, ' ') || model
 }

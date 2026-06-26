@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from friday import cli
@@ -8,6 +9,14 @@ from friday import tui_node
 
 
 class CliTests(unittest.TestCase):
+    def test_bare_friday_starts_tui(self) -> None:
+        with patch("friday.cli.build_friday") as build_friday:
+            with patch("friday.cli.run_tui") as run_tui:
+                cli.main([])
+
+        build_friday.assert_not_called()
+        run_tui.assert_called_once_with()
+
     def test_tui_launch_does_not_build_agent_first(self) -> None:
         with patch("friday.cli.build_friday") as build_friday:
             with patch("friday.cli.run_tui") as run_tui:
@@ -30,6 +39,7 @@ class CliTests(unittest.TestCase):
         args, kwargs = call.call_args
         self.assertEqual(args[0], ["npm.cmd", "start"])
         self.assertEqual(kwargs["cwd"].name, "ui-tui")
+        self.assertEqual(kwargs["env"]["FRIDAY_CWD"], str(Path.cwd().resolve()))
         self.assertEqual(kwargs["env"]["PYTHONIOENCODING"], "utf-8")
         self.assertEqual(kwargs["env"]["PYTHONUTF8"], "1")
 
