@@ -7,6 +7,7 @@ from typing import Any
 
 from agent_core import AgentEvent
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -30,6 +31,8 @@ class FridayTUI:
         self.stream = stream
         self.agent, self.context = build_friday(stream=stream)
         self.context.on_event = self.on_event
+        self._answer_parts: list[str] = []
+        self._live: Live | None = None
 
     def run(self) -> None:
         self.banner()
@@ -95,10 +98,11 @@ class FridayTUI:
             return
         removed = reset_friday(include_user=True)
         self.console.print(_bar("Reset " + (", ".join(str(path) for path in removed) or "nothing removed")))
-        self.agent, self.context = build_friday(stream=False)
+        self.agent, self.context = build_friday(stream=self.stream)
         self.context.on_event = self.on_event
 
     def ask(self, text: str) -> None:
+        self._answer_parts = []
         answer = self.agent.chat(
             text,
             context=self.context,
@@ -107,7 +111,12 @@ class FridayTUI:
             on_delta=self.on_delta if self.stream else None,
         )
         if self.stream:
-            self.console.print()
+            if self._live is not None:
+                self._live.update(_markdown(answer))
+                self._live.stop()
+                self._live = None
+            else:
+                self.console.print(_markdown(answer))
         else:
             self.console.print(_markdown(answer))
         save_turn(
@@ -119,14 +128,20 @@ class FridayTUI:
 
     def on_event(self, event: AgentEvent) -> None:
         if event.type == "tool.call":
+            self._stop_live()
             name = event.data.get("name", "")
             arguments = _short_json(event.data.get("arguments", {}), self.console.width - len(name) - 12)
             self.console.print(_bar(f"Tool {name} {arguments}", limit=self.console.width))
         elif event.type == "tool.result" and event.data.get("is_error"):
+            self._stop_live()
             self.console.print(_bar(f"Tool error {event.data.get('content', '')}", style="white on #7f1d1d"))
 
     def on_delta(self, text: str) -> None:
-        self.console.out(text, end="")
+        self._answer_parts.append(text)
+        if self._live is None:
+            self._live = Live(_markdown(""), console=self.console, refresh_per_second=12)
+            self._live.start()
+        self._live.update(_markdown("".join(self._answer_parts)))
 
     def _read_input(self) -> str:
         if not self.console.is_terminal:
@@ -144,7 +159,12 @@ class FridayTUI:
         return text.strip()
 
     def _rule(self, *, width_offset: int = 0) -> Text:
-        return Text("█" * max(20, self.console.width - width_offset), style=CYAN)
+        return Text("\u2501" * max(20, self.console.width - width_offset), style=CYAN)
+
+    def _stop_live(self) -> None:
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
 
 
 def _markdown(text: str) -> Markdown:
