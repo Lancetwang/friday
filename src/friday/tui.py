@@ -12,6 +12,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
+from rich.theme import Theme
 
 from friday import __version__
 from friday.app import build_friday, build_instructions, reset_friday, save_turn
@@ -24,15 +25,14 @@ BAR = "white on #30363d"
 
 class FridayTUI:
     def __init__(self, *, stream: bool) -> None:
-        self.console = Console()
+        self.console = Console(theme=_theme())
         self.agent, self.context = build_friday(stream=stream)
         self.context.on_event = self.on_event
 
     def run(self) -> None:
         self.banner()
         while True:
-            self._input_lines()
-            text = self.console.input(f"[bold {BLUE}]> [/]").strip()
+            text = self._read_input()
             if text.lower() in {"exit", "quit", "q", "/exit"}:
                 return
             if not text:
@@ -47,11 +47,11 @@ class FridayTUI:
         body.add_column(width=30)
         body.add_column(width=1)
         body.add_column(ratio=1)
-        body.add_row(self._logo(), Text("|", style=CYAN), self._home())
+        body.add_row(self._logo(), Text("│\n" * 14, style=f"dim {CYAN}"), self._home())
         self.console.print(
             Panel(
                 body,
-                title=f"[bold {BLUE}] Friday Code [/][dim]v{__version__}[/]",
+                title=f"[bold {BLUE}] Friday [/][dim]v{__version__}[/]",
                 title_align="left",
                 border_style=CYAN,
                 padding=(0, 2),
@@ -79,7 +79,7 @@ class FridayTUI:
             self.console.print(Text("/help  /memory  /reset  /exit", style=f"bold {BLUE}"))
         elif command == "memory":
             body = build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")
-            self.console.print(Panel(Markdown(body), title="Effective Prompt", border_style=CYAN))
+            self.console.print(Panel(Markdown(body, code_theme="ansi_dark"), title="Effective Prompt", border_style=CYAN))
         elif command == "reset":
             self.reset()
         else:
@@ -102,8 +102,7 @@ class FridayTUI:
             max_steps=20,
             stream=False,
         )
-        self.console.print(Markdown(answer))
-        self.console.print(self._rule())
+        self.console.print(Markdown(answer, code_theme="ansi_dark"))
         save_turn(
             Path(self.context.metadata["workspace"]),
             text,
@@ -119,17 +118,18 @@ class FridayTUI:
         elif event.type == "tool.result" and event.data.get("is_error"):
             self.console.print(_bar(f"Tool error {event.data.get('content', '')}", style="white on #7f1d1d"))
 
-    def _input_lines(self) -> None:
+    def _read_input(self) -> str:
         self.console.print(self._rule())
+        text = self.console.input(f"[bold {BLUE}]> [/]")
+        self.console.print(self._rule())
+        return text.strip()
 
     def _rule(self, *, width_offset: int = 0) -> Text:
         return Text("-" * max(20, self.console.width - width_offset), style=CYAN)
 
     def _logo(self) -> Text:
         text = Text()
-        text.append("FRIDAY\n", style=f"bold {BLUE}")
-        text.append("CODE\n", style=f"bold {BLUE}")
-        text.append(f"v{__version__}", style=DIM)
+        text.append(_icon(), style=f"bold {BLUE}")
         return text
 
 
@@ -167,3 +167,32 @@ def _recent_activity(workspace: Path, limit: int = 3) -> list[str]:
 def _status_line() -> str:
     model = os.getenv("LLM_MODEL", "model from .env")
     return f"{model} - local workspace"
+
+
+def _icon() -> str:
+    return """
+    ██████
+  ██      ██
+  ██ ████ ██
+  ██  ██  ██
+  ██      ██
+    ██████
+""".strip("\n")
+
+
+def _theme() -> Theme:
+    return Theme(
+        {
+            "markdown": "white",
+            "markdown.paragraph": "white",
+            "markdown.item": "white",
+            "markdown.strong": f"bold {BLUE}",
+            "markdown.em": CYAN,
+            "markdown.h1": f"bold {BLUE}",
+            "markdown.h2": f"bold {BLUE}",
+            "markdown.h3": f"bold {BLUE}",
+            "markdown.code": "white on #0b1f3a",
+            "markdown.code_block": "white on #0b1f3a",
+            "markdown.block_quote": DIM,
+        }
+    )
