@@ -1,5 +1,8 @@
 .env
 .venv/
+node_modules/
+node_cache/
+ui-tui/dist/
 __pycache__/
 *.pyc
 .friday/

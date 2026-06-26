@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from friday.app import build_friday, build_instructions, init_project, reset_friday, save_turn
-from friday.tui import FridayTUI
+from friday.tui_node import run_tui
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -45,16 +45,16 @@ def main(argv: list[str] | None = None) -> None:
         _reset(args.yes)
         return
 
+    if command == "tui":
+        run_tui()
+        return
+
     agent, context = build_friday(stream=stream)
 
     if command == "ask":
         text = " ".join(args.text)
         answer = _ask(agent, context, text, stream)
         _save(context, text, answer)
-        return
-
-    if command == "tui":
-        FridayTUI(stream=stream).run()
         return
 
     if command == "chat":
