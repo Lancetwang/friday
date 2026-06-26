@@ -19,6 +19,7 @@ from friday.app import build_friday, build_instructions, reset_friday, save_turn
 
 BLUE = "#2f81f7"
 CYAN = "#39c5bb"
+WHITE = "#f0f6fc"
 DIM = "#9aa4b2"
 BAR = "white on #30363d"
 
@@ -47,7 +48,7 @@ class FridayTUI:
         body.add_column(width=30)
         body.add_column(width=1)
         body.add_column(ratio=1)
-        body.add_row(self._logo(), Text("│\n" * 14, style=f"dim {CYAN}"), self._home())
+        body.add_row(_robot_icon(), Text(("|\n" * 14).rstrip(), style=f"dim {CYAN}"), self._home())
         self.console.print(
             Panel(
                 body,
@@ -62,15 +63,15 @@ class FridayTUI:
         table = Table.grid(expand=True)
         table.add_column()
         table.add_row(Text("Tips for getting started", style=f"bold {BLUE}"))
-        table.add_row(Text("Press / to use commands. Use @ in messages to mention files.", style="bold"))
-        table.add_row(Text("Shift+Enter adds a new line when your terminal supports it.", style="bold"))
+        table.add_row(Text("Press / to use commands. Use @ in messages to mention files.", style=f"bold {WHITE}"))
+        table.add_row(Text("Shift+Enter adds a new line when your terminal supports it.", style=f"bold {WHITE}"))
         table.add_row(self._rule(width_offset=44))
         table.add_row(Text("Recent activity", style=f"bold {BLUE}"))
         for item in _recent_activity(Path.cwd()):
-            table.add_row(Text(item, style="bold"))
+            table.add_row(Text(item, style=f"bold {WHITE}"))
         table.add_row(self._rule(width_offset=44))
         table.add_row(Text(_status_line(), style=f"bold {BLUE}"))
-        table.add_row(Text(str(Path.cwd().resolve()), style="bold"))
+        table.add_row(Text(str(Path.cwd().resolve()), style=f"bold {WHITE}"))
         return table
 
     def slash(self, text: str) -> None:
@@ -79,7 +80,7 @@ class FridayTUI:
             self.console.print(Text("/help  /memory  /reset  /exit", style=f"bold {BLUE}"))
         elif command == "memory":
             body = build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")
-            self.console.print(Panel(Markdown(body, code_theme="ansi_dark"), title="Effective Prompt", border_style=CYAN))
+            self.console.print(Panel(_markdown(body), title="Effective Prompt", border_style=CYAN))
         elif command == "reset":
             self.reset()
         else:
@@ -102,7 +103,7 @@ class FridayTUI:
             max_steps=20,
             stream=False,
         )
-        self.console.print(Markdown(answer, code_theme="ansi_dark"))
+        self.console.print(_markdown(answer))
         save_turn(
             Path(self.context.metadata["workspace"]),
             text,
@@ -119,18 +120,26 @@ class FridayTUI:
             self.console.print(_bar(f"Tool error {event.data.get('content', '')}", style="white on #7f1d1d"))
 
     def _read_input(self) -> str:
+        if not self.console.is_terminal:
+            self.console.print(self._rule())
+            return self.console.input(f"[bold {BLUE}]> [/]").strip()
+
         self.console.print(self._rule())
+        self.console.print()
+        self.console.print(self._rule())
+        self.console.file.write("\x1b[2A")
+        self.console.file.flush()
         text = self.console.input(f"[bold {BLUE}]> [/]")
-        self.console.print(self._rule())
+        self.console.file.write("\x1b[2A\x1b[0J")
+        self.console.file.flush()
         return text.strip()
 
     def _rule(self, *, width_offset: int = 0) -> Text:
         return Text("-" * max(20, self.console.width - width_offset), style=CYAN)
 
-    def _logo(self) -> Text:
-        text = Text()
-        text.append(_icon(), style=f"bold {BLUE}")
-        return text
+
+def _markdown(text: str) -> Markdown:
+    return Markdown(text, code_theme="monokai", inline_code_theme="monokai", style=WHITE)
 
 
 def _bar(text: str, *, style: str = BAR, limit: int = 120) -> Text:
@@ -169,30 +178,36 @@ def _status_line() -> str:
     return f"{model} - local workspace"
 
 
-def _icon() -> str:
-    return """
-    ██████
-  ██      ██
-  ██ ████ ██
-  ██  ██  ██
-  ██      ██
-    ██████
-""".strip("\n")
+def _robot_icon() -> Text:
+    pattern = [
+        "  111111  ",
+        " 1000001 ",
+        " 1011011 ",
+        " 1001101 ",
+        " 1000001 ",
+        "  111111  ",
+    ]
+    text = Text()
+    for row in pattern:
+        for char in row:
+            text.append("[]" if char == "1" else "  ", style=f"bold {BLUE}" if char == "1" else "")
+        text.append("\n")
+    return text
 
 
 def _theme() -> Theme:
     return Theme(
         {
-            "markdown": "white",
-            "markdown.paragraph": "white",
-            "markdown.item": "white",
+            "markdown": WHITE,
+            "markdown.paragraph": WHITE,
+            "markdown.item": WHITE,
             "markdown.strong": f"bold {BLUE}",
             "markdown.em": CYAN,
             "markdown.h1": f"bold {BLUE}",
             "markdown.h2": f"bold {BLUE}",
             "markdown.h3": f"bold {BLUE}",
-            "markdown.code": "white on #0b1f3a",
-            "markdown.code_block": "white on #0b1f3a",
+            "markdown.code": f"{WHITE} on #0b1f3a",
+            "markdown.code_block": f"{WHITE} on #0b1f3a",
             "markdown.block_quote": DIM,
         }
     )
