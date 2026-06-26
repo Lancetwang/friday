@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +13,13 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
+from friday import __version__
 from friday.app import build_friday, build_instructions, reset_friday, save_turn
 
-BLUE = "#58a6ff"
-DIM = "#7d8590"
+BLUE = "#2f81f7"
+CYAN = "#39c5bb"
+DIM = "#9aa4b2"
+BAR = "white on #30363d"
 
 
 class FridayTUI:
@@ -29,7 +33,7 @@ class FridayTUI:
     def run(self) -> None:
         self.banner()
         while True:
-            text = Prompt.ask(Text("you", style=f"bold {BLUE}")).strip()
+            text = self.console.input(f"[bold {BLUE}]> [/]").strip()
             if text.lower() in {"exit", "quit", "q", "/exit"}:
                 return
             if not text:
@@ -40,20 +44,43 @@ class FridayTUI:
             self.ask(text)
 
     def banner(self) -> None:
+        body = Table.grid(expand=True)
+        body.add_column(width=30)
+        body.add_column(width=1)
+        body.add_column(ratio=1)
+        body.add_row(Text(_logo(), style=f"bold {BLUE}"), Text("│", style=CYAN), self._home())
+        self.console.print(
+            Panel(
+                body,
+                title=f"[bold {BLUE}] Friday Code [/][dim]v{__version__}[/]",
+                title_align="left",
+                border_style=CYAN,
+                padding=(0, 2),
+            )
+        )
+
+    def _home(self) -> Table:
         table = Table.grid(expand=True)
-        table.add_column(ratio=1)
-        table.add_column(justify="right")
-        table.add_row(Text("Friday", style=f"bold {BLUE}"), Text(str(Path.cwd().resolve()), style=DIM))
-        table.add_row(Text("personal coding agent", style=DIM), Text("/help  /memory  /reset  /exit", style=DIM))
-        self.console.print(Panel(table, border_style=BLUE, padding=(1, 2)))
+        table.add_column()
+        table.add_row(Text("Tips for getting started", style=f"bold {BLUE}"))
+        table.add_row(Text("Press / to use commands. Use @ in messages to mention files.", style="bold"))
+        table.add_row(Text("Use Shift+Enter in your terminal for multiline input when supported.", style="bold"))
+        table.add_row(Text("─" * max(20, self.console.width - 44), style=f"dim {CYAN}"))
+        table.add_row(Text("Recent activity", style=f"bold {BLUE}"))
+        for item in _recent_activity(Path.cwd()):
+            table.add_row(Text(item, style="bold"))
+        table.add_row(Text("─" * max(20, self.console.width - 44), style=f"dim {CYAN}"))
+        table.add_row(Text(_status_line(), style=f"bold {BLUE}"))
+        table.add_row(Text(str(Path.cwd().resolve()), style="bold"))
+        return table
 
     def slash(self, text: str) -> None:
         command = text[1:].strip().lower()
         if command in {"help", "?"}:
-            self.console.print(Panel("/help\n/memory\n/reset\n/exit", title="Commands", border_style=BLUE))
+            self.console.print(Text("/help  /memory  /reset  /exit", style=f"bold {BLUE}"))
         elif command == "memory":
             body = build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")
-            self.console.print(Panel(Markdown(body), title="Effective Prompt", border_style=BLUE))
+            self.console.print(Panel(Markdown(body), title="Effective Prompt", border_style=CYAN))
         elif command == "reset":
             self.reset()
         else:
@@ -65,19 +92,13 @@ class FridayTUI:
             self.console.print("[dim]cancelled[/]")
             return
         removed = reset_friday(include_user=True)
-        self.console.print(
-            Panel(
-                "\n".join(str(path) for path in removed) or "nothing removed",
-                title="Reset",
-                border_style=BLUE,
-            )
-        )
+        self.console.print(_bar("Reset " + (", ".join(str(path) for path in removed) or "nothing removed")))
         self.agent, self.context = build_friday(stream=self.stream)
         self.context.on_event = self.on_event
 
     def ask(self, text: str) -> None:
-        self.console.print(Panel(text, title="You", border_style=BLUE))
-        self.console.print(Text("Friday", style=f"bold {BLUE}"))
+        self.console.print(_bar("> " + text))
+        self.console.print("• ", style=f"dim {BLUE}", end="")
         answer = self.agent.chat(
             text,
             context=self.context,
@@ -88,6 +109,7 @@ class FridayTUI:
             self.console.print()
         else:
             self.console.print(Markdown(answer))
+        self.console.print(Text("─" * self.console.width, style=CYAN))
         save_turn(
             Path(self.context.metadata["workspace"]),
             text,
@@ -105,15 +127,54 @@ class FridayTUI:
                 self.console.print()
                 self._streaming = False
             name = event.data.get("name", "")
-            arguments = _short_json(event.data.get("arguments", {}))
-            self.console.print(f"[{BLUE}]Tool[/] [bold]{name}[/] [dim]{arguments}[/]")
-        elif event.type == "tool.result":
-            if event.data.get("is_error"):
-                self.console.print(f"[red]Tool error[/] {event.data.get('content', '')}")
-            else:
-                self.console.print("[dim]Tool done[/]")
+            arguments = _short_json(event.data.get("arguments", {}), self.console.width - len(name) - 12)
+            self.console.print(_bar(f"Tool {name} {arguments}"))
+        elif event.type == "tool.result" and event.data.get("is_error"):
+            self.console.print(_bar(f"Tool error {event.data.get('content', '')}", style="white on #7f1d1d"))
 
 
-def _short_json(value: Any, limit: int = 220) -> str:
-    text = json.dumps(value, ensure_ascii=False)
-    return text if len(text) <= limit else text[: limit - 3] + "..."
+def _bar(text: str, *, style: str = BAR) -> Text:
+    clipped = _middle_truncate(text.replace("\n", " "), 120)
+    return Text(clipped, style=style)
+
+
+def _short_json(value: Any, limit: int = 160) -> str:
+    return _middle_truncate(json.dumps(value, ensure_ascii=False), max(20, limit))
+
+
+def _middle_truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    keep = max(8, (limit - 3) // 2)
+    return text[:keep] + "..." + text[-keep:]
+
+
+def _recent_activity(workspace: Path, limit: int = 3) -> list[str]:
+    sessions = workspace / ".friday" / "sessions"
+    files = sorted(sessions.glob("*.jsonl"), reverse=True) if sessions.exists() else []
+    items = []
+    for file in files:
+        for line in reversed(file.read_text(encoding="utf-8", errors="replace").splitlines()):
+            try:
+                items.append(json.loads(line).get("user", ""))
+            except json.JSONDecodeError:
+                continue
+            if len(items) >= limit:
+                return items
+    return items or ["No recent activity yet.", "/help"]
+
+
+def _status_line() -> str:
+    model = os.getenv("LLM_MODEL", "model from .env")
+    return f"{model} · local workspace"
+
+
+def _logo() -> str:
+    return """
+███████╗
+██╔════╝
+█████╗
+██╔══╝
+██║
+╚═╝
+""".strip("\n")
