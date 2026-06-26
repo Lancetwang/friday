@@ -38,6 +38,7 @@ class FridayTUI:
                 return
             if not text:
                 continue
+            self.console.print(_bar("> " + text, limit=self.console.width))
             if text.startswith("/"):
                 self.slash(text)
                 continue
@@ -122,7 +123,7 @@ class FridayTUI:
     def _read_input(self) -> str:
         if not self.console.is_terminal:
             self.console.print(self._rule())
-            return self.console.input(f"[bold {BLUE}]> [/]").strip()
+            return input().strip()
 
         self.console.print(self._rule())
         self.console.print()
@@ -130,12 +131,12 @@ class FridayTUI:
         self.console.file.write("\x1b[2A")
         self.console.file.flush()
         text = self.console.input(f"[bold {BLUE}]> [/]")
-        self.console.file.write("\x1b[2A\x1b[0J")
+        self.console.file.write("\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[1A\r\x1b[2K")
         self.console.file.flush()
         return text.strip()
 
     def _rule(self, *, width_offset: int = 0) -> Text:
-        return Text("-" * max(20, self.console.width - width_offset), style=CYAN)
+        return Text("=" * max(20, self.console.width - width_offset), style=CYAN)
 
 
 def _markdown(text: str) -> Markdown:
@@ -180,12 +181,14 @@ def _status_line() -> str:
 
 def _robot_icon() -> Text:
     pattern = [
-        "  111111  ",
-        " 1000001 ",
-        " 1011011 ",
-        " 1001101 ",
-        " 1000001 ",
-        "  111111  ",
+        " 11  11 ",
+        " 111111 ",
+        "11    11",
+        "11 1  11",
+        "11  1 11",
+        "11    11",
+        "11    11",
+        " 111111 ",
     ]
     text = Text()
     for row in pattern:
