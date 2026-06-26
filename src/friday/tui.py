@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +33,6 @@ class FridayTUI:
         self.context.on_event = self.on_event
         self._answer_parts: list[str] = []
         self._live: Live | None = None
-        self.show_tool_details = False
 
     def run(self) -> None:
         self.banner()
@@ -51,35 +49,40 @@ class FridayTUI:
             self.ask(text)
 
     def banner(self) -> None:
+        body = Table.grid(expand=True)
+        body.add_column(width=30)
+        body.add_column(width=1)
+        body.add_column(ratio=1)
+        body.add_row(_robot_icon(), Text(("|\n" * 14).rstrip(), style=f"dim {CYAN}"), self._home())
         self.console.print(
             Panel(
-                self._home(),
+                body,
                 title=f"[bold {BLUE}] Friday [/][dim]v{__version__}[/]",
-                subtitle=f"[dim]{_command_help()}[/]",
                 title_align="left",
                 border_style=CYAN,
-                padding=(0, 1),
+                padding=(0, 2),
             )
         )
 
     def _home(self) -> Table:
         table = Table.grid(expand=True)
         table.add_column()
-        table.add_row(Text(_status_line(self.stream), style=f"bold {BLUE}"))
-        table.add_row(Text(str(Path.cwd().resolve()), style=f"bold {WHITE}"))
-        table.add_row(Text("Recent", style=f"bold {BLUE}"))
+        table.add_row(Text("Tips for getting started", style=f"bold {BLUE}"))
+        table.add_row(Text("Press / to use commands. Use @ in messages to mention files.", style=f"bold {WHITE}"))
+        table.add_row(Text("Shift+Enter adds a new line when your terminal supports it.", style=f"bold {WHITE}"))
+        table.add_row(self._rule(width_offset=44))
+        table.add_row(Text("Recent activity", style=f"bold {BLUE}"))
         for item in _recent_activity(Path.cwd()):
             table.add_row(Text(item, style=f"bold {WHITE}"))
+        table.add_row(self._rule(width_offset=44))
+        table.add_row(Text(_status_line(), style=f"bold {BLUE}"))
+        table.add_row(Text(str(Path.cwd().resolve()), style=f"bold {WHITE}"))
         return table
 
     def slash(self, text: str) -> None:
         command = text[1:].strip().lower()
         if command in {"help", "?"}:
-            self.console.print(Text(_command_help(), style=f"bold {BLUE}"))
-        elif command == "details":
-            self.show_tool_details = not self.show_tool_details
-            state = "on" if self.show_tool_details else "off"
-            self.console.print(_bar(f"tool details {state}", limit=self.console.width))
+            self.console.print(Text("/help  /memory  /reset  /exit", style=f"bold {BLUE}"))
         elif command == "memory":
             body = build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")
             self.console.print(Panel(_markdown(body), title="Effective Prompt", border_style=CYAN))
@@ -127,11 +130,8 @@ class FridayTUI:
         if event.type == "tool.call":
             self._stop_live()
             name = event.data.get("name", "")
-            text = f"Tool {name}"
-            if self.show_tool_details:
-                arguments = _short_json(event.data.get("arguments", {}), self.console.width - len(name) - 12)
-                text = f"{text} {arguments}"
-            self.console.print(_bar(text, limit=self.console.width))
+            arguments = _short_json(event.data.get("arguments", {}), self.console.width - len(name) - 12)
+            self.console.print(_bar(f"Tool {name} {arguments}", limit=self.console.width))
         elif event.type == "tool.result" and event.data.get("is_error"):
             self._stop_live()
             self.console.print(_bar(f"Tool error {event.data.get('content', '')}", style="white on #7f1d1d"))
@@ -148,8 +148,14 @@ class FridayTUI:
             self.console.print(self._rule())
             return input().strip()
 
-        self.console.print(Text(_status_line(self.stream), style=f"dim {CYAN}"))
+        self.console.print(self._rule())
+        self.console.print()
+        self.console.print(self._rule())
+        self.console.file.write("\x1b[2A")
+        self.console.file.flush()
         text = self.console.input(f"[bold {BLUE}]> [/]")
+        self.console.file.write("\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[1A\r\x1b[2K")
+        self.console.file.flush()
         return text.strip()
 
     def _rule(self, *, width_offset: int = 0) -> Text:
@@ -196,32 +202,28 @@ def _recent_activity(workspace: Path, limit: int = 3) -> list[str]:
     return items or ["No recent activity yet.", "/help"]
 
 
-def _status_line(stream: bool = True) -> str:
+def _status_line() -> str:
     model = os.getenv("LLM_MODEL", "model from .env")
-    branch = _git_branch(Path.cwd())
-    mode = "stream" if stream else "plain"
-    return f"{model} - {branch} - {mode}"
+    return f"{model} - local workspace"
 
 
-def _git_branch(workspace: Path) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "branch", "--show-current"],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=1,
-        )
-    except Exception:
-        return "no git"
-    if result.returncode != 0:
-        return "no git"
-    branch = result.stdout.strip()
-    return branch or "detached"
-
-
-def _command_help() -> str:
-    return "/help  /details  /memory  /reset  /exit"
+def _robot_icon() -> Text:
+    pattern = [
+        " 11  11 ",
+        " 111111 ",
+        "11    11",
+        "11 1  11",
+        "11  1 11",
+        "11    11",
+        "11    11",
+        " 111111 ",
+    ]
+    text = Text()
+    for row in pattern:
+        for char in row:
+            text.append("  ", style=f"on {BLUE}" if char == "1" else "")
+        text.append("\n")
+    return text
 
 
 def _theme() -> Theme:
