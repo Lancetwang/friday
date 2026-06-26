@@ -27,6 +27,7 @@ BAR = "white on #30363d"
 class FridayTUI:
     def __init__(self, *, stream: bool) -> None:
         self.console = Console(theme=_theme())
+        self.stream = stream
         self.agent, self.context = build_friday(stream=stream)
         self.context.on_event = self.on_event
 
@@ -102,9 +103,13 @@ class FridayTUI:
             text,
             context=self.context,
             max_steps=20,
-            stream=False,
+            stream=self.stream,
+            on_delta=self.on_delta if self.stream else None,
         )
-        self.console.print(_markdown(answer))
+        if self.stream:
+            self.console.print()
+        else:
+            self.console.print(_markdown(answer))
         save_turn(
             Path(self.context.metadata["workspace"]),
             text,
@@ -119,6 +124,9 @@ class FridayTUI:
             self.console.print(_bar(f"Tool {name} {arguments}", limit=self.console.width))
         elif event.type == "tool.result" and event.data.get("is_error"):
             self.console.print(_bar(f"Tool error {event.data.get('content', '')}", style="white on #7f1d1d"))
+
+    def on_delta(self, text: str) -> None:
+        self.console.out(text, end="")
 
     def _read_input(self) -> str:
         if not self.console.is_terminal:
@@ -136,7 +144,7 @@ class FridayTUI:
         return text.strip()
 
     def _rule(self, *, width_offset: int = 0) -> Text:
-        return Text("=" * max(20, self.console.width - width_offset), style=CYAN)
+        return Text("█" * max(20, self.console.width - width_offset), style=CYAN)
 
 
 def _markdown(text: str) -> Markdown:
