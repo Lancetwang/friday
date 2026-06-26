@@ -57,6 +57,8 @@ friday memory
 friday reset
 ```
 
+`friday tui` is the blue Rich-powered interface. It shows tool calls inline as they happen.
+
 LLM output streams by default. Use `--no-stream` before the command:
 
 ```powershell
@@ -87,6 +89,8 @@ It asks for confirmation. Use `friday reset --yes` only when you are sure.
 - `.friday/sessions/*.jsonl`: local chat logs.
 
 Bundled defaults live in `src/friday/prompts/` and are copied to `~/.friday/` by `friday init`.
+
+Prompt sections are ordered for prefix caching: stable core instructions first, then user/project instructions, then environment and memory.
 
 ## Tools
 

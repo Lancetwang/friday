@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from friday.app import build_friday, build_instructions, init_project, reset_friday, save_turn
+from friday.tui import FridayTUI
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -52,8 +53,12 @@ def main(argv: list[str] | None = None) -> None:
         _save(context, text, answer)
         return
 
-    if command in {"chat", "tui"}:
-        _banner(command == "tui")
+    if command == "tui":
+        FridayTUI(stream=stream).run()
+        return
+
+    if command == "chat":
+        print("Friday. Type /help for commands.")
         while True:
             try:
                 text = input("> ").strip()
@@ -67,13 +72,8 @@ def main(argv: list[str] | None = None) -> None:
             if text.startswith("/"):
                 agent, context = _slash(text, stream, agent, context)
                 continue
-            if command == "tui":
-                print("─" * 72)
-                print("Friday")
             answer = _ask(agent, context, text, stream)
             _save(context, text, answer)
-            if command == "tui":
-                print("─" * 72)
         return
 
     parser.error(f"unknown command: {command}")
@@ -83,17 +83,6 @@ def _configure_stdio() -> None:
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-
-
-def _banner(tui: bool) -> None:
-    if not tui:
-        print("Friday. Type /help for commands.")
-        return
-    print("╭" + "─" * 70 + "╮")
-    print("│ Friday".ljust(71) + "│")
-    print(f"│ {Path.cwd().resolve()}".ljust(71) + "│")
-    print("│ /help  /memory  /reset  /exit".ljust(71) + "│")
-    print("╰" + "─" * 70 + "╯")
 
 
 def _slash(text: str, stream: bool, agent, context):

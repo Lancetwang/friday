@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "agent-core-runtime @ https://github.com/Lancetwang/agent-core-runtime/archive/64e12019f06eb57f289bf90065ff3d994eb247d3.zip",
+    "rich>=13.7.0",
 ]
 
 [project.scripts]

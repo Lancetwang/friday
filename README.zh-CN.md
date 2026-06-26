@@ -57,6 +57,8 @@ friday memory
 friday reset
 ```
 
+`friday tui` 是蓝色的 Rich 终端界面，会在工具调用发生时实时显示工具名和参数。
+
 LLM 默认流式输出。关闭流式：
 
 ```powershell
@@ -87,6 +89,8 @@ friday --no-stream ask "hello"
 - `.friday/sessions/*.jsonl`：本地聊天日志。
 
 内置默认模板在 `src/friday/prompts/`，`friday init` 会把它们复制到 `~/.friday/`。
+
+Prompt 组装顺序按 prefix caching 设计：稳定的核心指令在前，然后是用户/项目指令，最后才是环境和记忆。
 
 ## 工具
 

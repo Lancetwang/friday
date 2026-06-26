@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import shutil
 from datetime import datetime
 from importlib.resources import files
@@ -32,9 +33,11 @@ def build_instructions(workspace: Path, friday_dir: Path) -> str:
     parts = [
         ("Soul", _read_optional(user_dir / "soul.md") or _read_resource("soul.md")),
         ("Runtime", _runtime_notes()),
+        ("Tool Guidance", _tool_guidance()),
         ("User", _read_optional(user_dir / "user.md")),
-        ("User Memory", _read_optional(user_dir / "MEMORY.md")),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
+        ("Environment", _environment(workspace)),
+        ("User Memory", _read_optional(user_dir / "MEMORY.md")),
         ("Project Memory", _read_optional(friday_dir / "MEMORY.md")),
     ]
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
@@ -118,9 +121,24 @@ def _project_instruction_files(workspace: Path) -> list[str]:
 def _runtime_notes() -> str:
     return """
 Available tools are Read, Write, Edit, Bash, Glob, Grep, read_memory, and remember.
-Use Glob to find paths and Grep to search file contents.
-Use Read before editing unfamiliar files.
-Use Edit for partial changes and Write only when replacing the whole file.
 Use remember only for durable facts or preferences worth keeping.
 Bash runs PowerShell on Windows, so prefer PowerShell syntax.
+""".strip()
+
+
+def _tool_guidance() -> str:
+    return """
+- Use Glob to find paths instead of Bash ls/find.
+- Use Grep to search contents instead of Bash grep/rg.
+- Use Read before editing unfamiliar files.
+- Use Edit for partial changes.
+- Use Write only when replacing the whole file.
+""".strip()
+
+
+def _environment(workspace: Path) -> str:
+    return f"""
+- Workspace: {workspace}
+- Platform: {platform.system()}
+- Shell: {"PowerShell" if platform.system() == "Windows" else "bash"}
 """.strip()

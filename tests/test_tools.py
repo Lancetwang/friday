@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from friday.app import reset_friday
+from friday.app import build_instructions, reset_friday
 from friday.tools import build_tools
 
 
@@ -101,6 +101,19 @@ class ResetTests(unittest.TestCase):
             self.assertFalse((state / "sessions").exists())
             self.assertEqual((global_state / "MEMORY.md").read_text(encoding="utf-8"), "# User Memory\n")
             self.assertIn("Friday Soul", (global_state / "soul.md").read_text(encoding="utf-8"))
+
+
+class PromptTests(unittest.TestCase):
+    def test_prompt_keeps_stable_prefix_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text("project rules", encoding="utf-8")
+            text = build_instructions(root, root / ".friday")
+
+            self.assertLess(text.index("## Soul"), text.index("## Runtime"))
+            self.assertLess(text.index("## Runtime"), text.index("## Tool Guidance"))
+            self.assertLess(text.index("## Tool Guidance"), text.index("## Project Instructions"))
+            self.assertLess(text.index("## Project Instructions"), text.index("## Environment"))
 
 
 if __name__ == "__main__":
