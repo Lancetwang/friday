@@ -27,6 +27,7 @@ const HELP_TEXT = `# Friday commands
 | \`/help\` | Show this command reference. |
 | \`/details\` | Toggle verbose tool arguments in the status line. |
 | \`/memory\` | Print the effective prompt, including user, project, and memory context. |
+| \`/compact\` | Summarize the live conversation into a fresh context. |
 | \`/reset\` | Clear Friday project state and global Friday user state. |
 | \`/exit\` | Close the TUI. \`/quit\` works too. |
 `
@@ -153,6 +154,10 @@ function runCommand(
   } else if (command.startsWith('/memory')) {
     void gateway.request<{ text: string }>('prompt.get').then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
+    )
+  } else if (command.startsWith('/compact')) {
+    void gateway.request<{ text: string }>('session.compact').then(result =>
+      setMessages(items => [...items, { role: 'system', text: `Compacted conversation:\n\n${result.text}` }])
     )
   } else if (command.startsWith('/reset')) {
     void gateway.request('session.reset').then(() => setMessages(items => [...items, { role: 'system', text: 'Reset Friday.' }]))

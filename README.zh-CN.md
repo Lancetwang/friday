@@ -14,6 +14,7 @@ Friday 是一个个人 CLI agent，由两部分组成：
 - 默认感知工作区：在任意目录运行 `friday`，该目录就是 agent 的工作目录。
 - Harness 优先的上下文设计：身份、用户画像、长期记忆、项目规则和环境信息按稳定顺序组装，方便 prefix caching。
 - Agent 只做路由：启动 prompt 保持克制，项目文件、嵌套指令、记忆和工具按需进入上下文。
+- 即插即用 skills：从项目和 home 目录发现可复用的 `SKILL.md` 工作流，按需加载。
 - 分层记忆：用户、全局、项目记忆彼此独立，和可丢弃的 compact 会话摘要分开。
 - 小工具集：读写编辑文件、shell、glob、grep、memory 覆盖核心编码循环，不依赖庞大框架。
 - 本地状态：项目状态在 `<workspace>/.friday`，用户状态在 `~/.friday`。
@@ -66,7 +67,13 @@ Friday 按用途区分记忆：
 
 `Memory` 工具可以 `read`、`add`、`replace` 或 `remove` 条目。写入会立刻落盘，但启动 prompt 是冻结快照；新的长期记忆会在下一次会话自然生效。
 
-`/compact` 会把当前对话压缩到一个新的上下文里，但不会写入 memory。Memory 是长期知识；compact 结果只是可丢弃的会话状态。
+`/compact` 会先让 Friday 用 `Memory` 工具保存真正值得长期保留的事实，然后把当前对话压缩到一个新的上下文里。compact 摘要本身只是可丢弃的会话状态，不会作为 memory 写入。
+
+## Skills
+
+Friday 会从 `.friday/FridaySkills/<skill>/SKILL.md` 和 `~/.friday/FridaySkills/<skill>/SKILL.md` 发现可复用 `SKILL.md` 工作流。
+
+启动 prompt 只包含 skill 名称和描述。完整 `SKILL.md` 只有在相关时才通过 `Skill` 工具加载。
 
 ## 工具
 
@@ -78,6 +85,7 @@ Friday 默认提供一组小工具：
 - `Bash`：运行 shell 命令。Windows 下使用 PowerShell。
 - `Glob`：按路径模式查找文件。
 - `Grep`：搜索文件内容。
+- `Skill`：列出或读取可复用的 `SKILL.md` 工作流。
 - `Memory`：读取或更新用户、全局、项目记忆。
 
 ## 安装

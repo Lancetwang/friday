@@ -10,9 +10,17 @@ from typing import Any
 
 from agent_core import Agent, RunContext
 
-from friday.tools import build_tools
+from friday.tools import build_tools, skill_catalog
 
 PROJECT_INSTRUCTIONS_LIMIT = 12000
+PRE_COMPACT_MEMORY_PROMPT = """
+Before compacting this conversation, review it for durable memory.
+
+Use the Memory tool only for stable user preferences, cross-project facts, or project decisions that should survive the compact.
+Do not save transient conversation flow, command output, failed attempts, or the compact summary itself.
+If nothing is worth remembering, reply with "No durable memory updates."
+""".strip()
+
 COMPACT_PROMPT = """
 Summarize the conversation so far for continuing the same task.
 
@@ -42,6 +50,7 @@ def build_instructions(workspace: Path, friday_dir: Path) -> str:
         ("Soul", _read_optional(user_dir / "SOUL.md") or _read_optional(user_dir / "soul.md") or _read_resource("SOUL.md")),
         ("Runtime", _runtime_notes()),
         ("Tool Guidance", _tool_guidance()),
+        ("Skill Catalog", skill_catalog(workspace)),
         ("User Profile", _read_optional(user_dir / "USER.md") or _read_optional(user_dir / "user.md")),
         ("Global Memory", _read_optional(user_dir / "MEMORY.md")),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
@@ -52,6 +61,12 @@ def build_instructions(workspace: Path, friday_dir: Path) -> str:
 
 
 def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on_delta: Any = None) -> tuple[Agent, RunContext, str]:
+    agent.chat(
+        PRE_COMPACT_MEMORY_PROMPT,
+        context=context,
+        max_steps=6,
+        stream=False,
+    )
     summary = agent.chat(
         COMPACT_PROMPT,
         context=context,
@@ -161,7 +176,8 @@ def _read_limited(path: Path, limit: int) -> str:
 
 def _runtime_notes() -> str:
     return """
-Available tools are Read, Write, Edit, Bash, Glob, Grep, and Memory.
+Available tools are Read, Write, Edit, Bash, Glob, Grep, Skill, and Memory.
+Use Skill to list on-demand workflows, then read only the relevant SKILL.md.
 Use Memory only for durable user preferences, cross-project facts, or project decisions worth keeping.
 Memory targets: user updates USER.md, global updates global MEMORY.md, project updates workspace .friday/MEMORY.md.
 Memory writes affect disk immediately, but the frozen startup prompt sees them next session.

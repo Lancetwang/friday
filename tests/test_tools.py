@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, reset_friday
-from friday.tools import build_tools
+from friday.tools import build_tools, skill_catalog
 
 
 class ToolTests(unittest.TestCase):
@@ -101,6 +101,24 @@ class ToolTests(unittest.TestCase):
             self.assertIn("src rules", first["context"][0]["content"])
             self.assertNotIn("context", second)
 
+    def test_skill_tool_lists_and_reads_skill_md(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_dir = root / ".friday" / "FridaySkills" / "review"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: review\ndescription: Review code changes.\n---\n\nFull review workflow.",
+                encoding="utf-8",
+            )
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            listed = tools["Skill"]("list")
+            loaded = tools["Skill"]("read", "review")
+
+            self.assertIn("review", {skill["name"] for skill in listed["skills"]})
+            self.assertIn("Review code changes.", skill_catalog(root))
+            self.assertIn("Full review workflow.", loaded["content"])
+
 
 class ResetTests(unittest.TestCase):
     def test_reset_clears_project_state(self) -> None:
@@ -160,16 +178,23 @@ class PromptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "AGENTS.md").write_text("x" * (PROJECT_INSTRUCTIONS_LIMIT + 100), encoding="utf-8")
-            text = build_instructions(root, root / ".friday")
+            with patch("friday.app.Path.home", return_value=root / "home"), patch("friday.tools.Path.home", return_value=root / "home"):
+                text = build_instructions(root, root / ".friday")
 
             self.assertIn("[truncated:", text)
             self.assertLess(len(text), PROJECT_INSTRUCTIONS_LIMIT + 3000)
 
 
 class CompactTests(unittest.TestCase):
-    def test_compact_rebuilds_context_without_writing_memory(self) -> None:
+    def test_compact_reviews_memory_then_rebuilds_context(self) -> None:
         class FakeAgent:
-            def chat(self, *args, **kwargs) -> str:
+            def __init__(self) -> None:
+                self.prompts = []
+
+            def chat(self, prompt, *args, **kwargs) -> str:
+                self.prompts.append(prompt)
+                if "Before compacting" in prompt:
+                    return "No durable memory updates."
                 return "Continue with the memory harness work."
 
         class FakeContext:
@@ -189,9 +214,12 @@ class CompactTests(unittest.TestCase):
 
             context = type("Context", (), {})()
             context.metadata = {"workspace": str(root)}
+            fake_agent = FakeAgent()
             with patch("friday.app.build_friday", return_value=(object(), FakeContext())):
-                agent, new_context, summary = compact_friday(FakeAgent(), context, stream=False)
+                agent, new_context, summary = compact_friday(fake_agent, context, stream=False)
 
+            self.assertIn("Before compacting", fake_agent.prompts[0])
+            self.assertIn("Summarize the conversation", fake_agent.prompts[1])
             self.assertEqual(summary, "Continue with the memory harness work.")
             self.assertIn("Conversation Summary", new_context.messages[-1]["content"])
             self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])

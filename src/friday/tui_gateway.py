@@ -9,7 +9,7 @@ from typing import Any
 
 from agent_core import Agent, AgentEvent, RunContext
 
-from friday.app import build_friday, build_instructions, reset_friday, save_turn
+from friday.app import build_friday, build_instructions, compact_friday, reset_friday, save_turn
 from friday.tools import build_tools
 
 _real_stdout = sys.stdout
@@ -46,6 +46,11 @@ class Gateway:
                 self.agent = None
                 self.context = None
                 self.ok(rid, {"removed": [str(path) for path in removed], "info": self.session_info()})
+            elif method == "session.compact":
+                agent, context = self.ensure_agent()
+                self.agent, self.context, summary = compact_friday(agent, context, stream=True)
+                self.context.on_event = self.on_agent_event
+                self.ok(rid, {"text": summary})
             else:
                 self.err(rid, f"unknown method: {method}")
         except Exception as exc:

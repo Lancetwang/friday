@@ -14,6 +14,7 @@ The point of this repo is showing how a real personal agent can be assembled on 
 - Workspace-aware by default: run `friday` from any directory and that directory becomes the agent workspace.
 - Harness-first context design: identity, user profile, durable memory, project rules, and environment notes are layered in a stable order for prefix caching.
 - Agent-as-router: the startup prompt stays small while project files, nested instructions, memory, and tools are pulled in only when needed.
+- Plug-in skills: reusable `SKILL.md` workflows are discovered from project and home skill folders, then loaded on demand.
 - Layered memory: user, global, and project memory are separate from disposable conversation compaction.
 - Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
 - Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
@@ -66,7 +67,13 @@ Friday separates memory by purpose:
 
 The `Memory` tool can `read`, `add`, `replace`, or `remove` entries. Writes hit disk immediately, but the startup prompt is a frozen snapshot; new memory naturally appears in the next session.
 
-`/compact` summarizes the live conversation into a fresh context without writing memory. Memory is durable knowledge; compact output is disposable session state.
+`/compact` first asks Friday to save only durable facts with the `Memory` tool, then summarizes the live conversation into a fresh context. The compact summary itself is disposable session state and is not written as memory.
+
+## Skills
+
+Friday discovers reusable `SKILL.md` workflows from `.friday/FridaySkills/<skill>/SKILL.md` and `~/.friday/FridaySkills/<skill>/SKILL.md`.
+
+Only skill names and descriptions enter the startup prompt. The full `SKILL.md` is loaded through the `Skill` tool only when relevant.
 
 ## Tools
 
@@ -78,6 +85,7 @@ Friday ships with a small default tool set:
 - `Bash`: run shell commands. On Windows this uses PowerShell.
 - `Glob`: find files by path pattern.
 - `Grep`: search file contents.
+- `Skill`: list or read reusable `SKILL.md` workflows.
 - `Memory`: read or update user, global, or project memory.
 
 ## Install

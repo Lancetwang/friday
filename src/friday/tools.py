@@ -12,6 +12,7 @@ from agent_core import tool
 USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
 CONTEXT_FILE_LIMIT = 8000
+SKILL_LIMIT = 12000
 
 
 def build_tools(workspace: Path, friday_dir: Path):
@@ -183,6 +184,22 @@ def build_tools(workspace: Path, friday_dir: Path):
             [workspace / match["path"] for match in matches],
         )
 
+    @tool(description="List or read on-demand SKILL.md instructions. Use list first; read only when a skill is relevant.", name="Skill")
+    def skill(
+        action: Annotated[Literal["list", "read"], "Skill action to perform."],
+        name: Annotated[str, "Skill name to read. Leave empty when listing."] = "",
+    ) -> dict:
+        skills = _discover_skills(workspace, user_dir)
+        if action == "list":
+            return {"skills": [{"name": key, "description": item["description"], "path": str(item["path"])} for key, item in skills.items()]}
+        if action == "read":
+            key = name.strip().lower()
+            if key not in skills:
+                raise ValueError(f"Unknown skill: {name}")
+            item = skills[key]
+            return {"name": key, "path": str(item["path"]), "content": _read_limited(item["path"], SKILL_LIMIT)}
+        raise ValueError(f"Unknown skill action: {action}")
+
     @tool(description="Read or update Friday memory files.", name="Memory")
     def memory(
         action: Annotated[Literal["read", "add", "replace", "remove"], "Memory action to perform."],
@@ -221,7 +238,16 @@ def build_tools(workspace: Path, friday_dir: Path):
         _write_text(path, updated)
         return {"target": target, "path": str(path), "chars": len(updated)}
 
-    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, memory]
+    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, skill, memory]
+
+
+def skill_catalog(workspace: Path) -> str:
+    skills = _discover_skills(workspace.resolve(), Path.home() / ".friday")
+    if not skills:
+        return ""
+    lines = ["Available skills. Use the Skill tool to read a full SKILL.md only when relevant:"]
+    lines.extend(f"- {name}: {item['description']}" for name, item in skills.items())
+    return "\n".join(lines)
 
 
 def _join_lines(lines: list[str], trailing_newline: bool) -> str:
@@ -263,6 +289,45 @@ def _read_limited(path: Path, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + f"\n\n[truncated: read {path} directly for the rest]"
+
+
+def _discover_skills(workspace: Path, user_dir: Path) -> dict[str, dict[str, str | Path]]:
+    roots = [
+        workspace / ".friday" / "FridaySkills",
+        user_dir / "FridaySkills",
+    ]
+    found: dict[str, dict[str, str | Path]] = {}
+    for root in roots:
+        if not root.exists():
+            continue
+        for skill_file in sorted(root.glob("*/SKILL.md")):
+            name, description = _skill_meta(skill_file)
+            key = name.strip().lower() or skill_file.parent.name.lower()
+            if key not in found:
+                found[key] = {"description": description, "path": skill_file}
+    return found
+
+
+def _skill_meta(path: Path) -> tuple[str, str]:
+    text = path.read_text(encoding="utf-8")
+    name = path.parent.name
+    description = ""
+    if text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        if end != -1:
+            for line in text[4:end].splitlines():
+                key, sep, value = line.partition(":")
+                if sep and key.strip() == "name":
+                    name = value.strip().strip("\"'")
+                elif sep and key.strip() == "description":
+                    description = value.strip().strip("\"'")
+    if not description:
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith(("#", "---")):
+                description = stripped
+                break
+    return name, description or "No description."
 
 
 def _memory_target(target: str, user_dir: Path, friday_dir: Path) -> tuple[Path, int]:
