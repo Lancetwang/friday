@@ -37,7 +37,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(exit.exception.code, 0)
         args, kwargs = call.call_args
-        self.assertEqual(args[0], ["npm.cmd", "start"])
+        self.assertEqual(args[0], ["npm.cmd", "--silent", "start"])
         self.assertEqual(kwargs["cwd"].name, "ui-tui")
         self.assertEqual(kwargs["env"]["FRIDAY_CWD"], str(Path.cwd().resolve()))
         self.assertEqual(kwargs["env"]["PYTHONIOENCODING"], "utf-8")

@@ -105,12 +105,15 @@ class Gateway:
                 },
             )
         elif event.type == "tool.result":
+            content = event.data.get("content", "")
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
             self.event(
                 "tool.complete",
                 {
                     "name": event.data.get("name", ""),
                     "error": bool(event.data.get("is_error")),
-                    "content": event.data.get("content", ""),
+                    "content": content,
                 },
             )
 
