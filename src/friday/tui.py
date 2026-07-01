@@ -124,6 +124,7 @@ class FridayTUI:
             text,
             answer,
             [event.to_dict() for event in self.context.events[-20:]],
+            str(self.context.metadata.get("session_id") or ""),
         )
 
     def on_event(self, event: AgentEvent) -> None:

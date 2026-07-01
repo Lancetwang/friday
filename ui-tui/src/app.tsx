@@ -27,6 +27,9 @@ const HELP_TEXT = `# Friday commands
 | \`/help\` | Show this command reference. |
 | \`/memory\` | Print the effective prompt, including user, project, and memory context. |
 | \`/compact\` | Summarize the live conversation into a fresh context. |
+| \`/resume\` | Resume recent Friday session context. |
+| \`/approve\` | Run the pending dangerous shell command. |
+| \`/reject\` | Reject the pending dangerous shell command. |
 | \`/reset\` | Clear Friday project state and global Friday user state. |
 | \`/exit\` | Close the TUI. \`/quit\` works too. |
 `
@@ -39,6 +42,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   const [toolsExpanded, setToolsExpanded] = useState(false)
   const [info, setInfo] = useState<SessionInfo | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>([])
+  const [resumePicker, setResumePicker] = useState<ResumePicker | null>(null)
   const [streaming, setStreaming] = useState('')
   const [activity, setActivity] = useState('')
   const [now, setNow] = useState(Date.now())
@@ -85,6 +89,24 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   }, [messages])
 
   useInput((char, key) => {
+    if (resumePicker) {
+      if (key.upArrow || char === 'k') {
+        setResumePicker(picker => picker && { ...picker, index: Math.max(0, picker.index - 1) })
+      } else if (key.downArrow || char === 'j') {
+        setResumePicker(picker => picker && { ...picker, index: Math.min(picker.choices.length - 1, picker.index + 1) })
+      } else if (key.return) {
+        const choice = resumePicker.choices[resumePicker.index]
+        if (choice) {
+          setResumePicker(null)
+          void gateway.request<{ count: number }>('session.resume', { id: choice.id }).then(result =>
+            setMessages(items => [...items, { role: 'system', text: `Resumed session (${result.count} turns): ${choice.user}` }])
+          )
+        }
+      } else if (key.escape) {
+        setResumePicker(null)
+      }
+      return
+    }
     if (key.ctrl && (char.toLowerCase() === 'o' || char === '\u000f')) {
       setToolsExpanded(value => !value)
       setTimeout(() => setInput(value => value.endsWith('o') ? value.slice(0, -1) : value), 0)
@@ -101,7 +123,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   })
 
   const commandContext = useMemo(
-    () => ({ app, gateway, setMessages }),
+    () => ({ app, gateway, setMessages, setResumePicker }),
     [app, gateway]
   )
 
@@ -134,7 +156,8 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         {messages.slice(-10).map((message, index) => <MessageLine toolsExpanded={toolsExpanded} key={index} message={message} now={now} />)}
         {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} streaming /> : null}
       </Box>
-      <Composer busy={busy} input={input} onChange={setInput} onSubmit={submit} />
+      {resumePicker ? <ResumePickerView picker={resumePicker} /> : null}
+      <Composer busy={busy || Boolean(resumePicker)} input={input} onChange={setInput} onSubmit={submit} />
     </Box>
   )
 }
@@ -149,10 +172,12 @@ function runCommand(
     app,
     gateway,
     setMessages,
+    setResumePicker,
   }: {
     app: ReturnType<typeof useApp>
     gateway: GatewayClient
     setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>
+    setResumePicker: React.Dispatch<React.SetStateAction<ResumePicker | null>>
   }
 ) {
   if (!text.startsWith('/')) {
@@ -172,6 +197,22 @@ function runCommand(
     void gateway.request<{ text: string }>('session.compact').then(result =>
       setMessages(items => [...items, { role: 'system', text: `Compacted conversation:\n\n${result.text}` }])
     )
+  } else if (command.startsWith('/resume')) {
+    void gateway.request<{ choices: ResumeChoice[] }>('session.resume_choices').then(result => {
+      if (result.choices.length) {
+        setResumePicker({ choices: result.choices, index: 0 })
+      } else {
+        setMessages(items => [...items, { role: 'system', text: 'No recent sessions to resume.' }])
+      }
+    })
+  } else if (command.startsWith('/approve')) {
+    void gateway.request('approval.approve').then(result =>
+      setMessages(items => [...items, { role: 'system', text: `Approval result:\n\n${JSON.stringify(result, null, 2)}` }])
+    )
+  } else if (command.startsWith('/reject')) {
+    void gateway.request('approval.reject').then(result =>
+      setMessages(items => [...items, { role: 'system', text: `Approval rejected:\n\n${JSON.stringify(result, null, 2)}` }])
+    )
   } else if (command.startsWith('/reset')) {
     void gateway.request('session.reset').then(() => {
       setMessages(items => [...items, { role: 'system', text: 'Reset Friday.' }])
@@ -185,6 +226,19 @@ function runCommand(
 type UiMessage = Message & {
   tools?: ToolRun[]
   turnId?: string
+}
+
+type ResumeChoice = {
+  assistant: string
+  id: string
+  time: string
+  turns: string
+  user: string
+}
+
+type ResumePicker = {
+  choices: ResumeChoice[]
+  index: number
 }
 
 type ToolRun = {
@@ -324,6 +378,22 @@ function ToolPanel({ toolsExpanded, now, runs }: { toolsExpanded: boolean; now: 
           </Box>
         )
       })}
+    </Box>
+  )
+}
+
+function ResumePickerView({ picker }: { picker: ResumePicker }) {
+  return (
+    <Box borderColor={theme.accent} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
+      <Text color={primary}>Resume session - Up/Down, Enter</Text>
+      {picker.choices.map((choice, index) => (
+        <Box flexDirection="column" key={choice.id}>
+          <Text color={index === picker.index ? theme.warn : theme.text}>
+            {index === picker.index ? '> ' : '  '}{choice.time || choice.id}  {choice.turns} turns  {choice.user}
+          </Text>
+          {choice.assistant ? <Text color={theme.dim}>    {choice.assistant}</Text> : null}
+        </Box>
+      ))}
     </Box>
   )
 }

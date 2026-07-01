@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import platform
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -13,6 +15,7 @@ USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
 CONTEXT_FILE_LIMIT = 8000
 SKILL_LIMIT = 12000
+APPROVAL_FILE = "pending_approval.json"
 
 
 def build_tools(workspace: Path, friday_dir: Path):
@@ -113,23 +116,11 @@ def build_tools(workspace: Path, friday_dir: Path):
         timeout_seconds: Annotated[int, "Timeout in seconds."] = 60,
         max_chars: Annotated[int, "Maximum output characters to return."] = 8000,
     ) -> dict:
-        if platform.system() == "Windows":
-            cmd = ["powershell", "-NoProfile", "-Command", command]
-        else:
-            cmd = ["bash", "-lc", command]
-        try:
-            completed = subprocess.run(
-                cmd,
-                cwd=workspace,
-                text=True,
-                capture_output=True,
-                timeout=max(1, timeout_seconds),
-            )
-        except subprocess.TimeoutExpired as error:
-            output = ((error.stdout or "") + (error.stderr or ""))[-max_chars:]
-            return {"exit_code": None, "timed_out": True, "output": output}
-        output = (completed.stdout + completed.stderr)[-max_chars:]
-        return {"exit_code": completed.returncode, "timed_out": False, "output": output}
+        reason = _dangerous_shell(command)
+        if reason:
+            approval = _write_approval(friday_dir, command, timeout_seconds, max_chars, reason)
+            return {**approval, "approval_required": True, "message": "Dangerous command blocked. Run /approve to execute it or /reject to discard it."}
+        return _run_shell(workspace, command, timeout_seconds, max_chars)
 
     @tool(description="Find files and directories by glob pattern inside the current workspace.", name="Glob")
     def glob_files(
@@ -241,6 +232,24 @@ def build_tools(workspace: Path, friday_dir: Path):
     return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, skill, memory]
 
 
+def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> dict:
+    root = (workspace or Path.cwd()).resolve()
+    path = root / ".friday" / APPROVAL_FILE
+    if not path.exists():
+        return {"approved": False, "message": "No pending approval."}
+    approval = json.loads(path.read_text(encoding="utf-8"))
+    path.unlink()
+    if reject:
+        return {"approved": False, "rejected": True, "command": approval.get("command", "")}
+    result = _run_shell(
+        root,
+        str(approval.get("command", "")),
+        int(approval.get("timeout_seconds", 60)),
+        int(approval.get("max_chars", 8000)),
+    )
+    return {"approved": True, "approval": approval, "result": result}
+
+
 def skill_catalog(workspace: Path) -> str:
     skills = _discover_skills(workspace.resolve(), Path.home() / ".friday")
     if not skills:
@@ -262,6 +271,80 @@ def _write_text(path: Path, content: str) -> None:
         file.write(content)
         temp_path = Path(file.name)
     temp_path.replace(path)
+
+
+def _run_shell(workspace: Path, command: str, timeout_seconds: int = 60, max_chars: int = 8000) -> dict:
+    if platform.system() == "Windows":
+        cmd = ["powershell", "-NoProfile", "-Command", command]
+    else:
+        cmd = ["bash", "-lc", command]
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+            timeout=max(1, timeout_seconds),
+        )
+    except subprocess.TimeoutExpired as error:
+        output = ((error.stdout or "") + (error.stderr or ""))[-max_chars:]
+        return {"exit_code": None, "timed_out": True, "output": output}
+    output = (completed.stdout + completed.stderr)[-max_chars:]
+    return {"exit_code": completed.returncode, "timed_out": False, "output": output}
+
+
+def _dangerous_shell(command: str) -> str:
+    lowered = _shell_surface(command).lower()
+    checks = [
+        (r"\b(remove-item|rm|del|erase|rmdir|rd)\b", "deletes files or directories"),
+        (r"\b(git\s+(reset|clean))\b", "can discard git state"),
+        (r"\b(set-content|add-content|out-file|new-item|move-item|rename-item)\b", "writes or moves files"),
+        (r"(^|[^><])>{1,2}(?![=>])", "redirects output to a file"),
+        (r"\b(format-volume|format|mkfs|dd|shutdown|restart-computer|stop-computer)\b", "can damage the system"),
+    ]
+    for pattern, reason in checks:
+        if re.search(pattern, lowered):
+            return reason
+    return ""
+
+
+def _shell_surface(command: str) -> str:
+    result = []
+    quote = ""
+    escaped = False
+    for char in command:
+        if escaped:
+            result.append(" " if quote else char)
+            escaped = False
+            continue
+        if char == "\\":
+            result.append(" " if quote else char)
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            result.append(" ")
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            result.append(" ")
+        else:
+            result.append(char)
+    return "".join(result)
+
+
+def _write_approval(friday_dir: Path, command: str, timeout_seconds: int, max_chars: int, reason: str) -> dict:
+    friday_dir.mkdir(parents=True, exist_ok=True)
+    approval = {
+        "id": str(int(time.time())),
+        "command": command,
+        "max_chars": max_chars,
+        "reason": reason,
+        "timeout_seconds": timeout_seconds,
+    }
+    _write_text(friday_dir / APPROVAL_FILE, json.dumps(approval, ensure_ascii=False, indent=2))
+    return approval
 
 
 def _context_for_paths(workspace: Path, paths: list[Path], loaded: set[Path]) -> list[dict[str, str]]:

@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, reset_friday
-from friday.tools import build_tools, skill_catalog
+from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, reset_friday, resume_choices, resume_friday
+from friday.tools import APPROVAL_FILE, approve_pending, build_tools, skill_catalog
 
 
 class ToolTests(unittest.TestCase):
@@ -56,6 +56,22 @@ class ToolTests(unittest.TestCase):
             result = tools["Bash"]("exit 7")
             self.assertEqual(result["exit_code"], 7)
             self.assertFalse(result["timed_out"])
+
+    def test_bash_approval_blocks_dangerous_commands_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            safe = tools["Bash"]("python -c \"print('ok')\"")
+            safe_comparison = tools["Bash"]("python -c \"print(2 > 1)\"")
+            blocked = tools["Bash"]("rm missing-file")
+            approved = approve_pending(root)
+
+            self.assertFalse(safe["timed_out"])
+            self.assertFalse(safe_comparison["timed_out"])
+            self.assertTrue(blocked["approval_required"])
+            self.assertFalse((root / ".friday" / APPROVAL_FILE).exists())
+            self.assertTrue(approved["approved"])
 
     def test_glob_and_grep(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,6 +239,63 @@ class CompactTests(unittest.TestCase):
             self.assertEqual(summary, "Continue with the memory harness work.")
             self.assertIn("Conversation Summary", new_context.messages[-1]["content"])
             self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])
+
+
+class ResumeTests(unittest.TestCase):
+    def test_resume_adds_recent_session_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / ".friday" / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions / "20260701.jsonl").write_text(
+                '{"session_id":"s1","user":"hi","assistant":"hello","events":[]}\n',
+                encoding="utf-8",
+            )
+
+            agent, context, count = resume_friday(root, stream=False)
+
+            self.assertEqual(count, 1)
+            self.assertIn("Resumed Session", context.messages[-1]["content"])
+            self.assertIn("User: hi", context.messages[-1]["content"])
+
+    def test_resume_clears_legacy_rows_without_session_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / ".friday" / "sessions"
+            sessions.mkdir(parents=True)
+            path = sessions / "20260701.jsonl"
+            path.write_text(
+                '{"time":"1","user":"old","assistant":"legacy","events":[]}\n'
+                '{"time":"2","session_id":"s1","user":"new","assistant":"fresh","events":[]}\n',
+                encoding="utf-8",
+            )
+
+            choices = resume_choices(root)
+
+            self.assertEqual(len(choices), 1)
+            self.assertEqual(choices[0]["user"], "new")
+            self.assertNotIn("legacy", path.read_text(encoding="utf-8"))
+
+    def test_resume_can_select_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / ".friday" / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions / "20260701.jsonl").write_text(
+                '{"time":"1","session_id":"s1","user":"first","assistant":"one","events":[]}\n'
+                '{"time":"2","session_id":"s1","user":"follow","assistant":"one more","events":[]}\n'
+                '{"time":"3","session_id":"s2","user":"second","assistant":"two","events":[]}\n',
+                encoding="utf-8",
+            )
+
+            choices = resume_choices(root)
+            agent, context, count = resume_friday(root, stream=False, resume_id=choices[1]["id"])
+
+            self.assertEqual(count, 2)
+            self.assertEqual(choices[1]["turns"], "2")
+            self.assertIn("User: first", context.messages[-1]["content"])
+            self.assertIn("User: follow", context.messages[-1]["content"])
+            self.assertNotIn("User: second", context.messages[-1]["content"])
 
 
 if __name__ == "__main__":

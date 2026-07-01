@@ -41,6 +41,7 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
     )
     context = agent.new_context()
     context.metadata["workspace"] = str(root)
+    context.metadata["session_id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
     return agent, context
 
 
@@ -78,6 +79,31 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     new_agent, new_context = build_friday(workspace, stream=stream)
     new_context.add_message("system", f"## Conversation Summary\n{summary}")
     return new_agent, new_context, summary
+
+
+def resume_friday(workspace: Path | None = None, *, stream: bool = True, resume_id: str | None = None) -> tuple[Agent, RunContext, int]:
+    root = (workspace or Path.cwd()).resolve()
+    agent, context = build_friday(root, stream=stream)
+    rows = _resume_rows(root, resume_id)
+    if rows:
+        content = "\n\n".join(f"User: {row.get('user', '')}\nFriday: {row.get('assistant', '')}" for row in rows)
+        context.add_message("system", f"## Resumed Session\n{content}")
+    return agent, context, len(rows)
+
+
+def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dict[str, str]]:
+    root = (workspace or Path.cwd()).resolve()
+    groups = list(reversed(_session_groups(root)[-limit:]))
+    return [
+        {
+            "assistant": _preview(str(group["rows"][-1].get("assistant", ""))),
+            "id": str(group["id"]),
+            "time": _session_time(group["rows"]),
+            "turns": str(len(group["rows"])),
+            "user": _preview(str(group["rows"][0].get("user", ""))),
+        }
+        for group in groups
+    ]
 
 
 def init_project(workspace: Path | None = None, *, user_home: Path | None = None) -> list[Path]:
@@ -130,7 +156,7 @@ def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None
     return removed
 
 
-def save_turn(workspace: Path, user: str, assistant: str, events: list[dict[str, Any]]) -> Path:
+def save_turn(workspace: Path, user: str, assistant: str, events: list[dict[str, Any]], session_id: str | None = None) -> Path:
     sessions = workspace / ".friday" / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
     path = sessions / f"{datetime.now().strftime('%Y%m%d')}.jsonl"
@@ -139,10 +165,69 @@ def save_turn(workspace: Path, user: str, assistant: str, events: list[dict[str,
         "user": user,
         "assistant": assistant,
         "events": events,
+        "session_id": session_id or datetime.now().strftime("%Y%m%d%H%M%S%f"),
     }
     with path.open("a", encoding="utf-8") as file:
         file.write(json.dumps(row, ensure_ascii=False) + "\n")
     return path
+
+
+def _recent_turns(workspace: Path, limit: int) -> list[dict[str, Any]]:
+    rows = _resume_rows(workspace, None)
+    return rows[-limit:]
+
+
+def _resume_rows(workspace: Path, resume_id: str | None) -> list[dict[str, Any]]:
+    groups = _session_groups(workspace)
+    if not groups:
+        return []
+    group = groups[-1]
+    if resume_id:
+        for item in groups:
+            if item["id"] == resume_id:
+                group = item
+                break
+    return group["rows"]
+
+
+def _session_groups(workspace: Path) -> list[dict[str, Any]]:
+    sessions = workspace / ".friday" / "sessions"
+    if not sessions.exists():
+        return []
+    groups: dict[str, dict[str, Any]] = {}
+    for path in sorted(sessions.glob("*.jsonl")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        kept = []
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            session_id = row.get("session_id")
+            if not session_id:
+                continue
+            kept.append(line)
+            session_id = str(session_id)
+            group = groups.setdefault(session_id, {"id": session_id, "rows": []})
+            group["rows"].append(row)
+        if len(kept) == len(lines):
+            continue
+        if kept:
+            path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        else:
+            path.unlink()
+    return sorted(groups.values(), key=lambda group: str(group["rows"][-1].get("time", "")))
+
+
+def _session_time(rows: list[dict[str, Any]]) -> str:
+    first = str(rows[0].get("time", ""))
+    last = str(rows[-1].get("time", ""))
+    return first if first == last else f"{first} - {last}"
+
+
+def _preview(text: str, limit: int = 80) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
 def _read_resource(name: str) -> str:
@@ -182,6 +267,7 @@ Use Memory only for durable user preferences, cross-project facts, or project de
 Memory targets: user updates USER.md, global updates global MEMORY.md, project updates workspace .friday/MEMORY.md.
 Memory writes affect disk immediately, but the frozen startup prompt sees them next session.
 Bash runs PowerShell on Windows, so prefer PowerShell syntax.
+Dangerous Bash commands are blocked for user approval; tell the user to run /approve or /reject.
 """.strip()
 
 

@@ -9,8 +9,8 @@ from typing import Any
 
 from agent_core import Agent, AgentEvent, RunContext
 
-from friday.app import build_friday, build_instructions, compact_friday, reset_friday, save_turn
-from friday.tools import build_tools
+from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday, save_turn
+from friday.tools import approve_pending, build_tools
 
 _real_stdout = sys.stdout
 sys.stdout = sys.stderr
@@ -51,6 +51,16 @@ class Gateway:
                 self.agent, self.context, summary = compact_friday(agent, context, stream=True)
                 self.context.on_event = self.on_agent_event
                 self.ok(rid, {"text": summary})
+            elif method == "session.resume":
+                self.agent, self.context, count = resume_friday(stream=True, resume_id=params.get("id"))
+                self.context.on_event = self.on_agent_event
+                self.ok(rid, {"count": count})
+            elif method == "session.resume_choices":
+                self.ok(rid, {"choices": resume_choices()})
+            elif method == "approval.approve":
+                self.ok(rid, approve_pending())
+            elif method == "approval.reject":
+                self.ok(rid, approve_pending(reject=True))
             else:
                 self.err(rid, f"unknown method: {method}")
         except Exception as exc:
@@ -86,6 +96,7 @@ class Gateway:
             text,
             answer,
             [event.to_dict() for event in context.events[-20:]],
+            str(context.metadata.get("session_id") or ""),
         )
         return {"text": answer}
 

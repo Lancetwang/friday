@@ -4,8 +4,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, compact_friday, init_project, reset_friday, save_turn
+from friday.app import build_friday, build_instructions, compact_friday, init_project, reset_friday, resume_friday, save_turn
 from friday.tui_node import run_tui
+from friday.tools import approve_pending
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -23,6 +24,9 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("tui", help="Start a simple terminal UI.")
     sub.add_parser("memory", help="Print effective instruction context.")
+    sub.add_parser("resume", help="Resume recent Friday session context.")
+    sub.add_parser("approve", help="Approve one pending dangerous shell command.")
+    sub.add_parser("reject", help="Reject one pending dangerous shell command.")
     reset = sub.add_parser("reset", help="Clear Friday memory and session state.")
     reset.add_argument("-y", "--yes", action="store_true", help="Skip reset confirmation.")
 
@@ -41,6 +45,14 @@ def main(argv: list[str] | None = None) -> None:
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
         return
 
+    if command == "approve":
+        print(json_dump(approve_pending()))
+        return
+
+    if command == "reject":
+        print(json_dump(approve_pending(reject=True)))
+        return
+
     if command == "reset":
         _reset(args.yes)
         return
@@ -49,7 +61,12 @@ def main(argv: list[str] | None = None) -> None:
         run_tui()
         return
 
-    agent, context = build_friday(stream=stream)
+    if command == "resume":
+        agent, context, count = resume_friday(stream=stream)
+        print(f"resumed {count} turns")
+        command = "chat"
+    else:
+        agent, context = build_friday(stream=stream)
 
     if command == "ask":
         text = " ".join(args.text)
@@ -95,6 +112,13 @@ def _slash(text: str, stream: bool, agent, context):
         agent, context, summary = compact_friday(agent, context, stream=stream)
         print("compacted conversation:")
         print(summary)
+    elif command == "resume":
+        agent, context, count = resume_friday(stream=stream)
+        print(f"resumed {count} turns")
+    elif command == "approve":
+        print(json_dump(approve_pending()))
+    elif command == "reject":
+        print(json_dump(approve_pending(reject=True)))
     elif command == "reset":
         if _reset(False):
             agent, context = build_friday(stream=stream)
@@ -144,10 +168,16 @@ def _print_delta(text: str) -> None:
     sys.stdout.flush()
 
 
+def json_dump(value) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
 def _save(context, user: str, assistant: str) -> None:
     workspace = Path(context.metadata["workspace"])
     events = [event.to_dict() for event in context.events[-20:]]
-    save_turn(workspace, user, assistant, events)
+    save_turn(workspace, user, assistant, events, str(context.metadata.get("session_id") or ""))
 
 
 if __name__ == "__main__":

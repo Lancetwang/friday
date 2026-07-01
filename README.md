@@ -16,6 +16,8 @@ The point of this repo is showing how a real personal agent can be assembled on 
 - Agent-as-router: the startup prompt stays small while project files, nested instructions, memory, and tools are pulled in only when needed.
 - Plug-in skills: reusable `SKILL.md` workflows are discovered from project and home skill folders, then loaded on demand.
 - Layered memory: user, global, and project memory are separate from disposable conversation compaction.
+- Dangerous shell approval: destructive Bash commands are blocked until the user runs `/approve`.
+- Session resume: recent `.friday/sessions` turns can be restored; `/resume` in the TUI lets you pick one.
 - Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
 - Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
 
@@ -82,7 +84,7 @@ Friday ships with a small default tool set:
 - `Read`: read a line window from a file.
 - `Write`: overwrite a file.
 - `Edit`: edit by line range or exact text match.
-- `Bash`: run shell commands. On Windows this uses PowerShell.
+- `Bash`: run shell commands. On Windows this uses PowerShell. Destructive commands require approval.
 - `Glob`: find files by path pattern.
 - `Grep`: search file contents.
 - `Skill`: list or read reusable `SKILL.md` workflows.
@@ -120,6 +122,9 @@ For local development on Windows, this repo also includes `friday.cmd`. Put the 
 friday
 friday init
 friday ask "summarize this project"
+friday resume
+friday approve
+friday reject
 friday memory
 friday reset
 ```

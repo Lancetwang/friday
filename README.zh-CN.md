@@ -16,6 +16,8 @@ Friday 是一个个人 CLI agent，由两部分组成：
 - Agent 只做路由：启动 prompt 保持克制，项目文件、嵌套指令、记忆和工具按需进入上下文。
 - 即插即用 skills：从项目和 home 目录发现可复用的 `SKILL.md` 工作流，按需加载。
 - 分层记忆：用户、全局、项目记忆彼此独立，和可丢弃的 compact 会话摘要分开。
+- 危险命令审批：破坏性 Bash 命令会被拦截，直到用户运行 `/approve`。
+- 会话恢复：可以恢复最近 `.friday/sessions` 里的对话上下文；TUI 里的 `/resume` 会先列出来让你选。
 - 小工具集：读写编辑文件、shell、glob、grep、memory 覆盖核心编码循环，不依赖庞大框架。
 - 本地状态：项目状态在 `<workspace>/.friday`，用户状态在 `~/.friday`。
 
@@ -82,7 +84,7 @@ Friday 默认提供一组小工具：
 - `Read`：按行窗口读取文件。
 - `Write`：覆盖写入文件。
 - `Edit`：按行范围或精确文本匹配编辑文件。
-- `Bash`：运行 shell 命令。Windows 下使用 PowerShell。
+- `Bash`：运行 shell 命令。Windows 下使用 PowerShell。破坏性命令需要审批。
 - `Glob`：按路径模式查找文件。
 - `Grep`：搜索文件内容。
 - `Skill`：列出或读取可复用的 `SKILL.md` 工作流。
@@ -120,6 +122,9 @@ uv tool install -e .
 friday
 friday init
 friday ask "summarize this project"
+friday resume
+friday approve
+friday reject
 friday memory
 friday reset
 ```
