@@ -27,20 +27,30 @@ The point of this repo is showing how a real personal agent can be assembled on 
 
 ```mermaid
 flowchart TD
-    User["User"] --> CLI["friday CLI / TUI"]
+    User["User in any directory"] --> CLI["friday CLI / TUI"]
     CLI --> Harness["Friday harness"]
-    Harness --> Prompt["Prompt stack"]
-    Harness --> State["Local state"]
-    Harness --> Runtime["agent-core-runtime"]
-    Runtime --> Agent["Agent"]
-    Agent --> LLM["OpenAI-compatible LLM"]
-    Agent --> Tools["Tool executor"]
-    Tools --> Files["Read / Write / Edit"]
-    Tools --> Search["Glob / Grep"]
-    Tools --> Shell["Bash"]
-    Tools --> Memory["Memory"]
-    State --> Home["~/.friday"]
-    State --> Project["<workspace>/.friday"]
+
+    Home["~/.friday<br/>SOUL / USER / MEMORY / FridaySkills"] --> Prefix["Stable prefix<br/>prefix-cache friendly"]
+    Project["workspace<br/>AGENTS.md / .friday/MEMORY / FridaySkills"] --> Prefix
+    Env["workspace, platform, shell"] --> Prefix
+    Prefix --> Budget["Context budget<br/>/context"]
+
+    Harness --> Routed["On-demand context<br/>files, nested AGENTS.md, full SKILL.md, memory reads"]
+    Routed --> Budget
+    Session[".friday/sessions<br/>messages + tool results"] --> Budget
+
+    Budget -->|"under 85%"| Ready["Prepared context"]
+    Budget -->|"85%+"| ToolCompact["Compact large tool results"]
+    ToolCompact -->|"drops below 60%"| Ready
+    ToolCompact -->|"still high"| LLMCompact["Memory review + conversation compact"]
+    LLMCompact --> Ready
+
+    Ready --> Runtime["agent-core-runtime Agent"]
+    Runtime --> LLM["OpenAI-compatible LLM"]
+    Runtime --> Tools["Small tool set<br/>Read / Write / Edit / Bash / Glob / Grep / Skill / Memory"]
+    Tools --> Session
+    Tools --> Home
+    Tools --> Project
 ```
 
 ## Harness

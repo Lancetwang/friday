@@ -27,20 +27,30 @@ Friday 是一个个人 CLI agent，由两部分组成：
 
 ```mermaid
 flowchart TD
-    User["用户"] --> CLI["friday CLI / TUI"]
+    User["用户在任意目录"] --> CLI["friday CLI / TUI"]
     CLI --> Harness["Friday harness"]
-    Harness --> Prompt["Prompt 组装"]
-    Harness --> State["本地状态"]
-    Harness --> Runtime["agent-core-runtime"]
-    Runtime --> Agent["Agent"]
-    Agent --> LLM["OpenAI-compatible LLM"]
-    Agent --> Tools["工具执行器"]
-    Tools --> Files["Read / Write / Edit"]
-    Tools --> Search["Glob / Grep"]
-    Tools --> Shell["Bash"]
-    Tools --> Memory["Memory"]
-    State --> Home["~/.friday"]
-    State --> Project["<workspace>/.friday"]
+
+    Home["~/.friday<br/>SOUL / USER / MEMORY / FridaySkills"] --> Prefix["稳定前缀<br/>方便 prefix caching"]
+    Project["当前工作区<br/>AGENTS.md / .friday/MEMORY / FridaySkills"] --> Prefix
+    Env["工作区、平台、shell"] --> Prefix
+    Prefix --> Budget["上下文预算<br/>/context"]
+
+    Harness --> Routed["按需路由上下文<br/>文件、嵌套 AGENTS.md、完整 SKILL.md、memory 读取"]
+    Routed --> Budget
+    Session[".friday/sessions<br/>messages + tool results"] --> Budget
+
+    Budget -->|"低于 85%"| Ready["准备好的上下文"]
+    Budget -->|"达到 85%"| ToolCompact["压缩大体积工具结果"]
+    ToolCompact -->|"降到 60% 以下"| Ready
+    ToolCompact -->|"仍然偏高"| LLMCompact["记忆回顾 + 会话 compact"]
+    LLMCompact --> Ready
+
+    Ready --> Runtime["agent-core-runtime Agent"]
+    Runtime --> LLM["OpenAI-compatible LLM"]
+    Runtime --> Tools["小工具集<br/>Read / Write / Edit / Bash / Glob / Grep / Skill / Memory"]
+    Tools --> Session
+    Tools --> Home
+    Tools --> Project
 ```
 
 ## Harness
