@@ -16,7 +16,9 @@ from rich.text import Text
 from rich.theme import Theme
 
 from friday import __version__
-from friday.app import build_friday, build_instructions, reset_friday, save_turn
+from friday.app import build_friday, build_instructions, prepare_context_for_chat, reset_friday, save_turn
+from friday.context import context_report
+from friday.tools import build_tools
 
 BLUE = "#2f81f7"
 CYAN = "#39c5bb"
@@ -82,10 +84,13 @@ class FridayTUI:
     def slash(self, text: str) -> None:
         command = text[1:].strip().lower()
         if command in {"help", "?"}:
-            self.console.print(Text("/help  /memory  /reset  /exit", style=f"bold {BLUE}"))
+            self.console.print(Text("/help  /memory  /context  /reset  /exit", style=f"bold {BLUE}"))
         elif command == "memory":
             body = build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")
             self.console.print(Panel(_markdown(body), title="Effective Prompt", border_style=CYAN))
+        elif command == "context":
+            root = Path(self.context.metadata["workspace"])
+            self.console.print(Panel(_markdown(context_report(self.context, build_tools(root, root / ".friday"))), title="Context", border_style=CYAN))
         elif command == "reset":
             self.reset()
         else:
@@ -103,6 +108,9 @@ class FridayTUI:
 
     def ask(self, text: str) -> None:
         self._answer_parts = []
+        self.agent, self.context, notice = prepare_context_for_chat(self.agent, self.context, stream=self.stream)
+        if notice:
+            self.console.print(_bar("Context " + notice.split(":", 1)[0], limit=self.console.width))
         answer = self.agent.chat(
             text,
             context=self.context,

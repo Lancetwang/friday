@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, reset_friday, resume_choices, resume_friday
+from agent_core import RunContext
+
+from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday
+from friday.context import compact_tool_results, context_report
 from friday.tools import APPROVAL_FILE, approve_pending, build_tools, skill_catalog
 
 
@@ -202,6 +205,56 @@ class PromptTests(unittest.TestCase):
 
 
 class CompactTests(unittest.TestCase):
+    def test_context_report_breaks_down_prompt_tools_and_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = RunContext()
+            context.add_message("system", "## Runtime\nrules\n\n## Skill Catalog\n- test: skill")
+            context.add_message("user", "hello")
+            tools = build_tools(root, root / ".friday")
+
+            report = context_report(context, tools)
+
+            self.assertIn("system prompt", report)
+            self.assertIn("skill catalog", report)
+            self.assertIn("tool schemas", report)
+            self.assertIn("messages", report)
+
+    def test_tool_result_compaction_summarizes_structured_output(self) -> None:
+        context = RunContext()
+        context.emit(
+            "tool.call",
+            category="tool",
+            data={"tool_call_id": "call-1", "name": "Bash", "arguments": {"command": "python big.py"}},
+        )
+        context.add_message(
+            "tool",
+            '{"exit_code":0,"timed_out":false,"output":"' + ("x" * 2000) + '"}',
+            tool_call_id="call-1",
+        )
+
+        count = compact_tool_results(context)
+
+        self.assertEqual(count, 1)
+        self.assertIn("Tool: Bash", context.messages[-1]["content"])
+        self.assertIn("exit_code=0", context.messages[-1]["content"])
+        self.assertLess(len(context.messages[-1]["content"]), 800)
+
+    def test_prepare_context_compacts_tools_before_llm_compact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = RunContext()
+            context.metadata["workspace"] = tmp
+            context.emit("tool.call", category="tool", data={"tool_call_id": "call-1", "name": "Read", "arguments": {"path": "big.txt"}})
+            context.add_message("tool", '{"path":"big.txt","content":"' + ("x" * 5000) + '"}', tool_call_id="call-1")
+
+            fake_agent = object()
+            with patch.dict("os.environ", {"FRIDAY_CONTEXT_WINDOW": "1000"}):
+                agent, new_context, notice = prepare_context_for_chat(fake_agent, context, stream=False)
+
+            self.assertIs(agent, fake_agent)
+            self.assertIs(new_context, context)
+            self.assertIn("tool results compacted", notice)
+
     def test_compact_reviews_memory_then_rebuilds_context(self) -> None:
         class FakeAgent:
             def __init__(self) -> None:

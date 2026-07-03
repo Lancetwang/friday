@@ -4,9 +4,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, compact_friday, init_project, reset_friday, resume_friday, save_turn
+from friday.app import build_friday, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_friday, save_turn
+from friday.context import context_report
 from friday.tui_node import run_tui
-from friday.tools import approve_pending
+from friday.tools import approve_pending, build_tools
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -24,6 +25,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("tui", help="Start a simple terminal UI.")
     sub.add_parser("memory", help="Print effective instruction context.")
+    sub.add_parser("context", help="Print current context usage.")
     sub.add_parser("resume", help="Resume recent Friday session context.")
     sub.add_parser("approve", help="Approve one pending dangerous shell command.")
     sub.add_parser("reject", help="Reject one pending dangerous shell command.")
@@ -43,6 +45,11 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "memory":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
+        return
+
+    if command == "context":
+        agent, context = build_friday(stream=stream)
+        print(_context_report(context))
         return
 
     if command == "approve":
@@ -70,7 +77,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "ask":
         text = " ".join(args.text)
-        answer = _ask(agent, context, text, stream)
+        agent, context, answer = _ask(agent, context, text, stream)
         _save(context, text, answer)
         return
 
@@ -89,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
             if text.startswith("/"):
                 agent, context = _slash(text, stream, agent, context)
                 continue
-            answer = _ask(agent, context, text, stream)
+            agent, context, answer = _ask(agent, context, text, stream)
             _save(context, text, answer)
         return
 
@@ -105,9 +112,11 @@ def _configure_stdio() -> None:
 def _slash(text: str, stream: bool, agent, context):
     command = text[1:].strip().lower()
     if command in {"help", "?"}:
-        print("/help, /memory, /compact, /reset, /exit")
+        print("/help, /memory, /context, /compact, /reset, /exit")
     elif command == "memory":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
+    elif command == "context":
+        print(_context_report(context))
     elif command == "compact":
         agent, context, summary = compact_friday(agent, context, stream=stream)
         print("compacted conversation:")
@@ -149,7 +158,10 @@ def _reset(yes: bool) -> bool:
     return True
 
 
-def _ask(agent, context, text: str, stream: bool) -> str:
+def _ask(agent, context, text: str, stream: bool):
+    agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
+    if notice:
+        print(f"[context] {notice.split(':', 1)[0]}")
     answer = agent.chat(
         text,
         context=context,
@@ -160,7 +172,7 @@ def _ask(agent, context, text: str, stream: bool) -> str:
         print()
     else:
         print(answer)
-    return answer
+    return agent, context, answer
 
 
 def _print_delta(text: str) -> None:
@@ -172,6 +184,11 @@ def json_dump(value) -> str:
     import json
 
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _context_report(context) -> str:
+    root = Path(context.metadata["workspace"])
+    return context_report(context, build_tools(root, root / ".friday"))
 
 
 def _save(context, user: str, assistant: str) -> None:

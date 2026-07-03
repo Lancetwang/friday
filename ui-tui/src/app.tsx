@@ -26,6 +26,7 @@ const HELP_TEXT = `# Friday commands
 | --- | --- |
 | \`/help\` | Show this command reference. |
 | \`/memory\` | Print the effective prompt, including user, project, and memory context. |
+| \`/context\` | Print current context usage. |
 | \`/compact\` | Summarize the live conversation into a fresh context. |
 | \`/resume\` | Resume recent Friday session context. |
 | \`/approve\` | Run the pending dangerous shell command. |
@@ -191,6 +192,10 @@ function runCommand(
     setMessages(items => [...items, { role: 'system', text: HELP_TEXT }])
   } else if (command.startsWith('/memory')) {
     void gateway.request<{ text: string }>('prompt.get').then(result =>
+      setMessages(items => [...items, { role: 'system', text: result.text }])
+    )
+  } else if (command.startsWith('/context')) {
+    void gateway.request<{ text: string }>('context.get').then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
     )
   } else if (command.startsWith('/compact')) {

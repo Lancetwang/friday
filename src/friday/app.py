@@ -10,6 +10,7 @@ from typing import Any
 
 from agent_core import Agent, RunContext
 
+from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
 from friday.tools import build_tools, skill_catalog
 
 PROJECT_INSTRUCTIONS_LIMIT = 12000
@@ -79,6 +80,22 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     new_agent, new_context = build_friday(workspace, stream=stream)
     new_context.add_message("system", f"## Conversation Summary\n{summary}")
     return new_agent, new_context, summary
+
+
+def prepare_context_for_chat(agent: Agent, context: RunContext, *, stream: bool = True) -> tuple[Agent, RunContext, str]:
+    root = Path(context.metadata["workspace"])
+    tools = build_tools(root, root / ".friday")
+    if should_compact_conversation(context, tools):
+        context.metadata.pop("friday.compact_next_at_85", None)
+        agent, context, summary = compact_friday(agent, context, stream=stream)
+        return agent, context, f"conversation compacted: {summary}"
+    if should_compact_tools(context, tools):
+        count = compact_tool_results(context, tools)
+        if count == 0:
+            context.metadata["friday.compact_next_at_85"] = True
+            return agent, context, "conversation compact scheduled"
+        return agent, context, f"tool results compacted: {count}"
+    return agent, context, ""
 
 
 def resume_friday(workspace: Path | None = None, *, stream: bool = True, resume_id: str | None = None) -> tuple[Agent, RunContext, int]:

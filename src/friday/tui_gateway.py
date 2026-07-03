@@ -9,7 +9,8 @@ from typing import Any
 
 from agent_core import Agent, AgentEvent, RunContext
 
-from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday, save_turn
+from friday.app import build_friday, build_instructions, compact_friday, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
+from friday.context import context_report
 from friday.tools import approve_pending, build_tools
 
 _real_stdout = sys.stdout
@@ -41,6 +42,9 @@ class Gateway:
                 self.ok(rid, self.chat(str(params.get("text") or "")))
             elif method == "prompt.get":
                 self.ok(rid, {"text": build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")})
+            elif method == "context.get":
+                agent, context = self.ensure_agent()
+                self.ok(rid, {"text": context_report(context, build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))})
             elif method == "session.reset":
                 removed = reset_friday(include_user=True)
                 self.agent = None
@@ -75,6 +79,10 @@ class Gateway:
 
     def chat(self, text: str) -> dict[str, Any]:
         agent, context = self.ensure_agent()
+        self.agent, self.context, notice = prepare_context_for_chat(agent, context, stream=True)
+        agent, context = self.agent, self.context
+        if notice:
+            self.event("gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"})
         self.event("message.start", {"text": text})
         start = time.perf_counter()
 
@@ -83,6 +91,7 @@ class Gateway:
 
         answer = agent.chat(text, context=context, max_steps=20, on_delta=delta)
         usage = _usage_from_events([event.to_dict() for event in context.events])
+        context.metadata["friday.last_usage"] = usage
         estimated = usage["input_tokens"] is None or usage["output_tokens"] is None
         metrics = {
             "elapsed_ms": int((time.perf_counter() - start) * 1000),
