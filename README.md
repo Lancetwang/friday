@@ -16,8 +16,10 @@ The point of this repo is showing how a real personal agent can be assembled on 
 - Agent-as-router: the startup prompt stays small while project files, nested instructions, memory, and tools are pulled in only when needed.
 - Plug-in skills: reusable `SKILL.md` workflows are discovered from project and home skill folders, then loaded on demand.
 - Layered memory: user, global, and project memory are separate from disposable conversation compaction.
+- Multi-stage context compression: large tool results are compacted first; LLM conversation compact is kept for cases where tool compaction is not enough.
+- Context budget reporting: `/context` shows the current system prompt, skill catalog, tool schema, message, and tool-result footprint.
 - Dangerous shell approval: destructive Bash commands are blocked until the user runs `/approve`.
-- Session resume: recent `.friday/sessions` turns can be restored; `/resume` in the TUI lets you pick one.
+- Session resume: recent `.friday/sessions` can be restored as whole conversations; `/resume` in the TUI lets you pick one.
 - Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
 - Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
 
@@ -70,6 +72,18 @@ Friday separates memory by purpose:
 The `Memory` tool can `read`, `add`, `replace`, or `remove` entries. Writes hit disk immediately, but the startup prompt is a frozen snapshot; new memory naturally appears in the next session.
 
 `/compact` first asks Friday to save only durable facts with the `Memory` tool, then summarizes the live conversation into a fresh context. The compact summary itself is disposable session state and is not written as memory.
+
+## Context Management
+
+Friday treats context as layers instead of one ever-growing prompt:
+
+- Stable prefix: identity, runtime guidance, user profile, global memory, project instructions, environment, and project memory are assembled in a predictable order for prefix caching.
+- Routed context: files, nested `AGENTS.md`, full skill bodies, and memory reads enter the conversation only when the agent asks for them.
+- Tool compaction: when context usage reaches 85% of the configured window, oversized structured tool results are replaced with short summaries. If usage drops below 60%, the session keeps going without an LLM compact.
+- Conversation compact: if tool compaction is not enough, Friday keeps the existing compact flow and first gives the agent a chance to save durable facts to memory.
+- Budget visibility: `/context` prints the current breakdown for system prompt, skill catalog, tool schemas, messages, and tool results.
+
+The default context window is 128K tokens and can be overridden with `FRIDAY_CONTEXT_WINDOW`.
 
 ## Skills
 
