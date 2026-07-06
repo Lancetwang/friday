@@ -12,13 +12,14 @@ The point of this repo is showing how a real personal agent can be assembled on 
 ## Features
 
 - Workspace-aware by default: run `friday` from any directory and that directory becomes the agent workspace.
-- Harness-first context design: identity, user profile, durable memory, project rules, and environment notes are layered in a stable order for prefix caching.
+- Harness-first context design: runtime rules, skill catalog, user profile, memory, project rules, and environment notes are layered in a stable order for prefix caching.
 - Agent-as-router: the startup prompt stays small while project files, nested instructions, memory, and tools are pulled in only when needed.
+- Project rule layers: `AGENTS.md` is cross-agent guidance; `FRIDAY.md` is Friday-specific guidance; local variants stay private.
 - Plug-in skills: reusable `SKILL.md` workflows are discovered from project and home skill folders, then loaded on demand.
 - Layered memory: user, global, and project memory are separate from disposable conversation compaction.
 - Multi-stage context compression: large tool results are compacted first; LLM conversation compact is kept for cases where tool compaction is not enough.
 - Context budget reporting: `/context` shows the current system prompt, skill catalog, tool schema, message, and tool-result footprint.
-- Dangerous shell approval: destructive Bash commands are blocked until the user runs `/approve`.
+- Program-enforced Bash permissions: `.friday/permissions.json` provides persistent allow/deny/approval rules; one-shot approvals use `/approve`.
 - Session resume: recent `.friday/sessions` can be restored as whole conversations; `/resume` in the TUI lets you pick one.
 - Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
 - Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
@@ -31,13 +32,13 @@ flowchart TD
     CLI --> Harness["Friday harness"]
 
     Home["~/.friday<br/>SOUL / USER / MEMORY / FridaySkills"] --> Prefix["Stable prefix<br/>prefix-cache friendly"]
-    Project["workspace<br/>AGENTS.md / .friday/MEMORY / FridaySkills"] --> Prefix
+    Project["workspace<br/>AGENTS.md / FRIDAY.md / .friday/MEMORY / FridaySkills"] --> Prefix
     Env["workspace, platform, shell"] --> Prefix
     Prefix --> Budget["Context budget<br/>/context"]
 
-    Harness --> Routed["On-demand context<br/>files, nested AGENTS.md, full SKILL.md, memory reads"]
+    Harness --> Routed["On-demand context<br/>files, nested AGENTS.md/FRIDAY.md, full SKILL.md, memory reads"]
     Routed --> Budget
-    Session[".friday/sessions<br/>messages + tool results"] --> Budget
+    State[".friday<br/>permissions / approvals / sessions"] --> Budget
 
     Budget -->|"under 85%"| Ready["Prepared context"]
     Budget -->|"85%+"| ToolCompact["Compact large tool results"]
@@ -48,7 +49,7 @@ flowchart TD
     Ready --> Runtime["agent-core-runtime Agent"]
     Runtime --> LLM["OpenAI-compatible LLM"]
     Runtime --> Tools["Small tool set<br/>Read / Write / Edit / Bash / Glob / Grep / Skill / Memory"]
-    Tools --> Session
+    Tools --> State
     Tools --> Home
     Tools --> Project
 ```
@@ -58,16 +59,18 @@ flowchart TD
 Friday builds the model context in a stable order for prefix caching:
 
 1. `SOUL.md`: who Friday is.
-2. Runtime and tool guidance.
-3. `USER.md`: who the user is and how they prefer to work.
-4. Global `MEMORY.md`: cross-project facts and durable experience.
-5. `AGENTS.md`: project instructions.
-6. Environment notes: workspace, platform, shell.
-7. Project `.friday/MEMORY.md`: project decisions and local context.
+2. Runtime instructions: tools, memory policy, project-rule discovery, skills, permissions, and context compaction.
+3. Tool guidance.
+4. Skill catalog: names and descriptions only.
+5. `USER.md`: who the user is and how they prefer to work.
+6. Global `MEMORY.md`: cross-project facts and durable experience.
+7. Project instructions: `AGENTS.md`, `.friday/AGENTS.md`, `FRIDAY.md`, `.friday/FRIDAY.md`, `FRIDAY.local.md`, and `.friday/FRIDAY.local.md`.
+8. Environment notes: workspace, platform, shell.
+9. Project `.friday/MEMORY.md`: project decisions and local context.
 
-Bundled default files live in `src/friday/prompt_templates/`. They are copied to `~/.friday/` by `friday init`; runtime uses the editable home files.
+Bundled default files live in `src/friday/prompt_templates/`. They are copied to `~/.friday/` by `friday init`; runtime uses the editable home files. `friday init` also creates project-local `FRIDAY.md`, `.friday/MEMORY.md`, and `.friday/permissions.json`.
 
-Large project instruction files are truncated in the startup prompt. Nested `AGENTS.md` files are loaded lazily when Friday touches files in that directory, and each nested file is only injected once per session.
+Large project instruction files are truncated in the startup prompt. Nested `AGENTS.md` and `FRIDAY.md` instruction files are loaded lazily when Friday touches files in that directory, and each nested file is only injected once per session.
 
 ## Memory
 
@@ -77,7 +80,7 @@ Friday separates memory by purpose:
 - `USER.md`: stable user profile and preferences.
 - `~/.friday/MEMORY.md`: global memory across projects.
 - `<workspace>/.friday/MEMORY.md`: memory for the current project only.
-- `AGENTS.md`: project rules, not memory.
+- `AGENTS.md` and `FRIDAY.md`: project rules, not memory.
 
 The `Memory` tool can `read`, `add`, `replace`, or `remove` entries. Writes hit disk immediately, but the startup prompt is a frozen snapshot; new memory naturally appears in the next session.
 
@@ -94,6 +97,16 @@ Friday treats context as layers instead of one ever-growing prompt:
 - Budget visibility: `/context` prints the current breakdown for system prompt, skill catalog, tool schemas, messages, and tool results.
 
 The default context window is 128K tokens and can be overridden with `FRIDAY_CONTEXT_WINDOW`.
+
+## Permissions
+
+Friday separates persistent permissions from prompt rules:
+
+- `.friday/permissions.json`: machine-readable Bash policy with `allow`, `deny`, and `require_approval` lists.
+- `.friday/pending_approval.json`: one-shot pending approval written when a command needs user confirmation.
+- `FRIDAY.md`: human-readable project guidance; it can mention the permission policy but does not enforce it.
+
+Bash checks `permissions.json` before running. Deny rules block, allow rules run, approval rules create a pending approval, and the built-in dangerous-command heuristic remains the fallback.
 
 ## Skills
 

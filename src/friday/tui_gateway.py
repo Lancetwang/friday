@@ -11,7 +11,7 @@ from agent_core import Agent, AgentEvent, RunContext
 
 from friday.app import build_friday, build_instructions, compact_friday, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
 from friday.context import context_report
-from friday.tools import approve_pending, build_tools
+from friday.tools import approve_pending, build_tools, pending_approval
 
 _real_stdout = sys.stdout
 sys.stdout = sys.stderr
@@ -61,6 +61,8 @@ class Gateway:
                 self.ok(rid, {"count": count})
             elif method == "session.resume_choices":
                 self.ok(rid, {"choices": resume_choices()})
+            elif method == "approval.pending":
+                self.ok(rid, pending_approval())
             elif method == "approval.approve":
                 self.ok(rid, approve_pending())
             elif method == "approval.reject":

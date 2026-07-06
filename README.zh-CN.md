@@ -12,13 +12,14 @@ Friday 是一个个人 CLI agent，由两部分组成：
 ## 特性
 
 - 默认感知工作区：在任意目录运行 `friday`，该目录就是 agent 的工作目录。
-- Harness 优先的上下文设计：身份、用户画像、长期记忆、项目规则和环境信息按稳定顺序组装，方便 prefix caching。
+- Harness 优先的上下文设计：runtime 规则、skill 目录、用户画像、长期记忆、项目规则和环境信息按稳定顺序组装，方便 prefix caching。
 - Agent 只做路由：启动 prompt 保持克制，项目文件、嵌套指令、记忆和工具按需进入上下文。
+- 项目规则分层：`AGENTS.md` 是跨 agent 规则；`FRIDAY.md` 是 Friday 专属规则；local 变体保持本机私有。
 - 即插即用 skills：从项目和 home 目录发现可复用的 `SKILL.md` 工作流，按需加载。
 - 分层记忆：用户、全局、项目记忆彼此独立，和可丢弃的 compact 会话摘要分开。
 - 多阶段上下文压缩：优先压缩大体积工具结果；只有工具压缩不够时，才触发 LLM 会话 compact。
 - 上下文预算报告：`/context` 展示 system prompt、skill catalog、tool schema、messages、tool results 的当前占用。
-- 危险命令审批：破坏性 Bash 命令会被拦截，直到用户运行 `/approve`。
+- 程序执行的 Bash 权限：`.friday/permissions.json` 提供持久 allow、deny、approval 规则；一次性审批使用 `/approve`。
 - 会话恢复：可以恢复最近 `.friday/sessions` 里的对话上下文；TUI 里的 `/resume` 会先列出来让你选。
 - 小工具集：读写编辑文件、shell、glob、grep、memory 覆盖核心编码循环，不依赖庞大框架。
 - 本地状态：项目状态在 `<workspace>/.friday`，用户状态在 `~/.friday`。
@@ -31,13 +32,13 @@ flowchart TD
     CLI --> Harness["Friday harness"]
 
     Home["~/.friday<br/>SOUL / USER / MEMORY / FridaySkills"] --> Prefix["稳定前缀<br/>方便 prefix caching"]
-    Project["当前工作区<br/>AGENTS.md / .friday/MEMORY / FridaySkills"] --> Prefix
+    Project["当前工作区<br/>AGENTS.md / FRIDAY.md / .friday/MEMORY / FridaySkills"] --> Prefix
     Env["工作区、平台、shell"] --> Prefix
     Prefix --> Budget["上下文预算<br/>/context"]
 
-    Harness --> Routed["按需路由上下文<br/>文件、嵌套 AGENTS.md、完整 SKILL.md、memory 读取"]
+    Harness --> Routed["按需路由上下文<br/>文件、嵌套 AGENTS.md/FRIDAY.md、完整 SKILL.md、memory 读取"]
     Routed --> Budget
-    Session[".friday/sessions<br/>messages + tool results"] --> Budget
+    State[".friday<br/>permissions / approvals / sessions"] --> Budget
 
     Budget -->|"低于 85%"| Ready["准备好的上下文"]
     Budget -->|"达到 85%"| ToolCompact["压缩大体积工具结果"]
@@ -48,7 +49,7 @@ flowchart TD
     Ready --> Runtime["agent-core-runtime Agent"]
     Runtime --> LLM["OpenAI-compatible LLM"]
     Runtime --> Tools["小工具集<br/>Read / Write / Edit / Bash / Glob / Grep / Skill / Memory"]
-    Tools --> Session
+    Tools --> State
     Tools --> Home
     Tools --> Project
 ```
@@ -58,16 +59,18 @@ flowchart TD
 Friday 会按稳定顺序组装模型上下文，方便 prefix caching：
 
 1. `SOUL.md`：Friday 是谁。
-2. Runtime 和工具使用规则。
-3. `USER.md`：用户是谁，以及用户偏好如何工作。
-4. 全局 `MEMORY.md`：跨项目事实和长期经验。
-5. `AGENTS.md`：项目指令。
-6. 环境信息：工作区、平台、shell。
-7. 项目 `.friday/MEMORY.md`：项目决策和本地上下文。
+2. Runtime instructions：工具、memory policy、项目规则发现、skills、permissions 和上下文压缩机制。
+3. Tool Guidance：工具使用偏好。
+4. Skill Catalog：只放 skill 名称和描述。
+5. `USER.md`：用户是谁，以及用户偏好如何工作。
+6. 全局 `MEMORY.md`：跨项目事实和长期经验。
+7. 项目指令：`AGENTS.md`、`.friday/AGENTS.md`、`FRIDAY.md`、`.friday/FRIDAY.md`、`FRIDAY.local.md` 和 `.friday/FRIDAY.local.md`。
+8. 环境信息：工作区、平台、shell。
+9. 项目 `.friday/MEMORY.md`：项目决策和本地上下文。
 
-内置默认文件放在 `src/friday/prompt_templates/`。`friday init` 会把它们复制到 `~/.friday/`，运行时使用 home 目录下可编辑的文件。
+内置默认文件放在 `src/friday/prompt_templates/`。`friday init` 会把它们复制到 `~/.friday/`，运行时使用 home 目录下可编辑的文件。`friday init` 也会创建项目内的 `FRIDAY.md`、`.friday/MEMORY.md` 和 `.friday/permissions.json`。
 
-过大的项目指令文件会在启动 prompt 中截断。嵌套目录里的 `AGENTS.md` 会在 Friday 触达该目录文件时按需加载，并且每个嵌套文件每个 session 只注入一次。
+过大的项目指令文件会在启动 prompt 中截断。嵌套目录里的 `AGENTS.md` 和 `FRIDAY.md` 会在 Friday 触达该目录文件时按需加载，并且每个嵌套文件每个 session 只注入一次。
 
 ## 记忆
 
@@ -77,7 +80,7 @@ Friday 按用途区分记忆：
 - `USER.md`：稳定的用户画像和偏好。
 - `~/.friday/MEMORY.md`：跨项目的全局记忆。
 - `<workspace>/.friday/MEMORY.md`：只属于当前项目的记忆。
-- `AGENTS.md`：项目规则，不是记忆。
+- `AGENTS.md` 和 `FRIDAY.md`：项目规则，不是记忆。
 
 `Memory` 工具可以 `read`、`add`、`replace` 或 `remove` 条目。写入会立刻落盘，但启动 prompt 是冻结快照；新的长期记忆会在下一次会话自然生效。
 
@@ -94,6 +97,16 @@ Friday 把上下文拆成几层，而不是把所有东西塞进一个不断增�
 - 预算可见：`/context` 会拆分展示 system prompt、skill catalog、tool schemas、messages、tool results 的当前占用。
 
 默认上下文窗口按 128K tokens 计算，可以用 `FRIDAY_CONTEXT_WINDOW` 覆盖。
+
+## 权限
+
+Friday 把持久权限和 prompt 规则分开：
+
+- `.friday/permissions.json`：机器可读的 Bash 策略，包含 `allow`、`deny` 和 `require_approval` 列表。
+- `.friday/pending_approval.json`：命令需要用户确认时写入的一次性 pending approval。
+- `FRIDAY.md`：人类可读的项目规则，可以说明权限策略，但不负责执行。
+
+Bash 运行前会先检查 `permissions.json`。deny 规则会阻止命令，allow 规则会直接运行，approval 规则会创建待审批项，内置危险命令启发式作为兜底。
 
 ## Skills
 

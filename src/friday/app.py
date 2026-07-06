@@ -11,7 +11,7 @@ from typing import Any
 from agent_core import Agent, RunContext
 
 from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
-from friday.tools import build_tools, skill_catalog
+from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions, skill_catalog
 
 PROJECT_INSTRUCTIONS_LIMIT = 12000
 PRE_COMPACT_MEMORY_PROMPT = """
@@ -130,8 +130,9 @@ def init_project(workspace: Path | None = None, *, user_home: Path | None = None
     friday_dir.mkdir(exist_ok=True)
     created = []
     for path, content in {
-        root / "AGENTS.md": "# Project Instructions\n\nDescribe how Friday should work in this project.\n",
+        root / "FRIDAY.md": _default_friday_project_instructions(),
         friday_dir / "MEMORY.md": "# Project Memory\n",
+        friday_dir / PERMISSIONS_FILE: json.dumps(default_permissions(), ensure_ascii=False, indent=2) + "\n",
     }.items():
         if not path.exists():
             path.write_text(content, encoding="utf-8")
@@ -261,12 +262,12 @@ def _exists_exact(path: Path) -> bool:
 
 def _project_instruction_files(workspace: Path) -> list[str]:
     paths = []
-    for parent in [workspace, *workspace.parents]:
-        for name in ("AGENTS.md", ".friday/AGENTS.md"):
+    for parent in reversed([workspace, *workspace.parents]):
+        for name in INSTRUCTION_FILE_NAMES:
             path = parent / name
             if path.exists():
                 paths.append(path)
-    return [f"### {path}\n{_read_limited(path, PROJECT_INSTRUCTIONS_LIMIT)}" for path in reversed(paths)]
+    return [f"### {path}\n{_read_limited(path, PROJECT_INSTRUCTIONS_LIMIT)}" for path in paths]
 
 
 def _read_limited(path: Path, limit: int) -> str:
@@ -279,10 +280,31 @@ def _read_limited(path: Path, limit: int) -> str:
 def _runtime_notes() -> str:
     return """
 Available tools are Read, Write, Edit, Bash, Glob, Grep, Skill, and Memory.
-Use Skill to list on-demand workflows, then read only the relevant SKILL.md.
+
+Project instructions:
+AGENTS.md is cross-agent project guidance. FRIDAY.md is Friday-specific project guidance. FRIDAY.local.md is private local Friday guidance.
+Nested instruction files are loaded once when tools touch files under that directory. Later project instructions override earlier ones.
+
+Skills:
+The startup prompt contains only skill names and descriptions. Use Skill to list on-demand workflows, then read only the relevant SKILL.md.
+
+Memory:
 Use Memory only for durable user preferences, cross-project facts, or project decisions worth keeping.
 Memory targets: user updates USER.md, global updates global MEMORY.md, project updates workspace .friday/MEMORY.md.
 Memory writes affect disk immediately, but the frozen startup prompt sees them next session.
+Do not save temporary task progress, raw command output, compact summaries, permission rules, or project rules as memory.
+SOUL.md, AGENTS.md, FRIDAY.md, FRIDAY.local.md, and permission files require an explicit user request before editing.
+
+Permissions:
+Bash commands are checked against workspace .friday/permissions.json before execution.
+One-shot pending approvals live in workspace .friday/pending_approval.json and are deleted after /approve or /reject.
+Persistent allow, deny, or require-approval changes require an explicit user request.
+
+Context:
+Keep stable prefix content before volatile session content.
+Compact large tool results before compacting conversation history.
+Before conversation compact, review durable facts and save only true memory.
+
 Bash runs PowerShell on Windows, so prefer PowerShell syntax.
 Dangerous Bash commands are blocked for user approval; tell the user to run /approve or /reject.
 """.strip()
@@ -304,3 +326,28 @@ def _environment(workspace: Path) -> str:
 - Platform: {platform.system()}
 - Shell: {"PowerShell" if platform.system() == "Windows" else "bash"}
 """.strip()
+
+
+def _default_friday_project_instructions() -> str:
+    return """# Friday Project Instructions
+
+Tell Friday how to work in this project.
+
+## Commands
+
+- Install:
+- Test:
+- Run:
+- Lint:
+
+## Friday Rules
+
+- Keep project-specific Friday rules here.
+- Put cross-agent project rules in `AGENTS.md`.
+- Put durable project facts in `.friday/MEMORY.md`.
+- Put persistent Bash permissions in `.friday/permissions.json`.
+
+## Notes
+
+-
+"""

@@ -44,6 +44,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   const [info, setInfo] = useState<SessionInfo | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [resumePicker, setResumePicker] = useState<ResumePicker | null>(null)
+  const [approvalPicker, setApprovalPicker] = useState<ApprovalPicker | null>(null)
   const [streaming, setStreaming] = useState('')
   const [activity, setActivity] = useState('')
   const [now, setNow] = useState(Date.now())
@@ -66,6 +67,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'tool.complete') {
         const endMs = Date.now()
         setMessages(items => updateToolRun(items, activeTurn.current, event.payload.name, { content: event.payload.content, endMs, error: event.payload.error }))
+        const approval = approvalFromContent(event.payload.content)
+        if (approval) {
+          setApprovalPicker(current => current ?? { approval, index: 0 })
+        }
         setActivity(event.payload.error ? `tool ${event.payload.name} failed` : '')
       } else if (event.type === 'gateway.stderr') {
         setActivity(event.payload.line)
@@ -90,6 +95,22 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   }, [messages])
 
   useInput((char, key) => {
+    if (approvalPicker) {
+      if (key.leftArrow || key.upArrow || char === 'h' || char === 'k') {
+        setApprovalPicker(picker => picker && { ...picker, index: Math.max(0, picker.index - 1) })
+      } else if (key.rightArrow || key.downArrow || char === 'l' || char === 'j') {
+        setApprovalPicker(picker => picker && { ...picker, index: Math.min(1, picker.index + 1) })
+      } else if (key.return) {
+        const reject = approvalPicker.index === 1
+        setApprovalPicker(null)
+        void gateway.request(reject ? 'approval.reject' : 'approval.approve').then(result =>
+          setMessages(items => [...items, { role: 'system', text: `${reject ? 'Approval rejected' : 'Approval result'}:\n\n${JSON.stringify(result, null, 2)}` }])
+        )
+      } else if (key.escape) {
+        setApprovalPicker(null)
+      }
+      return
+    }
     if (resumePicker) {
       if (key.upArrow || char === 'k') {
         setResumePicker(picker => picker && { ...picker, index: Math.max(0, picker.index - 1) })
@@ -124,7 +145,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   })
 
   const commandContext = useMemo(
-    () => ({ app, gateway, setMessages, setResumePicker }),
+    () => ({ app, gateway, setApprovalPicker, setMessages, setResumePicker }),
     [app, gateway]
   )
 
@@ -158,7 +179,8 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} streaming /> : null}
       </Box>
       {resumePicker ? <ResumePickerView picker={resumePicker} /> : null}
-      <Composer busy={busy || Boolean(resumePicker)} input={input} onChange={setInput} onSubmit={submit} />
+      {approvalPicker ? <ApprovalPickerView picker={approvalPicker} /> : null}
+      <Composer busy={busy || Boolean(resumePicker) || Boolean(approvalPicker)} input={input} onChange={setInput} onSubmit={submit} />
     </Box>
   )
 }
@@ -172,11 +194,13 @@ function runCommand(
   {
     app,
     gateway,
+    setApprovalPicker,
     setMessages,
     setResumePicker,
   }: {
     app: ReturnType<typeof useApp>
     gateway: GatewayClient
+    setApprovalPicker: React.Dispatch<React.SetStateAction<ApprovalPicker | null>>
     setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>
     setResumePicker: React.Dispatch<React.SetStateAction<ResumePicker | null>>
   }
@@ -211,13 +235,9 @@ function runCommand(
       }
     })
   } else if (command.startsWith('/approve')) {
-    void gateway.request('approval.approve').then(result =>
-      setMessages(items => [...items, { role: 'system', text: `Approval result:\n\n${JSON.stringify(result, null, 2)}` }])
-    )
+    openApprovalPicker(gateway, setApprovalPicker, setMessages, 0)
   } else if (command.startsWith('/reject')) {
-    void gateway.request('approval.reject').then(result =>
-      setMessages(items => [...items, { role: 'system', text: `Approval rejected:\n\n${JSON.stringify(result, null, 2)}` }])
-    )
+    openApprovalPicker(gateway, setApprovalPicker, setMessages, 1)
   } else if (command.startsWith('/reset')) {
     void gateway.request('session.reset').then(() => {
       setMessages(items => [...items, { role: 'system', text: 'Reset Friday.' }])
@@ -243,6 +263,21 @@ type ResumeChoice = {
 
 type ResumePicker = {
   choices: ResumeChoice[]
+  index: number
+}
+
+type Approval = {
+  command?: string
+  id?: string
+  max_chars?: number
+  message?: string
+  pending?: boolean
+  reason?: string
+  timeout_seconds?: number
+}
+
+type ApprovalPicker = {
+  approval: Approval
   index: number
 }
 
@@ -403,6 +438,22 @@ function ResumePickerView({ picker }: { picker: ResumePicker }) {
   )
 }
 
+function ApprovalPickerView({ picker }: { picker: ApprovalPicker }) {
+  const approve = picker.index === 0
+  return (
+    <Box borderColor={theme.warn} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
+      <Text color={theme.warn}>Approve command - Left/Right or Up/Down, Enter</Text>
+      <Text color={theme.text}>{shortText(picker.approval.command || 'unknown command', 160)}</Text>
+      {picker.approval.reason ? <Text color={theme.dim}>reason: {picker.approval.reason}</Text> : null}
+      <Box marginTop={1}>
+        <Text color={approve ? theme.ok : theme.dim}>{approve ? '> ' : '  '}Approve</Text>
+        <Text color={theme.dim}>   </Text>
+        <Text color={!approve ? theme.error : theme.dim}>{!approve ? '> ' : '  '}Reject</Text>
+      </Box>
+    </Box>
+  )
+}
+
 function ToolDetails({ run }: { run: ToolRun }) {
   const output = formatToolOutput(run)
   return (
@@ -435,6 +486,33 @@ function toolBrief(run: ToolRun) {
   }
   const command = (run.arguments as { command?: unknown }).command
   return typeof command === 'string' ? `- ${shortText(command, 80)}` : ''
+}
+
+function approvalFromContent(content?: string): Approval | null {
+  if (!content) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(content) as Approval & { approval_required?: boolean }
+    return parsed.approval_required ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function openApprovalPicker(
+  gateway: GatewayClient,
+  setApprovalPicker: React.Dispatch<React.SetStateAction<ApprovalPicker | null>>,
+  setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>,
+  index: number
+) {
+  void gateway.request<Approval>('approval.pending').then(approval => {
+    if (approval.pending) {
+      setApprovalPicker({ approval, index })
+    } else {
+      setMessages(items => [...items, { role: 'system', text: approval.message || 'No pending approval.' }])
+    }
+  })
 }
 
 function shortText(value: string, max: number) {

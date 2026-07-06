@@ -9,7 +9,7 @@ from agent_core import RunContext
 
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday
 from friday.context import compact_tool_results, context_report
-from friday.tools import APPROVAL_FILE, approve_pending, build_tools, skill_catalog
+from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
 
 
 class ToolTests(unittest.TestCase):
@@ -76,6 +76,39 @@ class ToolTests(unittest.TestCase):
             self.assertFalse((root / ".friday" / APPROVAL_FILE).exists())
             self.assertTrue(approved["approved"])
 
+    def test_pending_approval_reads_without_consuming(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            tools["Bash"]("rm missing-file")
+            pending = pending_approval(root)
+
+            self.assertTrue(pending["pending"])
+            self.assertEqual(pending["command"], "rm missing-file")
+            self.assertTrue((root / ".friday" / APPROVAL_FILE).exists())
+
+    def test_bash_permissions_json_controls_persistent_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            friday_dir = root / ".friday"
+            friday_dir.mkdir()
+            (friday_dir / PERMISSIONS_FILE).write_text(
+                '{"version":1,"bash":{"allow":["rm missing-file","python -c \\"print(1)\\""],"deny":["python -c deny"],"require_approval":["python -c approve"]}}',
+                encoding="utf-8",
+            )
+            tools = {tool.name: tool for tool in build_tools(root, friday_dir)}
+
+            denied = tools["Bash"]("python -c deny")
+            approval = tools["Bash"]("python -c approve")
+            allowed = tools["Bash"]("rm missing-file")
+            quoted = tools["Bash"]('python -c "print(1)"')
+
+            self.assertTrue(denied["blocked"])
+            self.assertTrue(approval["approval_required"])
+            self.assertNotIn("approval_required", allowed)
+            self.assertEqual(quoted["exit_code"], 0)
+
     def test_glob_and_grep(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -105,11 +138,12 @@ class ToolTests(unittest.TestCase):
             tools["Memory"]("remove", "project", "Friday should stay concise.")
             self.assertNotIn("Friday should stay concise.", tools["Memory"]("read", "project")["content"])
 
-    def test_nested_agents_context_is_loaded_once_for_touched_paths(self) -> None:
+    def test_nested_instruction_context_is_loaded_once_for_touched_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "src").mkdir()
             (root / "src" / "AGENTS.md").write_text("src rules", encoding="utf-8")
+            (root / "src" / "FRIDAY.md").write_text("friday src rules", encoding="utf-8")
             (root / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
@@ -118,6 +152,8 @@ class ToolTests(unittest.TestCase):
 
             self.assertEqual(first["context"][0]["path"].replace("\\", "/"), "src/AGENTS.md")
             self.assertIn("src rules", first["context"][0]["content"])
+            self.assertEqual(first["context"][1]["path"].replace("\\", "/"), "src/FRIDAY.md")
+            self.assertIn("friday src rules", first["context"][1]["content"])
             self.assertNotIn("context", second)
 
     def test_skill_tool_lists_and_reads_skill_md(self) -> None:
@@ -180,18 +216,33 @@ class ResetTests(unittest.TestCase):
             self.assertNotIn("soul.md", names)
             self.assertNotIn("user.md", names)
 
+    def test_init_creates_friday_project_files_not_agents_md(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+
+            init_project(root, user_home=home)
+
+            self.assertTrue((root / "FRIDAY.md").exists())
+            self.assertFalse((root / "AGENTS.md").exists())
+            self.assertTrue((root / ".friday" / "MEMORY.md").exists())
+            self.assertTrue((root / ".friday" / PERMISSIONS_FILE).exists())
+
 
 class PromptTests(unittest.TestCase):
     def test_prompt_keeps_stable_prefix_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "AGENTS.md").write_text("project rules", encoding="utf-8")
+            (root / "FRIDAY.md").write_text("friday rules", encoding="utf-8")
             text = build_instructions(root, root / ".friday")
 
             self.assertLess(text.index("## Soul"), text.index("## Runtime"))
             self.assertLess(text.index("## Runtime"), text.index("## Tool Guidance"))
             self.assertLess(text.index("## Tool Guidance"), text.index("## Project Instructions"))
             self.assertLess(text.index("## Project Instructions"), text.index("## Environment"))
+            self.assertLess(text.index("AGENTS.md"), text.index("FRIDAY.md"))
+            self.assertIn("friday rules", text)
 
     def test_large_project_instructions_are_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

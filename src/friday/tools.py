@@ -16,6 +16,15 @@ MEMORY_LIMIT = 2500
 CONTEXT_FILE_LIMIT = 8000
 SKILL_LIMIT = 12000
 APPROVAL_FILE = "pending_approval.json"
+PERMISSIONS_FILE = "permissions.json"
+INSTRUCTION_FILE_NAMES = (
+    "AGENTS.md",
+    ".friday/AGENTS.md",
+    "FRIDAY.md",
+    ".friday/FRIDAY.md",
+    "FRIDAY.local.md",
+    ".friday/FRIDAY.local.md",
+)
 
 
 def build_tools(workspace: Path, friday_dir: Path):
@@ -116,10 +125,12 @@ def build_tools(workspace: Path, friday_dir: Path):
         timeout_seconds: Annotated[int, "Timeout in seconds."] = 60,
         max_chars: Annotated[int, "Maximum output characters to return."] = 8000,
     ) -> dict:
-        reason = _dangerous_shell(command)
-        if reason:
+        decision, reason = _permission_decision(friday_dir, command)
+        if decision == "deny":
+            return {"blocked": True, "message": f"Command denied by {PERMISSIONS_FILE}: {reason}"}
+        if decision == "approval":
             approval = _write_approval(friday_dir, command, timeout_seconds, max_chars, reason)
-            return {**approval, "approval_required": True, "message": "Dangerous command blocked. Run /approve to execute it or /reject to discard it."}
+            return {**approval, "approval_required": True, "message": "Command blocked. Run /approve to execute it or /reject to discard it."}
         return _run_shell(workspace, command, timeout_seconds, max_chars)
 
     @tool(description="Find files and directories by glob pattern inside the current workspace.", name="Glob")
@@ -250,6 +261,22 @@ def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> d
     return {"approved": True, "approval": approval, "result": result}
 
 
+def pending_approval(workspace: Path | None = None) -> dict:
+    root = (workspace or Path.cwd()).resolve()
+    path = root / ".friday" / APPROVAL_FILE
+    if not path.exists():
+        return {"pending": False, "message": "No pending approval."}
+    try:
+        approval = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"pending": False, "message": "Invalid pending approval."}
+    return {"pending": True, **approval}
+
+
+def default_permissions() -> dict:
+    return {"version": 1, "bash": {"allow": [], "deny": [], "require_approval": []}}
+
+
 def skill_catalog(workspace: Path) -> str:
     skills = _discover_skills(workspace.resolve(), Path.home() / ".friday")
     if not skills:
@@ -308,6 +335,48 @@ def _dangerous_shell(command: str) -> str:
     return ""
 
 
+def _permission_decision(friday_dir: Path, command: str) -> tuple[str, str]:
+    permissions = _read_permissions(friday_dir)
+    bash = permissions.get("bash", {}) if isinstance(permissions, dict) else {}
+    if not isinstance(bash, dict):
+        bash = {}
+    if _matches_any(command, bash.get("deny", [])):
+        return "deny", "matched deny rule"
+    if _matches_any(command, bash.get("allow", [])):
+        return "allow", "matched allow rule"
+    if _matches_any(command, bash.get("require_approval", [])):
+        return "approval", "matched approval rule"
+    reason = _dangerous_shell(command)
+    if reason:
+        return "approval", reason
+    return "allow", "safe by default"
+
+
+def _read_permissions(friday_dir: Path) -> dict:
+    path = friday_dir / PERMISSIONS_FILE
+    if not path.exists():
+        return default_permissions()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return default_permissions()
+    return data if isinstance(data, dict) else default_permissions()
+
+
+def _matches_any(command: str, rules) -> bool:
+    if not isinstance(rules, list):
+        return False
+    raw = command.strip().lower()
+    surface = _shell_surface(command).strip().lower()
+    for item in rules:
+        if not isinstance(item, str):
+            continue
+        rule = item.strip().lower()
+        if rule and (raw == rule or raw.startswith(rule + " ") or surface == rule or surface.startswith(rule + " ")):
+            return True
+    return False
+
+
 def _shell_surface(command: str) -> str:
     result = []
     quote = ""
@@ -352,18 +421,19 @@ def _context_for_paths(workspace: Path, paths: list[Path], loaded: set[Path]) ->
     for path in paths:
         resolved = path.resolve()
         current = resolved if resolved.is_dir() else resolved.parent
-        for parent in reversed([current, *current.parents]):
-            if parent == workspace or workspace not in parent.parents:
-                continue
-            context_file = parent / "AGENTS.md"
-            if context_file.exists() and context_file not in loaded:
-                loaded.add(context_file)
-                found.append(
-                    {
-                        "path": str(context_file.relative_to(workspace)),
-                        "content": _read_limited(context_file, CONTEXT_FILE_LIMIT),
-                    }
-                )
+        if current != workspace and workspace in current.parents:
+            parents = [parent for parent in [current, *current.parents] if parent != workspace and workspace in parent.parents]
+            for parent in reversed(parents):
+                for name in INSTRUCTION_FILE_NAMES:
+                    context_file = parent / name
+                    if context_file.exists() and context_file not in loaded:
+                        loaded.add(context_file)
+                        found.append(
+                            {
+                                "path": str(context_file.relative_to(workspace)),
+                                "content": _read_limited(context_file, CONTEXT_FILE_LIMIT),
+                            }
+                        )
     return found
 
 

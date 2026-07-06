@@ -6,3 +6,4 @@ ui-tui/dist/
 __pycache__/
 *.pyc
 .friday/
+FRIDAY.local.md
