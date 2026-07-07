@@ -18,6 +18,7 @@ from rich.theme import Theme
 from friday import __version__
 from friday.app import build_friday, build_instructions, prepare_context_for_chat, reset_friday, save_turn
 from friday.context import context_report
+from friday.loop import AGENT_MAX_STEPS
 from friday.tools import build_tools
 
 BLUE = "#2f81f7"
@@ -114,7 +115,7 @@ class FridayTUI:
         answer = self.agent.chat(
             text,
             context=self.context,
-            max_steps=20,
+            max_steps=AGENT_MAX_STEPS,
             stream=self.stream,
             on_delta=self.on_delta if self.stream else None,
         )

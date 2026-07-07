@@ -21,6 +21,12 @@ Friday is the application harness for a small personal CLI agent built on `agent
 - Compact large tool results before compacting conversation history.
 - Use conversation compact only when tool compaction is not enough.
 
+## Verification
+
+- Verify delivered workspace state, not the main agent's claims.
+- Use verifier feedback for one focused repair attempt before reporting back.
+- `/goal` may repeat main-agent attempts until the verifier passes, blocks with evidence, or reaches the attempt limit.
+
 ## Permissions
 
 - Keep persistent Bash permissions in `.friday/permissions.json`.

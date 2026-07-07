@@ -18,8 +18,10 @@ Friday 是一个个人 CLI agent，由两部分组成：
 - 即插即用 skills：从项目和 home 目录发现可复用的 `SKILL.md` 工作流，按需加载。
 - 分层记忆：用户、全局、项目记忆彼此独立，和可丢弃的 compact 会话摘要分开。
 - 多阶段上下文压缩：优先压缩大体积工具结果；只有工具压缩不够时，才触发 LLM 会话 compact。
+- 自动 verification loop：修改交付物的 turn 会由独立 verifier agent 检查，失败时给 main agent 一次修复机会。
+- Goal mode：`/goal <task>` 会结合 verifier 反馈持续尝试，直到通过、被证明阻塞，或达到尝试上限。
 - 上下文预算报告：`/context` 展示 system prompt、skill catalog、tool schema、messages、tool results 的当前占用。
-- 程序执行的 Bash 权限：`.friday/permissions.json` 提供持久 allow、deny、approval 规则；一次性审批使用 `/approve`。
+- 程序执行的 Bash 权限：`.friday/permissions.json` 提供持久 allow、deny、approval 规则；`/approve` 会执行待审批命令，并把结果带回同一个会话。
 - 会话恢复：可以恢复最近 `.friday/sessions` 里的对话上下文；TUI 里的 `/resume` 会先列出来让你选。
 - 小工具集：读写编辑文件、shell、glob、grep、memory 覆盖核心编码循环，不依赖庞大框架。
 - 本地状态：项目状态在 `<workspace>/.friday`，用户状态在 `~/.friday`。
@@ -47,6 +49,7 @@ flowchart TD
     LLMCompact --> Ready
 
     Ready --> Runtime["agent-core-runtime Agent"]
+    Runtime --> Verify["Verifier loop<br/>工作区状态 vs 用户目标"]
     Runtime --> LLM["OpenAI-compatible LLM"]
     Runtime --> Tools["小工具集<br/>Read / Write / Edit / Bash / Glob / Grep / Skill / Memory"]
     Tools --> State
@@ -94,6 +97,8 @@ Friday 把上下文拆成几层，而不是把所有东西塞进一个不断增�
 - 路由上下文：文件、嵌套 `AGENTS.md`、完整 skill 内容和 memory 读取结果，只有在 agent 需要时才进入对话。
 - 工具压缩：当上下文占用达到窗口的 85% 时，先把大体积结构化工具结果替换成短摘要；如果压到 60% 以下，就不再额外调用 LLM compact。
 - 会话压缩：如果工具压缩仍然不够，Friday 保留原有 compact 流程，并在压缩前先给 agent 一次机会把长期事实写入 memory。
+- 验证循环：当某一轮修改了交付物，Friday 会用独立 verifier 检查工作区状态，并在失败时把反馈交给 main agent 修复一次。
+- Goal loop：`/goal <task>` 每轮都会强制验证，并持续到 verifier 通过、给出阻塞证据，或达到尝试上限。
 - 预算可见：`/context` 会拆分展示 system prompt、skill catalog、tool schemas、messages、tool results 的当前占用。
 
 默认上下文窗口按 128K tokens 计算，可以用 `FRIDAY_CONTEXT_WINDOW` 覆盖。
@@ -106,7 +111,7 @@ Friday 把持久权限和 prompt 规则分开：
 - `.friday/pending_approval.json`：命令需要用户确认时写入的一次性 pending approval。
 - `FRIDAY.md`：人类可读的项目规则，可以说明权限策略，但不负责执行。
 
-Bash 运行前会先检查 `permissions.json`。deny 规则会阻止命令，allow 规则会直接运行，approval 规则会创建待审批项，内置危险命令启发式作为兜底。
+Bash 运行前会先检查 `permissions.json`。deny 规则会阻止命令，allow 规则会直接运行，approval 规则会创建待审批项，内置危险命令启发式作为兜底。审批通过后，Friday 会把命令执行结果写回上下文，再由 agent 生成面向用户的最终回复。
 
 ## Skills
 
@@ -162,6 +167,7 @@ friday ask "summarize this project"
 friday resume
 friday approve
 friday reject
+friday chat   # 然后输入 /goal 描述任务
 friday memory
 friday reset
 ```

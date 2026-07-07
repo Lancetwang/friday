@@ -9,7 +9,9 @@ from agent_core import RunContext
 
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday
 from friday.context import compact_tool_results, context_report
+from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
+from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt
 
 
 class ToolTests(unittest.TestCase):
@@ -252,7 +254,7 @@ class PromptTests(unittest.TestCase):
                 text = build_instructions(root, root / ".friday")
 
             self.assertIn("[truncated:", text)
-            self.assertLess(len(text), PROJECT_INSTRUCTIONS_LIMIT + 3000)
+            self.assertLess(len(text), PROJECT_INSTRUCTIONS_LIMIT + 4000)
 
 
 class CompactTests(unittest.TestCase):
@@ -343,6 +345,162 @@ class CompactTests(unittest.TestCase):
             self.assertEqual(summary, "Continue with the memory harness work.")
             self.assertIn("Conversation Summary", new_context.messages[-1]["content"])
             self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])
+
+
+class VerificationTests(unittest.TestCase):
+    def test_verification_is_required_only_for_delivery_changes(self) -> None:
+        read_events = [{"type": "tool.call", "data": {"name": "Read", "arguments": {"path": "x.py"}}}]
+        write_events = [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}]
+        bash_write_events = [{"type": "tool.call", "data": {"name": "Bash", "arguments": {"command": "Set-Content x.py hi"}}}]
+
+        self.assertFalse(needs_verification(read_events))
+        self.assertTrue(needs_verification(write_events))
+        self.assertTrue(needs_verification(bash_write_events))
+
+    def test_verifier_prompt_excludes_main_answer(self) -> None:
+        prompt = verification_prompt("fix the bug", [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}])
+
+        self.assertIn("fix the bug", prompt)
+        self.assertIn("Do not trust", prompt)
+        self.assertNotIn("main answer", prompt.lower())
+
+    def test_verified_chat_repairs_once_when_verifier_fails(self) -> None:
+        class FakeAgent:
+            def __init__(self) -> None:
+                self.prompts = []
+
+            def chat(self, prompt, *args, **kwargs) -> str:
+                self.prompts.append(prompt)
+                return "answer"
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.events = []
+                self.metadata = {"workspace": "."}
+                self.emitted = []
+
+            def emit(self, event_type: str, **kwargs) -> None:
+                self.emitted.append((event_type, kwargs))
+
+        agent = FakeAgent()
+        context = FakeContext()
+        results = [
+            {"passed": False, "feedback": "x.py still fails"},
+            {"passed": True, "feedback": ""},
+        ]
+
+        with patch("friday.loop.verify_friday", side_effect=results):
+            answer, verifications = verified_chat(agent, context, "fix x", "instructions")
+
+        self.assertEqual(answer, "answer")
+        self.assertEqual(len(agent.prompts), 2)
+        self.assertIn("x.py still fails", agent.prompts[1])
+        self.assertEqual([item["passed"] for item in verifications], [False, True])
+        self.assertEqual(len(context.emitted), 2)
+
+    def test_goal_chat_loops_until_pass_or_blocked(self) -> None:
+        class FakeAgent:
+            def __init__(self) -> None:
+                self.prompts = []
+
+            def chat(self, prompt, *args, **kwargs) -> str:
+                self.prompts.append(prompt)
+                return "answer"
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.events = []
+                self.metadata = {"workspace": "."}
+                self.emitted = []
+
+            def emit(self, event_type: str, **kwargs) -> None:
+                self.emitted.append((event_type, kwargs))
+
+        results = [
+            {"passed": False, "blocked": False, "feedback": "not done"},
+            {"passed": True, "blocked": False, "feedback": ""},
+        ]
+        agent = FakeAgent()
+        context = FakeContext()
+        with patch("friday.loop.verify_friday", side_effect=results):
+            answer, verifications = goal_chat(agent, context, "finish it", "instructions", max_attempts=5)
+
+        self.assertEqual(answer, "answer")
+        self.assertEqual(len(agent.prompts), 2)
+        self.assertEqual([item["passed"] for item in verifications], [False, True])
+
+        blocked_agent = FakeAgent()
+        blocked_context = FakeContext()
+        with patch("friday.loop.verify_friday", return_value={"passed": False, "blocked": True, "feedback": "missing dependency"}):
+            _answer, blocked = goal_chat(blocked_agent, blocked_context, "finish it", "instructions", max_attempts=5)
+
+        self.assertEqual(len(blocked_agent.prompts), 1)
+        self.assertTrue(blocked[0]["blocked"])
+
+    def test_verifier_error_stops_without_repairing(self) -> None:
+        class FakeAgent:
+            def __init__(self) -> None:
+                self.prompts = []
+
+            def chat(self, prompt, *args, **kwargs) -> str:
+                self.prompts.append(prompt)
+                return "answer"
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.events = []
+                self.metadata = {"workspace": "."}
+                self.emitted = []
+
+            def emit(self, event_type: str, **kwargs) -> None:
+                self.emitted.append((event_type, kwargs))
+
+        error = {"passed": False, "error": True, "feedback": "Verifier failed"}
+        agent = FakeAgent()
+        context = FakeContext()
+
+        with patch("friday.loop.verify_friday", return_value=error):
+            answer, verifications = verified_chat(agent, context, "fix x", "instructions")
+
+        self.assertEqual(answer, "answer")
+        self.assertEqual(len(agent.prompts), 1)
+        self.assertTrue(verifications[0]["error"])
+
+    def test_pending_approval_stops_without_repairing(self) -> None:
+        class FakeAgent:
+            def __init__(self) -> None:
+                self.prompts = []
+
+            def chat(self, prompt, *args, **kwargs) -> str:
+                self.prompts.append(prompt)
+                return "answer"
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.events = []
+                self.metadata = {"workspace": "."}
+                self.emitted = []
+
+            def emit(self, event_type: str, **kwargs) -> None:
+                self.emitted.append((event_type, kwargs))
+
+        pending = {"passed": False, "approval_required": True, "feedback": "Approve first"}
+        agent = FakeAgent()
+        context = FakeContext()
+
+        with patch("friday.loop.verify_friday", return_value=pending):
+            _answer, verifications = verified_chat(agent, context, "delete x", "instructions")
+
+        self.assertEqual(len(agent.prompts), 1)
+        self.assertTrue(verifications[0]["approval_required"])
+
+    def test_parse_verification_accepts_blocked(self) -> None:
+        parsed = parse_verification('{"passed": false, "blocked": true, "evidence": ["x"], "feedback": "cannot"}')
+
+        self.assertTrue(parsed["blocked"])
+        self.assertFalse(parsed["passed"])
+        self.assertEqual(AGENT_MAX_STEPS, 10000)
+        self.assertEqual(VERIFIER_MAX_STEPS, 10000)
 
 
 class ResumeTests(unittest.TestCase):

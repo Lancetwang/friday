@@ -6,6 +6,7 @@ from pathlib import Path
 
 from friday.app import build_friday, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_friday, save_turn
 from friday.context import context_report
+from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.tui_node import run_tui
 from friday.tools import approve_pending, build_tools
 
@@ -17,7 +18,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output.")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("init", help="Create AGENTS.md and Friday memory files.")
+    sub.add_parser("init", help="Create Friday project files.")
 
     ask = sub.add_parser("ask", help="Ask once.")
     ask.add_argument("text", nargs="+")
@@ -124,6 +125,13 @@ def _slash(text: str, stream: bool, agent, context):
     elif command == "resume":
         agent, context, count = resume_friday(stream=stream)
         print(f"resumed {count} turns")
+    elif command.startswith("goal"):
+        goal = text.split(" ", 1)[1].strip() if " " in text else ""
+        if not goal:
+            print("usage: /goal describe the goal")
+        else:
+            agent, context, answer = _goal(agent, context, goal, stream)
+            _save(context, f"/goal {goal}", answer)
     elif command == "approve":
         print(json_dump(approve_pending()))
     elif command == "reject":
@@ -162,16 +170,45 @@ def _ask(agent, context, text: str, stream: bool):
     agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
     if notice:
         print(f"[context] {notice.split(':', 1)[0]}")
-    answer = agent.chat(
+    answer, verifications = verified_chat(
+        agent,
+        context,
         text,
-        context=context,
-        max_steps=20,
+        agent.instructions or "",
+        max_steps=AGENT_MAX_STEPS,
         on_delta=_print_delta if stream else None,
     )
     if stream:
         print()
     else:
         print(answer)
+    for result in verifications:
+        print(f"[verify] {'passed' if result.get('passed') else 'failed'}")
+        if result.get("feedback"):
+            print(result["feedback"])
+    return agent, context, answer
+
+
+def _goal(agent, context, text: str, stream: bool):
+    agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
+    if notice:
+        print(f"[context] {notice.split(':', 1)[0]}")
+    answer, verifications = goal_chat(
+        agent,
+        context,
+        text,
+        agent.instructions or "",
+        on_delta=_print_delta if stream else None,
+    )
+    if stream:
+        print()
+    else:
+        print(answer)
+    for result in verifications:
+        status = "passed" if result.get("passed") else "blocked" if result.get("blocked") else "failed"
+        print(f"[goal verify] attempt {result.get('attempt')}: {status}")
+        if result.get("feedback"):
+            print(result["feedback"])
     return agent, context, answer
 
 

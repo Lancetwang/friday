@@ -18,8 +18,10 @@ The point of this repo is showing how a real personal agent can be assembled on 
 - Plug-in skills: reusable `SKILL.md` workflows are discovered from project and home skill folders, then loaded on demand.
 - Layered memory: user, global, and project memory are separate from disposable conversation compaction.
 - Multi-stage context compression: large tool results are compacted first; LLM conversation compact is kept for cases where tool compaction is not enough.
+- Automatic verification loop: turns that change deliverables are checked by an independent verifier agent, with one repair attempt on failure.
+- Goal mode: `/goal <task>` repeats main-agent attempts with verifier feedback until pass, blocked, or attempt limit.
 - Context budget reporting: `/context` shows the current system prompt, skill catalog, tool schema, message, and tool-result footprint.
-- Program-enforced Bash permissions: `.friday/permissions.json` provides persistent allow/deny/approval rules; one-shot approvals use `/approve`.
+- Program-enforced Bash permissions: `.friday/permissions.json` provides persistent allow/deny/approval rules; `/approve` executes the pending command and feeds the result back into the same session.
 - Session resume: recent `.friday/sessions` can be restored as whole conversations; `/resume` in the TUI lets you pick one.
 - Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
 - Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
@@ -47,6 +49,7 @@ flowchart TD
     LLMCompact --> Ready
 
     Ready --> Runtime["agent-core-runtime Agent"]
+    Runtime --> Verify["Verifier loop<br/>workspace state vs user goal"]
     Runtime --> LLM["OpenAI-compatible LLM"]
     Runtime --> Tools["Small tool set<br/>Read / Write / Edit / Bash / Glob / Grep / Skill / Memory"]
     Tools --> State
@@ -94,6 +97,8 @@ Friday treats context as layers instead of one ever-growing prompt:
 - Routed context: files, nested `AGENTS.md`, full skill bodies, and memory reads enter the conversation only when the agent asks for them.
 - Tool compaction: when context usage reaches 85% of the configured window, oversized structured tool results are replaced with short summaries. If usage drops below 60%, the session keeps going without an LLM compact.
 - Conversation compact: if tool compaction is not enough, Friday keeps the existing compact flow and first gives the agent a chance to save durable facts to memory.
+- Verification: after a turn changes deliverables, Friday runs an independent verifier against the workspace state and feeds failure feedback back to the main agent once.
+- Goal loop: `/goal <task>` forces verification after each attempt and continues until the verifier passes, blocks with evidence, or reaches the attempt limit.
 - Budget visibility: `/context` prints the current breakdown for system prompt, skill catalog, tool schemas, messages, and tool results.
 
 The default context window is 128K tokens and can be overridden with `FRIDAY_CONTEXT_WINDOW`.
@@ -106,7 +111,7 @@ Friday separates persistent permissions from prompt rules:
 - `.friday/pending_approval.json`: one-shot pending approval written when a command needs user confirmation.
 - `FRIDAY.md`: human-readable project guidance; it can mention the permission policy but does not enforce it.
 
-Bash checks `permissions.json` before running. Deny rules block, allow rules run, approval rules create a pending approval, and the built-in dangerous-command heuristic remains the fallback.
+Bash checks `permissions.json` before running. Deny rules block, allow rules run, approval rules create a pending approval, and the built-in dangerous-command heuristic remains the fallback. After approval, Friday records the executed command result in context and lets the agent produce the final user-facing reply.
 
 ## Skills
 
@@ -162,6 +167,7 @@ friday ask "summarize this project"
 friday resume
 friday approve
 friday reject
+friday chat   # then type /goal describe the task
 friday memory
 friday reset
 ```

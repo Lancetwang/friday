@@ -6,6 +6,7 @@ export type GatewayEvent =
   | { type: 'message.complete'; payload: { metrics?: MessageMetrics; text: string } }
   | { type: 'tool.start'; payload: { name: string; arguments?: unknown } }
   | { type: 'tool.complete'; payload: { name: string; error?: boolean; content?: string } }
+  | { type: 'verification.complete'; payload: VerificationResult }
   | { type: 'gateway.stderr'; payload: { line: string } }
   | { type: 'gateway.protocol_error'; payload: { preview: string } }
 
@@ -26,4 +27,13 @@ export interface MessageMetrics {
   estimated_tokens?: boolean
   input_tokens?: number | null
   output_tokens?: number | null
+}
+
+export interface VerificationResult {
+  approval_required?: boolean
+  evidence?: unknown[]
+  error?: boolean
+  feedback?: string
+  passed?: boolean
+  required?: boolean
 }

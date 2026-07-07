@@ -28,6 +28,7 @@ const HELP_TEXT = `# Friday commands
 | \`/memory\` | Print the effective prompt, including user, project, and memory context. |
 | \`/context\` | Print current context usage. |
 | \`/compact\` | Summarize the live conversation into a fresh context. |
+| \`/goal <text>\` | Loop until the verifier passes, blocks, or the attempt limit is reached. |
 | \`/resume\` | Resume recent Friday session context. |
 | \`/approve\` | Run the pending dangerous shell command. |
 | \`/reject\` | Reject the pending dangerous shell command. |
@@ -38,6 +39,7 @@ const HELP_TEXT = `# Friday commands
 export function App({ gateway }: { gateway: GatewayClient }) {
   const app = useApp()
   const activeTurn = useRef<string | null>(null)
+  const activeGoal = useRef<string | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [toolsExpanded, setToolsExpanded] = useState(false)
@@ -58,6 +60,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'message.complete') {
         setMessages(items => [...items, { metrics: event.payload.metrics, role: 'assistant', text: event.payload.text }])
         activeTurn.current = null
+        activeGoal.current = null
         setStreaming('')
         setBusy(false)
       } else if (event.type === 'tool.start') {
@@ -72,6 +75,8 @@ export function App({ gateway }: { gateway: GatewayClient }) {
           setApprovalPicker(current => current ?? { approval, index: 0 })
         }
         setActivity(event.payload.error ? `tool ${event.payload.name} failed` : '')
+      } else if (event.type === 'verification.complete') {
+        setMessages(items => [...items, { role: 'system', text: formatVerification(event.payload) }])
       } else if (event.type === 'gateway.stderr') {
         setActivity(event.payload.line)
       } else if (event.type === 'gateway.protocol_error') {
@@ -103,9 +108,13 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (key.return) {
         const reject = approvalPicker.index === 1
         setApprovalPicker(null)
+        setBusy(true)
         void gateway.request(reject ? 'approval.reject' : 'approval.approve').then(result =>
-          setMessages(items => [...items, { role: 'system', text: `${reject ? 'Approval rejected' : 'Approval result'}:\n\n${JSON.stringify(result, null, 2)}` }])
-        )
+          handleApprovalResult(result, reject)
+        ).catch(error => {
+          setBusy(false)
+          setMessages(items => [...items, { role: 'system', text: error.message }])
+        })
       } else if (key.escape) {
         setApprovalPicker(null)
       }
@@ -155,6 +164,27 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       return
     }
     setInput('')
+    const goal = goalText(text)
+    if (goal != null) {
+      if (!goal) {
+        setMessages(items => [...items, { role: 'system', text: 'Usage: /goal describe the goal' }])
+        return
+      }
+      setBusy(true)
+      setStreaming('')
+      const turnId = `turn-${Date.now()}`
+      activeTurn.current = turnId
+      activeGoal.current = goal
+      setMessages(items => [...items, { role: 'user', text: `/goal ${goal}`, turnId }])
+      void gateway.request('goal.run', { text: goal }).catch(error => {
+        activeTurn.current = null
+        activeGoal.current = null
+        setBusy(false)
+        setStreaming('')
+        setMessages(items => [...items, { role: 'system', text: error.message }])
+      })
+      return
+    }
     if (runCommand(text, commandContext)) {
       return
     }
@@ -166,7 +196,9 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     setMessages(items => [...items, { role: 'user', text, turnId }])
     void gateway.request('chat.send', { text }).catch(error => {
       activeTurn.current = null
+      activeGoal.current = null
       setBusy(false)
+      setStreaming('')
       setMessages(items => [...items, { role: 'system', text: error.message }])
     })
   }
@@ -183,10 +215,27 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       <Composer busy={busy || Boolean(resumePicker) || Boolean(approvalPicker)} input={input} onChange={setInput} onSubmit={submit} />
     </Box>
   )
+
+  function handleApprovalResult(result: unknown, rejected: boolean) {
+    if (!rejected && isContinuedApproval(result)) {
+      return
+    }
+    setBusy(false)
+    setMessages(items => [...items, { role: 'system', text: `${rejected ? 'Approval rejected' : 'Approval result'}:\n\n${JSON.stringify(result, null, 2)}` }])
+  }
 }
 
 function cleanInput(value: string) {
   return value.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+}
+
+function goalText(value: string) {
+  const match = value.match(/^\/goal(?:\s+(.*))?$/i)
+  return match ? (match[1] ?? '').trim() : null
+}
+
+function isContinuedApproval(result: unknown) {
+  return Boolean(result && typeof result === 'object' && (result as { continued?: unknown }).continued)
 }
 
 function runCommand(
@@ -513,6 +562,15 @@ function openApprovalPicker(
       setMessages(items => [...items, { role: 'system', text: approval.message || 'No pending approval.' }])
     }
   })
+}
+
+function formatVerification(result: { approval_required?: boolean; error?: boolean; evidence?: unknown[]; feedback?: string; passed?: boolean }) {
+  const status = result.approval_required ? 'approval pending' : result.error ? 'error' : result.passed ? 'passed' : 'failed'
+  const evidence = Array.isArray(result.evidence) && result.evidence.length
+    ? `\n\nEvidence:\n${result.evidence.map(item => `- ${String(item)}`).join('\n')}`
+    : ''
+  const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : ''
+  return `Verification ${status}.${evidence}${feedback}`
 }
 
 function shortText(value: string, max: number) {

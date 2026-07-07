@@ -50,6 +50,47 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertIn("hello", text)
         self.assertNotIn("answer", text)
 
+    def test_gateway_continues_pending_goal_after_approval(self) -> None:
+        gateway = Gateway()
+        gateway.pending_after_approval = {"text": "delete file", "goal": True}
+        calls = []
+
+        def chat(text, *, goal=False, approval_result=None, save_user=None):
+            calls.append((text, goal, approval_result, save_user))
+            return {"text": "continued"}
+
+        with patch("friday.tui_gateway.approve_pending", return_value={"approved": True}):
+            with patch.object(gateway, "chat", side_effect=chat):
+                with patch.object(gateway, "write"):
+                    gateway.handle({"id": "1", "method": "approval.approve"})
+
+        self.assertEqual(calls, [("delete file", True, {"approved": True}, "/approve")])
+        self.assertIsNone(gateway.pending_after_approval)
+
+    def test_gateway_continues_normal_chat_after_approval(self) -> None:
+        gateway = Gateway()
+        gateway.pending_after_approval = {"text": "delete file", "goal": False}
+        calls = []
+
+        def chat(text, *, goal=False, approval_result=None, save_user=None):
+            calls.append((text, goal, approval_result, save_user))
+            return {"text": "deleted"}
+
+        result = {
+            "approved": True,
+            "result": {"exit_code": 0, "output": ""},
+        }
+        with patch("friday.tui_gateway.approve_pending", return_value=result):
+            with patch.object(gateway, "chat", side_effect=chat):
+                with patch.object(gateway, "write"):
+                    gateway.handle({"id": "1", "method": "approval.approve"})
+
+        self.assertIn("approved the pending command", calls[0][0])
+        self.assertFalse(calls[0][1])
+        self.assertEqual(calls[0][2], result)
+        self.assertEqual(calls[0][3], "/approve")
+        self.assertIsNone(gateway.pending_after_approval)
+
 
 if __name__ == "__main__":
     unittest.main()
