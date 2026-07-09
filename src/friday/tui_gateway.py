@@ -10,9 +10,10 @@ from typing import Any
 from agent_core import Agent, AgentEvent, RunContext
 
 from friday.app import build_friday, build_instructions, compact_friday, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
-from friday.context import context_report
+from friday.context import context_report, usage_from_events
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.tools import approve_pending, build_tools, pending_approval
+from friday.trace import write_trace
 
 _real_stdout = sys.stdout
 sys.stdout = sys.stderr
@@ -115,13 +116,16 @@ class Gateway:
         if approval_result is not None:
             context.add_message("system", "## Approval Result\n" + json.dumps(approval_result, ensure_ascii=False, indent=2))
         self.event("message.start", {"text": text})
+        start_event = len(context.events)
+        prompt_messages = [dict(message) for message in context.get_messages()]
         start = time.perf_counter()
+        verifications: list[dict[str, Any]] = []
 
         def delta(chunk: str) -> None:
             self.event("message.delta", {"text": chunk})
 
         if goal:
-            answer, _ = goal_chat(
+            answer, verifications = goal_chat(
                 agent,
                 context,
                 text,
@@ -131,7 +135,7 @@ class Gateway:
                 on_verify=lambda result: self.event("verification.complete", result),
             )
         else:
-            answer, _ = verified_chat(
+            answer, verifications = verified_chat(
                 agent,
                 context,
                 text,
@@ -143,7 +147,7 @@ class Gateway:
         if context.events:
             pending = pending_approval(Path(context.metadata["workspace"]))
             self.pending_after_approval = {"text": text, "goal": goal} if pending.get("pending") else None
-        usage = _usage_from_events([event.to_dict() for event in context.events])
+        usage = usage_from_events([event.to_dict() for event in context.events])
         context.metadata["friday.last_usage"] = usage
         estimated = usage["input_tokens"] is None or usage["output_tokens"] is None
         metrics = {
@@ -153,12 +157,24 @@ class Gateway:
             "output_tokens": usage["output_tokens"] or _estimate_tokens(answer),
         }
         self.event("message.complete", {"text": answer, "metrics": metrics})
+        write_trace(
+            Path(context.metadata["workspace"]),
+            mode="approve" if save_user == "/approve" else "goal" if goal else "chat",
+            user=save_user or (f"/goal {text}" if goal else text),
+            assistant=answer,
+            context=context,
+            start_event=start_event,
+            prompt_messages=prompt_messages,
+            metrics=metrics,
+            verifications=verifications,
+        )
         save_turn(
             Path(context.metadata["workspace"]),
             save_user or (f"/goal {text}" if goal else text),
             answer,
             [event.to_dict() for event in context.events[-20:]],
             str(context.metadata.get("session_id") or ""),
+            context.get_messages(),
         )
         return {"text": answer}
 
@@ -205,44 +221,15 @@ class Gateway:
             _real_stdout.flush()
 
 
-def _usage_from_events(events: list[dict[str, Any]]) -> dict[str, int | None]:
-    for event in reversed(events):
-        usage = _find_usage(event)
-        if usage:
-            return {
-                "input_tokens": _int_value(usage, "input_tokens", "prompt_tokens"),
-                "output_tokens": _int_value(usage, "output_tokens", "completion_tokens"),
-            }
-    return {"input_tokens": None, "output_tokens": None}
-
-
-def _find_usage(value: Any) -> dict[str, Any] | None:
-    if isinstance(value, dict):
-        usage = value.get("usage")
-        if isinstance(usage, dict):
-            return usage
-        for child in value.values():
-            found = _find_usage(child)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = _find_usage(child)
-            if found:
-                return found
-    return None
-
-
-def _int_value(value: dict[str, Any], *names: str) -> int | None:
-    for name in names:
-        item = value.get(name)
-        if isinstance(item, int):
-            return item
-    return None
+def _approval_followup_prompt(result: dict[str, Any]) -> str:
+    return (
+        "The user approved the pending command and it has now executed. "
+        "Use the approval result in the system context to continue or briefly report the final state to the user. "
+        "Do not ask for approval again unless a new dangerous action is required."
+    )
 
 
 def _input_text(context: RunContext, answer: str) -> str:
-    # Include system instructions so estimated input tokens count the harness prefix.
     parts = []
     for message in context.get_messages():
         content = str(message.get("content", ""))
@@ -253,16 +240,8 @@ def _input_text(context: RunContext, answer: str) -> str:
 
 
 def _estimate_tokens(text: str) -> int:
-    # ponytail: rough display fallback; replace with provider usage when available.
+    # ponytail: local display estimate; provider usage wins when present.
     return max(1, (len(text) + 3) // 4)
-
-
-def _approval_followup_prompt(result: dict[str, Any]) -> str:
-    return (
-        "The user approved the pending command and it has now executed. "
-        "Use the approval result in the system context to continue or briefly report the final state to the user. "
-        "Do not ask for approval again unless a new dangerous action is required."
-    )
 
 
 if __name__ == "__main__":

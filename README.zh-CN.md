@@ -14,12 +14,13 @@ Friday 是一个本地命令行编码 agent。在工作区里运行 `friday`，�
 - 项目规则分层：`AGENTS.md` 是跨 agent 规则；`FRIDAY.md` 是 Friday 专属规则；local 变体保持本机私有。
 - 即插即用 skills：从项目和 home 目录发现可复用的 `SKILL.md` 工作流，按需加载。
 - 分层记忆：用户、全局、项目记忆彼此独立，和短期任务状态、可丢弃的 compact 会话摘要分开。
-- 多阶段上下文压缩：优先压缩大体积工具结果；只有工具压缩不够时，才触发 LLM 会话 compact。
+- 多阶段上下文压缩：大体积工具结果只有在 cheap probe 判断收益足够时才压缩；否则直接进入会话 compact。
 - 自动 verification loop：修改交付物的 turn 会由独立 verifier agent 检查，失败时给 main agent 一次修复机会。
 - Goal mode：`/goal <task>` 会结合 verifier 反馈持续尝试，直到通过、被证明阻塞，或达到尝试上限。
-- 上下文预算报告：`/context` 展示 system prompt、skill catalog、tool schema、messages、tool results 的当前占用。
+- 上下文预算报告：`/context` 展示 system prompt、skill catalog、tool schema、messages、tool results 的本地估算占用；如果最近一次 API 返回了 usage，也会展示精确输入/输出 token。
+- 本地 traces：每个 turn 都会写一行 JSONL，记录 prompt 摘要、runtime timeline、工具调用、验证结果、metrics 和最终回答。
 - 程序执行的 Bash 权限：`.friday/permissions.json` 提供持久 allow、deny、approval 规则；`/approve` 会执行待审批命令，并把结果带回同一个会话。
-- 会话恢复：可以把最近 `.friday/sessions` 恢复为会话上下文；TUI 里的 `/resume` 会先列出来让你选。
+- 会话恢复：新的 `.friday/sessions` 会保存完整消息快照，恢复时按 session 还原；旧记录会退回到紧凑文本上下文。
 - 小工具集：读写编辑文件、shell、glob、grep、memory 覆盖核心编码循环，不依赖庞大框架。
 - 本地状态：项目状态在 `<workspace>/.friday`，用户状态在 `~/.friday`。
 
@@ -81,14 +82,24 @@ Friday 把上下文拆成几层，而不是把所有东西塞进一个不断增�
 
 - 稳定前缀：身份、runtime 规则、用户画像、全局记忆、项目规则、环境信息、项目记忆按固定顺序组装，方便 prefix caching。
 - 路由上下文：文件、嵌套 `AGENTS.md`、完整 skill 内容和 memory 读取结果，只有在 agent 需要时才进入对话。
-- 工具压缩：当上下文占用达到窗口的 85% 时，先把大体积结构化工具结果替换成短摘要；如果压到 60% 以下，就不再额外调用 LLM compact。
-- 会话压缩：如果工具压缩仍然不够，Friday 保留原有 compact 流程，并在压缩前先给 agent 一次机会把长期事实写入 memory。
+- 工具压缩：当上下文占用达到窗口的 85% 时，Friday 会先 probe 大体积结构化工具结果；如果压缩它们预计能释放当前上下文至少 25% 的空间，就替换成短摘要。
+- 会话压缩：如果工具 probe 不值得做，Friday 保留原有 compact 流程，并在压缩前先给 agent 一次机会把长期事实写入 memory。
 - 短期状态：conversation compact 会按固定结构保留当前目标、已完成、未完成、尝试过的方法、决策、工作文件、命令结果、验证状态、下一步和最近对话。
 - 验证循环：当某一轮修改了交付物，Friday 会用独立 verifier 检查工作区状态，并在失败时把反馈交给 main agent 修复一次。
 - Goal loop：`/goal <task>` 每轮都会强制验证，并持续到 verifier 通过、给出阻塞证据，或达到尝试上限。
-- 预算可见：`/context` 会拆分展示 system prompt、skill catalog、tool schemas、messages、tool results 的当前占用。
+- 预算可见：`/context` 会拆分展示 system prompt、skill catalog、tool schemas、messages、tool results 的当前占用。Friday 会对本地拼出的部分做估算，并在 provider 返回 usage 时记录最近一次精确输入/输出 token。
 
 默认上下文窗口按 128K tokens 计算，可以用 `FRIDAY_CONTEXT_WINDOW` 覆盖。
+
+## 会话
+
+Friday 会把会话记录写到 `<workspace>/.friday/sessions`。当前记录包含用户输入、assistant 回复、最近工具事件、session id，以及当前 active message 的完整快照。恢复时优先使用这个快照，因此恢复的是模型可见的同一个会话，而不是从摘要里重新拼一个近似上下文。
+
+CLI 和 TUI 使用同一套保存/恢复路径。TUI 会给最近会话的交互式选择；CLI 的 `friday resume` 默认恢复最近会话。
+
+## Traces
+
+Friday 会把 turn trace 写到 `<workspace>/.friday/traces/YYYYMMDD.jsonl`。每条 trace 记录用户输入、调用前模型可见 prompt 摘要、紧凑 runtime timeline、工具调用/结果摘要、验证结果、metrics 和最终回答。这里记录的是可观察行为；模型私有思考不会从 runtime 暴露。
 
 ## 权限
 

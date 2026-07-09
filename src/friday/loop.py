@@ -100,7 +100,9 @@ def run_loop(
         "verifications": [],
     }
     flow = _loop_flow()
-    return flow.run(state, max_steps=FLOW_MAX_STEPS).payload["result"]
+    result = flow.run(state, max_steps=FLOW_MAX_STEPS).payload["result"]
+    context.metadata["friday.loop_status"] = result.status
+    return result
 
 
 def _loop_flow() -> Flow:

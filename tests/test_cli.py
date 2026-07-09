@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_core import RunContext
+
 from friday import cli
 from friday import tui_node
 
@@ -60,6 +62,22 @@ class CliTests(unittest.TestCase):
                 tui_node._configure_windows_console()
 
         self.assertEqual(kernel32.calls, [("in", 65001), ("out", 65001)])
+
+    def test_cli_approve_continues_chat_context(self) -> None:
+        agent = object()
+        context = RunContext()
+
+        with patch("friday.cli.approve_pending", return_value={"approved": True, "result": {"exit_code": 0}}):
+            with patch("friday.cli._ask", return_value=(agent, context, "done")) as ask:
+                with patch("friday.cli._save") as save:
+                    with patch("builtins.print"):
+                        returned_agent, returned_context = cli._slash("/approve", False, agent, context)
+
+        self.assertIs(returned_agent, agent)
+        self.assertIs(returned_context, context)
+        self.assertIn("Approval Result", context.get_messages()[-1]["content"])
+        ask.assert_called_once()
+        save.assert_called_once_with(context, "/approve", "done")
 
 
 if __name__ == "__main__":

@@ -14,12 +14,13 @@ It uses `agent-core-runtime` for agent execution and adds a Friday harness for p
 - Project rule layers: `AGENTS.md` is cross-agent guidance; `FRIDAY.md` is Friday-specific guidance; local variants stay private.
 - Plug-in skills: reusable `SKILL.md` workflows are discovered from project and home skill folders, then loaded on demand.
 - Layered memory: user, global, and project memory are separate from short-term task state and disposable conversation compaction.
-- Multi-stage context compression: large tool results are compacted first; LLM conversation compact is kept for cases where tool compaction is not enough.
+- Multi-stage context compression: large tool results are compacted only when a cheap probe says the space gain is worth it; otherwise Friday goes straight to conversation compact.
 - Automatic verification loop: turns that change deliverables are checked by an independent verifier agent, with one repair attempt on failure.
 - Goal mode: `/goal <task>` repeats main-agent attempts with verifier feedback until pass, blocked, or attempt limit.
-- Context budget reporting: `/context` shows the current system prompt, skill catalog, tool schema, message, and tool-result footprint.
+- Context budget reporting: `/context` shows local estimates for the system prompt, skill catalog, tool schemas, messages, and tool results, plus exact provider usage from the latest API response when available.
+- Local traces: each turn writes a JSONL trace with a prompt summary, runtime timeline, tool calls, verification results, metrics, and final answer.
 - Program-enforced Bash permissions: `.friday/permissions.json` provides persistent allow/deny/approval rules; `/approve` executes the pending command and feeds the result back into the same session.
-- Session resume: recent `.friday/sessions` can be restored as session context; `/resume` in the TUI lets you pick one.
+- Session resume: new sessions save the full message snapshot and can be restored as a session; older rows fall back to compact text context.
 - Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
 - Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
 
@@ -81,14 +82,24 @@ Friday treats context as layers instead of one ever-growing prompt:
 
 - Stable prefix: identity, runtime guidance, user profile, global memory, project instructions, environment, and project memory are assembled in a predictable order for prefix caching.
 - Routed context: files, nested `AGENTS.md`, full skill bodies, and memory reads enter the conversation only when the agent asks for them.
-- Tool compaction: when context usage reaches 85% of the configured window, oversized structured tool results are replaced with short summaries. If usage drops below 60%, the session keeps going without an LLM compact.
-- Conversation compact: if tool compaction is not enough, Friday keeps the existing compact flow and first gives the agent a chance to save durable facts to memory.
+- Tool compaction: when context usage reaches 85% of the configured window, Friday probes oversized structured tool results first. If compacting them would free at least 25% of the current context, it replaces them with short summaries.
+- Conversation compact: if the tool probe is not worthwhile, Friday keeps the existing compact flow and first gives the agent a chance to save durable facts to memory.
 - Short-term state: conversation compact uses a fixed schema for current goal, completed work, open items, tried methods, decisions, working files, command results, verification state, next steps, and recent conversations.
 - Verification: after a turn changes deliverables, Friday runs an independent verifier against the workspace state and feeds failure feedback back to the main agent once.
 - Goal loop: `/goal <task>` forces verification after each attempt and continues until the verifier passes, blocks with evidence, or reaches the attempt limit.
-- Budget visibility: `/context` prints the current breakdown for system prompt, skill catalog, tool schemas, messages, and tool results.
+- Budget visibility: `/context` prints the current breakdown for system prompt, skill catalog, tool schemas, messages, and tool results. Friday estimates the parts it builds locally and records exact input/output token usage from the latest API response when the provider returns it.
 
 The default context window is 128K tokens and can be overridden with `FRIDAY_CONTEXT_WINDOW`.
+
+## Sessions
+
+Friday writes session rows under `<workspace>/.friday/sessions`. Current rows include the user text, assistant reply, recent tool events, session id, and the full active message snapshot. Resume uses that snapshot so the restored session keeps the same model-visible conversation instead of reconstructing it from a lossy summary.
+
+Both CLI and TUI use the same save/resume path. The TUI gives an interactive picker for recent sessions; CLI `friday resume` restores the latest session.
+
+## Traces
+
+Friday writes turn traces under `<workspace>/.friday/traces/YYYYMMDD.jsonl`. A trace row records the user input, a model-visible prompt summary before the call, a compact runtime timeline, tool call/result summaries, verification results, metrics, and final answer. It records observable behavior only; private model reasoning is not available from the runtime.
 
 ## Permissions
 

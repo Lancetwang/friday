@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -286,10 +287,12 @@ class CompactTests(unittest.TestCase):
                 save_turn(root, f"user {index}", f"assistant {index}", [], "s1")
 
             state = (root / ".friday" / STATE_FILE).read_text(encoding="utf-8")
+            row = json.loads(next((root / ".friday" / "sessions").glob("*.jsonl")).read_text(encoding="utf-8").splitlines()[-1])
             self.assertIn("## Recent Conversations", state)
             self.assertNotIn("user 0", state)
             self.assertIn("user 11", state)
             self.assertEqual(state.count("- User:"), 10)
+            self.assertNotIn("events", row)
 
     def test_context_report_breaks_down_prompt_tools_and_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -297,6 +300,7 @@ class CompactTests(unittest.TestCase):
             context = RunContext()
             context.add_message("system", "## Runtime\nrules\n\n## Skill Catalog\n- test: skill")
             context.add_message("user", "hello")
+            context.metadata["friday.last_usage"] = {"input_tokens": 123, "output_tokens": 7}
             tools = build_tools(root, root / ".friday")
 
             report = context_report(context, tools)
@@ -305,6 +309,8 @@ class CompactTests(unittest.TestCase):
             self.assertIn("skill catalog", report)
             self.assertIn("tool schemas", report)
             self.assertIn("messages", report)
+            self.assertIn("input 123 / output 7 / total 130", report)
+            self.assertIn("Local est. tokens", report)
 
     def test_tool_result_compaction_summarizes_structured_output(self) -> None:
         context = RunContext()
@@ -326,7 +332,7 @@ class CompactTests(unittest.TestCase):
         self.assertIn("exit_code=0", context.messages[-1]["content"])
         self.assertLess(len(context.messages[-1]["content"]), 800)
 
-    def test_prepare_context_compacts_tools_before_llm_compact(self) -> None:
+    def test_prepare_context_compacts_tools_when_probe_is_worthwhile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             context = RunContext()
             context.metadata["workspace"] = tmp
@@ -340,6 +346,24 @@ class CompactTests(unittest.TestCase):
             self.assertIs(agent, fake_agent)
             self.assertIs(new_context, context)
             self.assertIn("tool results compacted", notice)
+
+    def test_prepare_context_compacts_conversation_when_tool_probe_is_small(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = RunContext()
+            context.metadata["workspace"] = tmp
+            context.add_message("user", "x" * 7000)
+            context.emit("tool.call", category="tool", data={"tool_call_id": "call-1", "name": "Bash", "arguments": {"command": "echo ok"}})
+            context.add_message("tool", '{"exit_code":0,"output":"' + ("y" * 1000) + '"}', tool_call_id="call-1")
+
+            fake_agent = object()
+            rebuilt = RunContext()
+            with patch.dict("os.environ", {"FRIDAY_CONTEXT_WINDOW": "2500"}):
+                with patch("friday.app.compact_friday", return_value=(object(), rebuilt, "summary")):
+                    agent, new_context, notice = prepare_context_for_chat(fake_agent, context, stream=False)
+
+            self.assertIs(new_context, rebuilt)
+            self.assertIsNot(agent, fake_agent)
+            self.assertIn("conversation compacted", notice)
 
     def test_compact_reviews_memory_then_rebuilds_context(self) -> None:
         class FakeAgent:
@@ -370,7 +394,13 @@ class CompactTests(unittest.TestCase):
             context = type("Context", (), {})()
             context.metadata = {"workspace": str(root)}
             fake_agent = FakeAgent()
-            with patch("friday.app.build_friday", return_value=(object(), FakeContext())):
+
+            def fake_build(workspace, *, stream=True):
+                rebuilt = FakeContext()
+                rebuilt.add_message("system", "## Short-Term State\n" + (Path(workspace) / ".friday" / STATE_FILE).read_text(encoding="utf-8"))
+                return object(), rebuilt
+
+            with patch("friday.app.build_friday", side_effect=fake_build):
                 agent, new_context, summary = compact_friday(fake_agent, context, stream=False)
 
             self.assertIn("Before compacting", fake_agent.prompts[0])
@@ -555,6 +585,21 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(count, 1)
             self.assertIn("Resumed Session", context.messages[-1]["content"])
             self.assertIn("User: hi", context.messages[-1]["content"])
+
+    def test_resume_restores_full_message_snapshot_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = RunContext()
+            context.add_message("system", "prefix")
+            context.add_message("user", "hi")
+            context.add_message("assistant", "hello")
+
+            save_turn(root, "hi", "hello", [], "s1", context.get_messages())
+            _agent, resumed, count = resume_friday(root, stream=False)
+
+            self.assertEqual(count, 1)
+            self.assertEqual(resumed.get_messages(), context.get_messages())
+            self.assertNotIn("Resumed Session", resumed.get_messages()[-1]["content"])
 
     def test_resume_clears_legacy_rows_without_session_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

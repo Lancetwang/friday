@@ -99,7 +99,6 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     workspace = Path(context.metadata["workspace"])
     _write_short_state(workspace, summary)
     new_agent, new_context = build_friday(workspace, stream=stream)
-    new_context.add_message("system", f"## Short-Term State\n{summary}")
     return new_agent, new_context, summary
 
 
@@ -107,14 +106,10 @@ def prepare_context_for_chat(agent: Agent, context: RunContext, *, stream: bool 
     root = Path(context.metadata["workspace"])
     tools = build_tools(root, root / ".friday")
     if should_compact_conversation(context, tools):
-        context.metadata.pop("friday.compact_next_at_85", None)
         agent, context, summary = compact_friday(agent, context, stream=stream)
         return agent, context, f"conversation compacted: {summary}"
     if should_compact_tools(context, tools):
         count = compact_tool_results(context, tools)
-        if count == 0:
-            context.metadata["friday.compact_next_at_85"] = True
-            return agent, context, "conversation compact scheduled"
         return agent, context, f"tool results compacted: {count}"
     return agent, context, ""
 
@@ -123,10 +118,21 @@ def resume_friday(workspace: Path | None = None, *, stream: bool = True, resume_
     root = (workspace or Path.cwd()).resolve()
     agent, context = build_friday(root, stream=stream)
     rows = _resume_rows(root, resume_id)
-    if rows:
+    messages = rows[-1].get("messages") if rows else None
+    if isinstance(messages, list):
+        _replace_context_messages(context, messages)
+        context.metadata["session_id"] = str(rows[-1].get("session_id") or context.metadata.get("session_id") or "")
+    elif rows:
         content = "\n\n".join(f"User: {row.get('user', '')}\nFriday: {row.get('assistant', '')}" for row in rows)
         context.add_message("system", f"## Resumed Session\n{content}")
     return agent, context, len(rows)
+
+
+def _replace_context_messages(context: RunContext, messages: list[Any]) -> None:
+    clean = [dict(message) for message in messages if isinstance(message, dict)]
+    context.messages = clean
+    if context.active_message_scope is not None:
+        context.message_scopes[context.active_message_scope] = clean
 
 
 def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dict[str, str]]:
@@ -196,7 +202,14 @@ def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None
     return removed
 
 
-def save_turn(workspace: Path, user: str, assistant: str, events: list[dict[str, Any]], session_id: str | None = None) -> Path:
+def save_turn(
+    workspace: Path,
+    user: str,
+    assistant: str,
+    events: list[dict[str, Any]],
+    session_id: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+) -> Path:
     sessions = workspace / ".friday" / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
     path = sessions / f"{datetime.now().strftime('%Y%m%d')}.jsonl"
@@ -204,7 +217,7 @@ def save_turn(workspace: Path, user: str, assistant: str, events: list[dict[str,
         "time": datetime.now().isoformat(timespec="seconds"),
         "user": user,
         "assistant": assistant,
-        "events": events,
+        "messages": messages or [],
         "session_id": session_id or datetime.now().strftime("%Y%m%d%H%M%S%f"),
     }
     with path.open("a", encoding="utf-8") as file:

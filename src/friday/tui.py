@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from friday.app import build_friday, build_instructions, prepare_context_for_cha
 from friday.context import context_report
 from friday.loop import AGENT_MAX_STEPS
 from friday.tools import build_tools
+from friday.trace import write_trace
 
 BLUE = "#2f81f7"
 CYAN = "#39c5bb"
@@ -112,6 +114,9 @@ class FridayTUI:
         self.agent, self.context, notice = prepare_context_for_chat(self.agent, self.context, stream=self.stream)
         if notice:
             self.console.print(_bar("Context " + notice.split(":", 1)[0], limit=self.console.width))
+        start_event = len(self.context.events)
+        prompt_messages = [dict(message) for message in self.context.get_messages()]
+        start = time.perf_counter()
         answer = self.agent.chat(
             text,
             context=self.context,
@@ -128,12 +133,24 @@ class FridayTUI:
                 self.console.print(_markdown(answer))
         else:
             self.console.print(_markdown(answer))
+        write_trace(
+            Path(self.context.metadata["workspace"]),
+            mode="chat",
+            user=text,
+            assistant=answer,
+            context=self.context,
+            start_event=start_event,
+            prompt_messages=prompt_messages,
+            metrics={"elapsed_ms": int((time.perf_counter() - start) * 1000)},
+            context_notice=notice,
+        )
         save_turn(
             Path(self.context.metadata["workspace"]),
             text,
             answer,
             [event.to_dict() for event in self.context.events[-20:]],
             str(self.context.metadata.get("session_id") or ""),
+            self.context.get_messages(),
         )
 
     def on_event(self, event: AgentEvent) -> None:

@@ -8,7 +8,7 @@ from agent_core import RunContext
 
 DEFAULT_CONTEXT_WINDOW = 128000
 TOOL_COMPACT_AT = 0.85
-TOOL_COMPACT_TARGET = 0.60
+TOOL_COMPACT_GAIN = 0.25
 TOOL_RESULT_LIMIT = 900
 
 
@@ -54,48 +54,58 @@ def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
     lines = [
         "# Context",
         f"- window: {context_window()} tokens",
-        f"- current: ~{total_tokens} tokens / {total_chars} chars / {total_tokens / context_window():.1%}",
+        f"- current local estimate: ~{total_tokens} tokens / {total_chars} chars / {total_tokens / context_window():.1%}",
     ]
     usage = context.metadata.get("friday.last_usage")
     if isinstance(usage, dict):
-        lines.append(f"- last provider usage: input {usage.get('input_tokens', 'n/a')} / output {usage.get('output_tokens', 'n/a')}")
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        total = input_tokens + output_tokens if isinstance(input_tokens, int) and isinstance(output_tokens, int) else "n/a"
+        input_value = input_tokens if isinstance(input_tokens, int) else "n/a"
+        output_value = output_tokens if isinstance(output_tokens, int) else "n/a"
+        lines.append(f"- last provider usage: input {input_value} / output {output_value} / total {total}")
+    else:
+        lines.append("- last provider usage: n/a")
     lines.append("")
-    lines.append("| Part | Est. tokens | Exact chars |")
+    lines.append("| Part | Local est. tokens | Exact chars |")
     lines.append("| --- | ---: | ---: |")
     for name, value in rows:
         lines.append(f"| {name} | ~{_tokens(len(value))} | {len(value)} |")
     return "\n".join(lines)
 
 
+def usage_from_events(events: list[dict[str, Any]]) -> dict[str, int | None]:
+    for event in reversed(events):
+        usage = _find_usage(event)
+        if usage:
+            return {
+                "input_tokens": _int_value(usage, "input_tokens", "prompt_tokens"),
+                "output_tokens": _int_value(usage, "output_tokens", "completion_tokens"),
+            }
+    return {"input_tokens": None, "output_tokens": None}
+
+
 def should_compact_tools(context: RunContext, tools: list[Any] | None = None) -> bool:
-    return context_ratio(context, tools) >= TOOL_COMPACT_AT and not context.metadata.get("friday.compact_next_at_85")
+    return context_ratio(context, tools) >= TOOL_COMPACT_AT and tool_compaction_gain(context, tools) >= TOOL_COMPACT_GAIN
 
 
 def should_compact_conversation(context: RunContext, tools: list[Any] | None = None) -> bool:
-    return context_ratio(context, tools) >= TOOL_COMPACT_AT and bool(context.metadata.get("friday.compact_next_at_85"))
+    return context_ratio(context, tools) >= TOOL_COMPACT_AT and not should_compact_tools(context, tools)
+
+
+def tool_compaction_gain(context: RunContext, tools: list[Any] | None = None) -> float:
+    current = token_estimate(context, tools)
+    saved = _tokens(sum(before - after for _, before, after in _tool_compaction_probe(context)))
+    return saved / current if current else 0.0
 
 
 def compact_tool_results(context: RunContext, tools: list[Any] | None = None) -> int:
-    calls = _tool_calls(context)
     count = 0
-    for message in context.get_messages():
-        if message.get("role") != "tool" or message.get("friday_compacted"):
-            continue
+    for message, _, _ in _tool_compaction_probe(context):
         content = str(message.get("content", ""))
-        if len(content) <= TOOL_RESULT_LIMIT:
-            continue
-        call = calls.get(str(message.get("tool_call_id", "")), {})
-        message["content"] = _tool_summary(
-            str(call.get("name") or "tool"),
-            call.get("arguments", {}),
-            content,
-        )
+        message["content"] = _tool_summary_for_message(context, message, content)
         message["friday_compacted"] = True
         count += 1
-    if count and context_ratio(context, tools) < TOOL_COMPACT_TARGET:
-        context.metadata.pop("friday.compact_next_at_85", None)
-    elif count:
-        context.metadata["friday.compact_next_at_85"] = True
     return count
 
 
@@ -123,6 +133,31 @@ def _sections(text: str) -> dict[str, str]:
     return {key: "\n".join(value).strip() for key, value in sections.items()}
 
 
+def _find_usage(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        usage = value.get("usage")
+        if isinstance(usage, dict):
+            return usage
+        for child in value.values():
+            found = _find_usage(child)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_usage(child)
+            if found:
+                return found
+    return None
+
+
+def _int_value(value: dict[str, Any], *names: str) -> int | None:
+    for name in names:
+        item = value.get(name)
+        if isinstance(item, int):
+            return item
+    return None
+
+
 def _tokens(chars: int) -> int:
     return max(1, (chars + 3) // 4)
 
@@ -135,6 +170,23 @@ def _tool_calls(context: RunContext) -> dict[str, dict[str, Any]]:
             if tool_call_id:
                 calls[tool_call_id] = dict(event.data)
     return calls
+
+
+def _tool_compaction_probe(context: RunContext) -> list[tuple[dict[str, Any], int, int]]:
+    probe = []
+    for message in context.get_messages():
+        if message.get("role") != "tool" or message.get("friday_compacted"):
+            continue
+        content = str(message.get("content", ""))
+        if len(content) <= TOOL_RESULT_LIMIT:
+            continue
+        probe.append((message, len(content), len(_tool_summary_for_message(context, message, content))))
+    return probe
+
+
+def _tool_summary_for_message(context: RunContext, message: dict[str, Any], content: str) -> str:
+    call = _tool_calls(context).get(str(message.get("tool_call_id", "")), {})
+    return _tool_summary(str(call.get("name") or "tool"), call.get("arguments", {}), content)
 
 
 def _tool_summary(name: str, arguments: Any, content: str) -> str:
