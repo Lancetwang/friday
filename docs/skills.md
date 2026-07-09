@@ -14,16 +14,34 @@ Only skill names and descriptions enter the startup prompt. Full skill content i
 A minimal skill:
 
 ```markdown
-# My Skill
+---
+name: code-review
+description: Review code changes and report correctness risks, missing tests, and regressions.
+---
 
-Use when the user asks for this specific workflow.
+# Code Review
 
-Steps:
+Use when the user asks Friday to review code changes.
 
-1. Inspect the relevant files.
-2. Make the smallest safe change.
-3. Run the smallest useful check.
+## Workflow
+
+1. Inspect the changed files.
+2. Prioritize bugs, regressions, risky behavior, and missing tests.
+3. Report findings first, ordered by severity.
+4. Keep summaries short.
+
+## Checks
+
+- Prefer `git diff` and focused file reads.
+- Cite file paths and line numbers when possible.
+- Do not rewrite code unless the user asks.
 ```
 
-Keep skills focused. A skill should teach one repeatable workflow, not become a second system prompt.
+The frontmatter is the skill catalog:
 
+- `name`: stable skill id shown to the agent.
+- `description`: short routing text used before the full skill is loaded.
+
+The Markdown body is progressive disclosure. It is not included in the startup prompt; Friday reads it only after the agent chooses the skill with the `Skill` tool.
+
+Keep skills focused. A skill should teach one repeatable workflow, not become a second system prompt.
