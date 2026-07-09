@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -78,6 +79,22 @@ class CliTests(unittest.TestCase):
         self.assertIn("Approval Result", context.get_messages()[-1]["content"])
         ask.assert_called_once()
         save.assert_called_once_with(context, "/approve", "done")
+
+    def test_permission_flags_configure_environment(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("friday.cli.run_tui"):
+                cli.main(["--permission-allow", "--allowed-tools", "Bash(git log *)", "--disallowed-tools", "Bash(rm *)"])
+
+            self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "bypass")
+            self.assertEqual(os.environ["FRIDAY_ALLOWED_TOOLS"], '["Bash(git log *)"]')
+            self.assertEqual(os.environ["FRIDAY_DISALLOWED_TOOLS"], '["Bash(rm *)"]')
+
+    def test_permission_mode_flag_configures_environment(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("friday.cli.run_tui"):
+                cli.main(["--permission-mode", "dont-ask"])
+
+            self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "dont-ask")
 
 
 if __name__ == "__main__":

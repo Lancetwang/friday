@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -18,6 +20,11 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(prog="friday", description="Friday personal CLI agent.")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output.")
+    parser.add_argument("--permission-mode", choices=["manual", "accept-edits", "dont-ask", "bypass"], default=None)
+    parser.add_argument("--dangerously-skip-permissions", action="store_true", help="Bypass command approvals for sandboxed runs.")
+    parser.add_argument("--permission-allow", "--permission_allow", action="store_true", help="Alias for --dangerously-skip-permissions.")
+    parser.add_argument("--allowed-tools", "--allowedTools", action="append", default=[])
+    parser.add_argument("--disallowed-tools", "--disallowedTools", action="append", default=[])
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("init", help="Create Friday project files.")
@@ -36,6 +43,7 @@ def main(argv: list[str] | None = None) -> None:
     reset.add_argument("-y", "--yes", action="store_true", help="Skip reset confirmation.")
 
     args = parser.parse_args(argv)
+    _configure_permissions(args)
     command = args.command or "tui"
     stream = not args.no_stream
 
@@ -110,6 +118,17 @@ def _configure_stdio() -> None:
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _configure_permissions(args) -> None:
+    mode = args.permission_mode or "manual"
+    if args.dangerously_skip_permissions or args.permission_allow:
+        mode = "bypass"
+    os.environ["FRIDAY_PERMISSION_MODE"] = mode
+    if args.allowed_tools:
+        os.environ["FRIDAY_ALLOWED_TOOLS"] = json.dumps(args.allowed_tools, ensure_ascii=False)
+    if args.disallowed_tools:
+        os.environ["FRIDAY_DISALLOWED_TOOLS"] = json.dumps(args.disallowed_tools, ensure_ascii=False)
 
 
 def _slash(text: str, stream: bool, agent, context):
@@ -237,8 +256,6 @@ def _print_delta(text: str) -> None:
 
 
 def json_dump(value) -> str:
-    import json
-
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 

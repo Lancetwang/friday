@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import subprocess
@@ -336,20 +337,51 @@ def _dangerous_shell(command: str) -> str:
 
 
 def _permission_decision(friday_dir: Path, command: str) -> tuple[str, str]:
+    mode = os.getenv("FRIDAY_PERMISSION_MODE", "manual").strip().lower()
+    if mode == "bypass":
+        return "allow", "permission mode bypass"
     permissions = _read_permissions(friday_dir)
     bash = permissions.get("bash", {}) if isinstance(permissions, dict) else {}
     if not isinstance(bash, dict):
         bash = {}
-    if _matches_any(command, bash.get("deny", [])):
+    deny = [*list(bash.get("deny", []) if isinstance(bash.get("deny", []), list) else []), *_env_bash_rules("FRIDAY_DISALLOWED_TOOLS")]
+    allow = [*list(bash.get("allow", []) if isinstance(bash.get("allow", []), list) else []), *_env_bash_rules("FRIDAY_ALLOWED_TOOLS")]
+    if _matches_any(command, deny):
         return "deny", "matched deny rule"
-    if _matches_any(command, bash.get("allow", [])):
+    if _matches_any(command, allow):
         return "allow", "matched allow rule"
     if _matches_any(command, bash.get("require_approval", [])):
-        return "approval", "matched approval rule"
+        return _approval_or_deny(mode, "matched approval rule")
     reason = _dangerous_shell(command)
+    if mode == "accept-edits" and reason in {"writes or moves files", "redirects output to a file"}:
+        return "allow", "permission mode accept-edits"
     if reason:
-        return "approval", reason
+        return _approval_or_deny(mode, reason)
     return "allow", "safe by default"
+
+
+def _approval_or_deny(mode: str, reason: str) -> tuple[str, str]:
+    if mode == "dont-ask":
+        return "deny", f"{reason}; permission mode dont-ask"
+    return "approval", reason
+
+
+def _env_bash_rules(name: str) -> list[str]:
+    try:
+        specs = json.loads(os.getenv(name, "[]"))
+    except json.JSONDecodeError:
+        return []
+    rules = []
+    for item in specs if isinstance(specs, list) else []:
+        if not isinstance(item, str):
+            continue
+        spec = item.strip()
+        lowered = spec.lower()
+        if lowered == "bash":
+            rules.append("*")
+        elif lowered.startswith("bash(") and spec.endswith(")"):
+            rules.append(spec[5:-1].rstrip("* ").strip())
+    return rules
 
 
 def _read_permissions(friday_dir: Path) -> dict:
@@ -372,6 +404,8 @@ def _matches_any(command: str, rules) -> bool:
         if not isinstance(item, str):
             continue
         rule = item.strip().lower()
+        if rule == "*":
+            return True
         if rule and (raw == rule or raw.startswith(rule + " ") or surface == rule or surface.startswith(rule + " ")):
             return True
     return False

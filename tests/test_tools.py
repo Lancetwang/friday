@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,6 +112,37 @@ class ToolTests(unittest.TestCase):
             self.assertTrue(approval["approval_required"])
             self.assertNotIn("approval_required", allowed)
             self.assertEqual(quoted["exit_code"], 0)
+
+    def test_permission_modes_control_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "bypass"}, clear=False):
+                bypassed = tools["Bash"]("rm missing-file")
+            with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "dont-ask"}, clear=False):
+                denied = tools["Bash"]("rm missing-file")
+            with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "accept-edits"}, clear=False):
+                edit = tools["Bash"]('Set-Content allowed.txt "ok"')
+                delete = tools["Bash"]("Remove-Item allowed.txt")
+
+            self.assertNotIn("approval_required", bypassed)
+            self.assertTrue(denied["blocked"])
+            self.assertEqual(edit["exit_code"], 0)
+            self.assertTrue(delete["approval_required"])
+
+    def test_temporary_allowed_and_disallowed_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            with patch.dict(os.environ, {"FRIDAY_ALLOWED_TOOLS": '["Bash(rm missing-file *)"]'}, clear=False):
+                allowed = tools["Bash"]("rm missing-file")
+            with patch.dict(os.environ, {"FRIDAY_DISALLOWED_TOOLS": '["Bash(python -c deny *)"]'}, clear=False):
+                denied = tools["Bash"]("python -c deny")
+
+            self.assertNotIn("approval_required", allowed)
+            self.assertTrue(denied["blocked"])
 
     def test_glob_and_grep(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

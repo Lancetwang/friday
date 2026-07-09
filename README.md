@@ -6,6 +6,8 @@ Friday is a local CLI coding agent. Run `friday` in a workspace, then ask it to 
 
 It uses `agent-core-runtime` for agent execution and adds a Friday harness for prompts, memory files, permissions, context compaction, verifier loops, skills, and the terminal UI. Project state lives in `.friday/`; user state lives in `~/.friday/`.
 
+Detailed usage docs live in [docs](docs/index.md).
+
 ## Features
 
 - Workspace-aware by default: run `friday` from any directory and that directory becomes the agent workspace.
@@ -91,86 +93,14 @@ Friday treats context as layers instead of one ever-growing prompt:
 
 The default context window is 128K tokens and can be overridden with `FRIDAY_CONTEXT_WINDOW`.
 
-## Sessions
+## Docs
 
-Friday writes session rows under `<workspace>/.friday/sessions`. Current rows include the user text, assistant reply, recent tool events, session id, and the full active message snapshot. Resume uses that snapshot so the restored session keeps the same model-visible conversation instead of reconstructing it from a lossy summary.
-
-Both CLI and TUI use the same save/resume path. The TUI gives an interactive picker for recent sessions; CLI `friday resume` restores the latest session.
-
-## Traces
-
-Friday writes turn traces under `<workspace>/.friday/traces/YYYYMMDD.jsonl`. A trace row records the user input, a model-visible prompt summary before the call, a compact runtime timeline, tool call/result summaries, verification results, metrics, and final answer. It records observable behavior only; private model reasoning is not available from the runtime.
-
-## Permissions
-
-Friday separates persistent permissions from prompt rules:
-
-- `.friday/permissions.json`: machine-readable Bash policy with `allow`, `deny`, and `require_approval` lists.
-- `.friday/pending_approval.json`: one-shot pending approval written when a command needs user confirmation.
-- `FRIDAY.md`: human-readable project guidance; it can mention the permission policy but does not enforce it.
-
-Bash checks `permissions.json` before running. Deny rules block, allow rules run, approval rules create a pending approval, and the built-in dangerous-command heuristic remains the fallback. After approval, Friday records the executed command result in context and lets the agent produce the final user-facing reply.
-
-## Skills
-
-Friday discovers reusable `SKILL.md` workflows from `.friday/FridaySkills/<skill>/SKILL.md` and `~/.friday/FridaySkills/<skill>/SKILL.md`.
-
-Only skill names and descriptions enter the startup prompt. The full `SKILL.md` is loaded through the `Skill` tool only when relevant.
-
-## Tools
-
-Friday ships with a small default tool set:
-
-- `Read`: read a line window from a file.
-- `Write`: overwrite a file.
-- `Edit`: edit by line range or exact text match.
-- `Bash`: run shell commands. On Windows this uses PowerShell. Destructive commands require approval.
-- `Glob`: find files by path pattern.
-- `Grep`: search file contents.
-- `Skill`: list or read reusable `SKILL.md` workflows.
-- `Memory`: read or update user, global, or project memory.
-
-## Install
-
-```powershell
-uv sync
-Copy-Item .env.example .env
-cd ui-tui
-npm install
-cd ..
-```
-
-Fill `.env`:
-
-```text
-LLM_API_KEY=...
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-v4-flash
-```
-
-Install the command globally when ready:
-
-```powershell
-uv tool install -e .
-```
-
-For local development on Windows, this repo also includes `friday.cmd`. Put the repo directory on `PATH`, or call it by full path, and it will run Friday against your current directory.
-
-## Usage
-
-```powershell
-friday
-friday init
-friday ask "summarize this project"
-friday resume
-friday approve
-friday reject
-friday chat   # then type /goal describe the task
-friday memory
-friday reset
-```
-
-Bare `friday` starts the terminal agent in the current directory. `friday reset` clears both project state and global Friday state after confirmation.
+- [Install](docs/install.md)
+- [Quick Start](docs/quick-start.md)
+- [CLI Commands](docs/cli.md)
+- [Tools](docs/tools.md)
+- [Memory](docs/memory.md)
+- [Skills](docs/skills.md)
 
 ## Validate
 
