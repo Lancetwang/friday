@@ -2,12 +2,9 @@
 
 [English README](README.md)
 
-Friday 是一个个人 CLI agent，由两部分组成：
+Friday 是一个本地命令行编码 agent。在工作区里运行 `friday`，就可以让它读文件、改代码、跑命令、记录项目事实，并验证改动结果。
 
-- `agent-core-runtime`：负责 `Agent`、工具调用、流式输出和运行上下文的轻量 runtime。
-- Friday harness：负责本地 prompt 组装、记忆文件、项目指令和 CLI 工具，把 core runtime 变成一个可用的个人编码助手。
-
-这个仓库的重点是展示如何基于一个很小的自研 core runtime，搭建一个真实可用的个人 agent，而不是依赖庞大的 agent 框架。
+底层用 `agent-core-runtime` 执行 agent，上层的 Friday harness 负责提示词、记忆文件、权限、上下文压缩、验证循环、skills 和终端 UI。项目状态放在 `.friday/`，用户状态放在 `~/.friday/`。
 
 ## 特性
 
@@ -16,13 +13,13 @@ Friday 是一个个人 CLI agent，由两部分组成：
 - Agent 只做路由：启动 prompt 保持克制，项目文件、嵌套指令、记忆和工具按需进入上下文。
 - 项目规则分层：`AGENTS.md` 是跨 agent 规则；`FRIDAY.md` 是 Friday 专属规则；local 变体保持本机私有。
 - 即插即用 skills：从项目和 home 目录发现可复用的 `SKILL.md` 工作流，按需加载。
-- 分层记忆：用户、全局、项目记忆彼此独立，和可丢弃的 compact 会话摘要分开。
+- 分层记忆：用户、全局、项目记忆彼此独立，和短期任务状态、可丢弃的 compact 会话摘要分开。
 - 多阶段上下文压缩：优先压缩大体积工具结果；只有工具压缩不够时，才触发 LLM 会话 compact。
 - 自动 verification loop：修改交付物的 turn 会由独立 verifier agent 检查，失败时给 main agent 一次修复机会。
 - Goal mode：`/goal <task>` 会结合 verifier 反馈持续尝试，直到通过、被证明阻塞，或达到尝试上限。
 - 上下文预算报告：`/context` 展示 system prompt、skill catalog、tool schema、messages、tool results 的当前占用。
 - 程序执行的 Bash 权限：`.friday/permissions.json` 提供持久 allow、deny、approval 规则；`/approve` 会执行待审批命令，并把结果带回同一个会话。
-- 会话恢复：可以恢复最近 `.friday/sessions` 里的对话上下文；TUI 里的 `/resume` 会先列出来让你选。
+- 会话恢复：可以把最近 `.friday/sessions` 恢复为会话上下文；TUI 里的 `/resume` 会先列出来让你选。
 - 小工具集：读写编辑文件、shell、glob、grep、memory 覆盖核心编码循环，不依赖庞大框架。
 - 本地状态：项目状态在 `<workspace>/.friday`，用户状态在 `~/.friday`。
 
@@ -30,31 +27,17 @@ Friday 是一个个人 CLI agent，由两部分组成：
 
 ```mermaid
 flowchart TD
-    User["用户在任意目录"] --> CLI["friday CLI / TUI"]
-    CLI --> Harness["Friday harness"]
+    User["用户"] --> Friday["Friday CLI / TUI"]
+    Friday --> Harness["Friday harness"]
 
-    Home["~/.friday<br/>SOUL / USER / MEMORY / FridaySkills"] --> Prefix["稳定前缀<br/>方便 prefix caching"]
-    Project["当前工作区<br/>AGENTS.md / FRIDAY.md / .friday/MEMORY / FridaySkills"] --> Prefix
-    Env["工作区、平台、shell"] --> Prefix
-    Prefix --> Budget["上下文预算<br/>/context"]
+    Harness --> AgentLoop["Agent loop<br/>推理 -> 调工具 -> 更新工作区 -> 回复"]
+    AgentLoop --> VerifyLoop["Goal / verify loop<br/>检查工作区 -> 给反馈 -> 必要时重试"]
+    VerifyLoop --> AgentLoop
 
-    Harness --> Routed["按需路由上下文<br/>文件、嵌套 AGENTS.md/FRIDAY.md、完整 SKILL.md、memory 读取"]
-    Routed --> Budget
-    State[".friday<br/>permissions / approvals / sessions"] --> Budget
-
-    Budget -->|"低于 85%"| Ready["准备好的上下文"]
-    Budget -->|"达到 85%"| ToolCompact["压缩大体积工具结果"]
-    ToolCompact -->|"降到 60% 以下"| Ready
-    ToolCompact -->|"仍然偏高"| LLMCompact["记忆回顾 + 会话 compact"]
-    LLMCompact --> Ready
-
-    Ready --> Runtime["agent-core-runtime Agent"]
-    Runtime --> Verify["Verifier loop<br/>工作区状态 vs 用户目标"]
-    Runtime --> LLM["OpenAI-compatible LLM"]
-    Runtime --> Tools["小工具集<br/>Read / Write / Edit / Bash / Glob / Grep / Skill / Memory"]
-    Tools --> State
-    Tools --> Home
-    Tools --> Project
+    Prefix["Prefix caching<br/>稳定 harness 在易变状态之前"] --> AgentLoop
+    Context["Context engineering<br/>预算、工具压缩、结构化 compact"] --> AgentLoop
+    Memory["Memory management<br/>长期记忆 + 短期 STATE"] --> AgentLoop
+    Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Skill / Memory"] --> AgentLoop
 ```
 
 ## Harness
@@ -75,6 +58,8 @@ Friday 会按稳定顺序组装模型上下文，方便 prefix caching：
 
 过大的项目指令文件会在启动 prompt 中截断。嵌套目录里的 `AGENTS.md` 和 `FRIDAY.md` 会在 Friday 触达该目录文件时按需加载，并且每个嵌套文件每个 session 只注入一次。
 
+`.friday/STATE.md` 会在稳定 prompt 之后作为易变短期状态注入，因此更新它不会破坏 harness 前缀缓存。
+
 ## 记忆
 
 Friday 按用途区分记忆：
@@ -83,11 +68,12 @@ Friday 按用途区分记忆：
 - `USER.md`：稳定的用户画像和偏好。
 - `~/.friday/MEMORY.md`：跨项目的全局记忆。
 - `<workspace>/.friday/MEMORY.md`：只属于当前项目的记忆。
+- `<workspace>/.friday/STATE.md`：当前工作区的短期任务状态。
 - `AGENTS.md` 和 `FRIDAY.md`：项目规则，不是记忆。
 
 `Memory` 工具可以 `read`、`add`、`replace` 或 `remove` 条目。写入会立刻落盘，但启动 prompt 是冻结快照；新的长期记忆会在下一次会话自然生效。
 
-`/compact` 会先让 Friday 用 `Memory` 工具保存真正值得长期保留的事实，然后把当前对话压缩到一个新的上下文里。compact 摘要本身只是可丢弃的会话状态，不会作为 memory 写入。
+`/compact` 会先让 Friday 用 `Memory` 工具保存真正值得长期保留的事实，然后把当前对话压缩成结构化短期状态。这个状态会写入 `.friday/STATE.md` 并注入新的上下文，但它不是长期记忆。
 
 ## 上下文管理
 
@@ -97,6 +83,7 @@ Friday 把上下文拆成几层，而不是把所有东西塞进一个不断增�
 - 路由上下文：文件、嵌套 `AGENTS.md`、完整 skill 内容和 memory 读取结果，只有在 agent 需要时才进入对话。
 - 工具压缩：当上下文占用达到窗口的 85% 时，先把大体积结构化工具结果替换成短摘要；如果压到 60% 以下，就不再额外调用 LLM compact。
 - 会话压缩：如果工具压缩仍然不够，Friday 保留原有 compact 流程，并在压缩前先给 agent 一次机会把长期事实写入 memory。
+- 短期状态：conversation compact 会按固定结构保留当前目标、已完成、未完成、尝试过的方法、决策、工作文件、命令结果、验证状态、下一步和最近对话。
 - 验证循环：当某一轮修改了交付物，Friday 会用独立 verifier 检查工作区状态，并在失败时把反馈交给 main agent 修复一次。
 - Goal loop：`/goal <task>` 每轮都会强制验证，并持续到 verifier 通过、给出阻塞证据，或达到尝试上限。
 - 预算可见：`/context` 会拆分展示 system prompt、skill catalog、tool schemas、messages、tool results 的当前占用。

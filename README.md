@@ -2,12 +2,9 @@
 
 [中文说明](README.zh-CN.md)
 
-Friday is a personal CLI agent built with two pieces:
+Friday is a local CLI coding agent. Run `friday` in a workspace, then ask it to read files, edit code, run commands, remember project facts, and verify changes.
 
-- `agent-core-runtime`: the lightweight runtime for `Agent`, tool calling, streaming, and run context.
-- Friday harness: the local prompt stack, memory files, project instructions, and CLI tools that turn the runtime into a useful coding assistant.
-
-The point of this repo is showing how a real personal agent can be assembled on top of a small core runtime without depending on a large agent framework.
+It uses `agent-core-runtime` for agent execution and adds a Friday harness for prompts, memory files, permissions, context compaction, verifier loops, skills, and the terminal UI. Project state lives in `.friday/`; user state lives in `~/.friday/`.
 
 ## Features
 
@@ -16,13 +13,13 @@ The point of this repo is showing how a real personal agent can be assembled on 
 - Agent-as-router: the startup prompt stays small while project files, nested instructions, memory, and tools are pulled in only when needed.
 - Project rule layers: `AGENTS.md` is cross-agent guidance; `FRIDAY.md` is Friday-specific guidance; local variants stay private.
 - Plug-in skills: reusable `SKILL.md` workflows are discovered from project and home skill folders, then loaded on demand.
-- Layered memory: user, global, and project memory are separate from disposable conversation compaction.
+- Layered memory: user, global, and project memory are separate from short-term task state and disposable conversation compaction.
 - Multi-stage context compression: large tool results are compacted first; LLM conversation compact is kept for cases where tool compaction is not enough.
 - Automatic verification loop: turns that change deliverables are checked by an independent verifier agent, with one repair attempt on failure.
 - Goal mode: `/goal <task>` repeats main-agent attempts with verifier feedback until pass, blocked, or attempt limit.
 - Context budget reporting: `/context` shows the current system prompt, skill catalog, tool schema, message, and tool-result footprint.
 - Program-enforced Bash permissions: `.friday/permissions.json` provides persistent allow/deny/approval rules; `/approve` executes the pending command and feeds the result back into the same session.
-- Session resume: recent `.friday/sessions` can be restored as whole conversations; `/resume` in the TUI lets you pick one.
+- Session resume: recent `.friday/sessions` can be restored as session context; `/resume` in the TUI lets you pick one.
 - Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
 - Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
 
@@ -30,31 +27,17 @@ The point of this repo is showing how a real personal agent can be assembled on 
 
 ```mermaid
 flowchart TD
-    User["User in any directory"] --> CLI["friday CLI / TUI"]
-    CLI --> Harness["Friday harness"]
+    User["User"] --> Friday["Friday CLI / TUI"]
+    Friday --> Harness["Friday harness"]
 
-    Home["~/.friday<br/>SOUL / USER / MEMORY / FridaySkills"] --> Prefix["Stable prefix<br/>prefix-cache friendly"]
-    Project["workspace<br/>AGENTS.md / FRIDAY.md / .friday/MEMORY / FridaySkills"] --> Prefix
-    Env["workspace, platform, shell"] --> Prefix
-    Prefix --> Budget["Context budget<br/>/context"]
+    Harness --> AgentLoop["Agent loop<br/>reason -> use tools -> update workspace -> answer"]
+    AgentLoop --> VerifyLoop["Goal / verify loop<br/>check workspace -> give feedback -> retry when needed"]
+    VerifyLoop --> AgentLoop
 
-    Harness --> Routed["On-demand context<br/>files, nested AGENTS.md/FRIDAY.md, full SKILL.md, memory reads"]
-    Routed --> Budget
-    State[".friday<br/>permissions / approvals / sessions"] --> Budget
-
-    Budget -->|"under 85%"| Ready["Prepared context"]
-    Budget -->|"85%+"| ToolCompact["Compact large tool results"]
-    ToolCompact -->|"drops below 60%"| Ready
-    ToolCompact -->|"still high"| LLMCompact["Memory review + conversation compact"]
-    LLMCompact --> Ready
-
-    Ready --> Runtime["agent-core-runtime Agent"]
-    Runtime --> Verify["Verifier loop<br/>workspace state vs user goal"]
-    Runtime --> LLM["OpenAI-compatible LLM"]
-    Runtime --> Tools["Small tool set<br/>Read / Write / Edit / Bash / Glob / Grep / Skill / Memory"]
-    Tools --> State
-    Tools --> Home
-    Tools --> Project
+    Prefix["Prefix caching<br/>stable harness before volatile state"] --> AgentLoop
+    Context["Context engineering<br/>budget, tool compact, structured compact"] --> AgentLoop
+    Memory["Memory management<br/>long-term memory + short-term STATE"] --> AgentLoop
+    Tools["Minimal tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Skill / Memory"] --> AgentLoop
 ```
 
 ## Harness
@@ -75,6 +58,8 @@ Bundled default files live in `src/friday/prompt_templates/`. They are copied to
 
 Large project instruction files are truncated in the startup prompt. Nested `AGENTS.md` and `FRIDAY.md` instruction files are loaded lazily when Friday touches files in that directory, and each nested file is only injected once per session.
 
+`.friday/STATE.md` is injected after the stable prompt as volatile short-term state, so updates do not invalidate the cached harness prefix.
+
 ## Memory
 
 Friday separates memory by purpose:
@@ -83,11 +68,12 @@ Friday separates memory by purpose:
 - `USER.md`: stable user profile and preferences.
 - `~/.friday/MEMORY.md`: global memory across projects.
 - `<workspace>/.friday/MEMORY.md`: memory for the current project only.
+- `<workspace>/.friday/STATE.md`: short-term task state for the current workspace.
 - `AGENTS.md` and `FRIDAY.md`: project rules, not memory.
 
 The `Memory` tool can `read`, `add`, `replace`, or `remove` entries. Writes hit disk immediately, but the startup prompt is a frozen snapshot; new memory naturally appears in the next session.
 
-`/compact` first asks Friday to save only durable facts with the `Memory` tool, then summarizes the live conversation into a fresh context. The compact summary itself is disposable session state and is not written as memory.
+`/compact` first asks Friday to save only durable facts with the `Memory` tool, then compacts the live conversation into structured short-term state. The state is written to `.friday/STATE.md` and injected into the fresh context; it is not long-term memory.
 
 ## Context Management
 
@@ -97,6 +83,7 @@ Friday treats context as layers instead of one ever-growing prompt:
 - Routed context: files, nested `AGENTS.md`, full skill bodies, and memory reads enter the conversation only when the agent asks for them.
 - Tool compaction: when context usage reaches 85% of the configured window, oversized structured tool results are replaced with short summaries. If usage drops below 60%, the session keeps going without an LLM compact.
 - Conversation compact: if tool compaction is not enough, Friday keeps the existing compact flow and first gives the agent a chance to save durable facts to memory.
+- Short-term state: conversation compact uses a fixed schema for current goal, completed work, open items, tried methods, decisions, working files, command results, verification state, next steps, and recent conversations.
 - Verification: after a turn changes deliverables, Friday runs an independent verifier against the workspace state and feeds failure feedback back to the main agent once.
 - Goal loop: `/goal <task>` forces verification after each attempt and continues until the verifier passes, blocks with evidence, or reaches the attempt limit.
 - Budget visibility: `/context` prints the current breakdown for system prompt, skill catalog, tool schemas, messages, and tool results.

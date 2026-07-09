@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from agent_core import RunContext
 
-from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday
+from friday.app import PROJECT_INSTRUCTIONS_LIMIT, STATE_FILE, build_friday, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
@@ -228,6 +228,7 @@ class ResetTests(unittest.TestCase):
             self.assertTrue((root / "FRIDAY.md").exists())
             self.assertFalse((root / "AGENTS.md").exists())
             self.assertTrue((root / ".friday" / "MEMORY.md").exists())
+            self.assertTrue((root / ".friday" / STATE_FILE).exists())
             self.assertTrue((root / ".friday" / PERMISSIONS_FILE).exists())
 
 
@@ -237,14 +238,32 @@ class PromptTests(unittest.TestCase):
             root = Path(tmp)
             (root / "AGENTS.md").write_text("project rules", encoding="utf-8")
             (root / "FRIDAY.md").write_text("friday rules", encoding="utf-8")
+            (root / ".friday").mkdir()
+            (root / ".friday" / "MEMORY.md").write_text("# Project Memory\n", encoding="utf-8")
+            (root / ".friday" / STATE_FILE).write_text("# Short-Term State\n", encoding="utf-8")
             text = build_instructions(root, root / ".friday")
 
             self.assertLess(text.index("## Soul"), text.index("## Runtime"))
             self.assertLess(text.index("## Runtime"), text.index("## Tool Guidance"))
             self.assertLess(text.index("## Tool Guidance"), text.index("## Project Instructions"))
             self.assertLess(text.index("## Project Instructions"), text.index("## Environment"))
+            self.assertIn("## Project Memory", text)
+            self.assertNotIn("## Short-Term State", text)
             self.assertLess(text.index("AGENTS.md"), text.index("FRIDAY.md"))
             self.assertIn("friday rules", text)
+
+    def test_short_term_state_is_not_part_of_stable_instructions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_project(root, user_home=root / "home")
+            (root / ".friday" / STATE_FILE).write_text("# Short-Term State\n\n## Current Goal\nship it\n", encoding="utf-8")
+
+            with patch("friday.app.Path.home", return_value=root / "home"), patch("friday.tools.Path.home", return_value=root / "home"):
+                instructions = build_instructions(root, root / ".friday")
+                _agent, context = build_friday(root, stream=False)
+
+            self.assertNotIn("ship it", instructions)
+            self.assertIn("ship it", context.get_messages()[-1]["content"])
 
     def test_large_project_instructions_are_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,6 +277,20 @@ class PromptTests(unittest.TestCase):
 
 
 class CompactTests(unittest.TestCase):
+    def test_save_turn_updates_short_term_recent_conversations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_project(root, user_home=root / "home")
+
+            for index in range(12):
+                save_turn(root, f"user {index}", f"assistant {index}", [], "s1")
+
+            state = (root / ".friday" / STATE_FILE).read_text(encoding="utf-8")
+            self.assertIn("## Recent Conversations", state)
+            self.assertNotIn("user 0", state)
+            self.assertIn("user 11", state)
+            self.assertEqual(state.count("- User:"), 10)
+
     def test_context_report_breaks_down_prompt_tools_and_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -341,9 +374,12 @@ class CompactTests(unittest.TestCase):
                 agent, new_context, summary = compact_friday(fake_agent, context, stream=False)
 
             self.assertIn("Before compacting", fake_agent.prompts[0])
-            self.assertIn("Summarize the conversation", fake_agent.prompts[1])
+            self.assertIn("Compact the conversation", fake_agent.prompts[1])
+            self.assertIn("## Current Goal", fake_agent.prompts[1])
+            self.assertIn("Recent Conversations", fake_agent.prompts[1])
             self.assertEqual(summary, "Continue with the memory harness work.")
-            self.assertIn("Conversation Summary", new_context.messages[-1]["content"])
+            self.assertIn("Short-Term State", new_context.messages[-1]["content"])
+            self.assertEqual((root / ".friday" / STATE_FILE).read_text(encoding="utf-8"), "Continue with the memory harness work.\n")
             self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])
 
 

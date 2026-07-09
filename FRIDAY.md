@@ -14,12 +14,15 @@ Friday is the application harness for a small personal CLI agent built on `agent
 - Save durable user preferences, cross-project facts, and project decisions with the Memory tool.
 - Do not save compact summaries as memory.
 - Keep `.friday/MEMORY.md` for project memory, not project rules.
+- Keep `.friday/STATE.md` for short-term task state: current goal, completed work, open items, tried methods, working files, verification state, next steps, and recent conversations.
+- Update `.friday/STATE.md` when task goals or important progress change; it is session state, not durable memory.
 
 ## Context
 
 - Keep stable prefix content before volatile session content.
 - Compact large tool results before compacting conversation history.
 - Use conversation compact only when tool compaction is not enough.
+- When compacting conversation history, produce structured state instead of free-form summary.
 
 ## Verification
 

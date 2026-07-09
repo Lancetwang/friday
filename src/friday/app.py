@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import shutil
 from datetime import datetime
 from importlib.resources import files
@@ -14,6 +15,8 @@ from friday.context import compact_tool_results, should_compact_conversation, sh
 from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions, skill_catalog
 
 PROJECT_INSTRUCTIONS_LIMIT = 12000
+RECENT_CONVERSATION_LIMIT = 10
+STATE_FILE = "STATE.md"
 PRE_COMPACT_MEMORY_PROMPT = """
 Before compacting this conversation, review it for durable memory.
 
@@ -23,9 +26,22 @@ If nothing is worth remembering, reply with "No durable memory updates."
 """.strip()
 
 COMPACT_PROMPT = """
-Summarize the conversation so far for continuing the same task.
+Compact the conversation into short-term session state for continuing the same task.
 
-Keep only live working context: user goals, decisions, files touched, commands run, test status, blockers, and next steps.
+Use this exact Markdown structure:
+## Current Goal
+## Completed
+## Open Items
+## Tried Methods
+## Decisions
+## Working Files
+## Commands And Results
+## Verification State
+## Next Steps
+## Recent Conversations
+
+Keep only live working context: user goals, completed work, unfinished work, tried methods, decisions, files touched, commands run, test status, blockers, and next steps.
+Recent Conversations must preserve the latest user/assistant turns needed to continue naturally.
 Do not write memory. Do not restate stable system, tool, user, or project instructions.
 """.strip()
 
@@ -33,6 +49,7 @@ Do not write memory. Do not restate stable system, tool, user, or project instru
 def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
     friday_dir = root / ".friday"
+    _ensure_short_state(friday_dir)
     instructions = build_instructions(root, friday_dir)
     agent = Agent(
         instructions=instructions,
@@ -43,6 +60,9 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
     context = agent.new_context()
     context.metadata["workspace"] = str(root)
     context.metadata["session_id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    state = _read_optional(friday_dir / STATE_FILE)
+    if state.strip():
+        context.add_message("system", f"## Short-Term State\n{state}")
     return agent, context
 
 
@@ -70,15 +90,16 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
         stream=False,
     )
     summary = agent.chat(
-        COMPACT_PROMPT,
+        f"{COMPACT_PROMPT}\n\nLatest turns to keep under Recent Conversations:\n{_recent_conversations(context)}",
         context=context,
         max_steps=6,
         stream=False,
         on_delta=on_delta,
     )
     workspace = Path(context.metadata["workspace"])
+    _write_short_state(workspace, summary)
     new_agent, new_context = build_friday(workspace, stream=stream)
-    new_context.add_message("system", f"## Conversation Summary\n{summary}")
+    new_context.add_message("system", f"## Short-Term State\n{summary}")
     return new_agent, new_context, summary
 
 
@@ -132,6 +153,7 @@ def init_project(workspace: Path | None = None, *, user_home: Path | None = None
     for path, content in {
         root / "FRIDAY.md": _default_friday_project_instructions(),
         friday_dir / "MEMORY.md": "# Project Memory\n",
+        friday_dir / STATE_FILE: _default_short_state(),
         friday_dir / PERMISSIONS_FILE: json.dumps(default_permissions(), ensure_ascii=False, indent=2) + "\n",
     }.items():
         if not path.exists():
@@ -187,6 +209,7 @@ def save_turn(workspace: Path, user: str, assistant: str, events: list[dict[str,
     }
     with path.open("a", encoding="utf-8") as file:
         file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    _append_recent_state(workspace, user, assistant)
     return path
 
 
@@ -256,6 +279,89 @@ def _read_optional(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+def _ensure_short_state(friday_dir: Path) -> None:
+    path = friday_dir / STATE_FILE
+    if path.exists():
+        return
+    friday_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(_default_short_state(), encoding="utf-8")
+
+
+def _write_short_state(workspace: Path, content: str) -> None:
+    path = workspace / ".friday" / STATE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content.rstrip() + "\n", encoding="utf-8")
+
+
+def _append_recent_state(workspace: Path, user: str, assistant: str) -> None:
+    path = workspace / ".friday" / STATE_FILE
+    current = path.read_text(encoding="utf-8") if path.exists() else _default_short_state()
+    head = current.split("## Recent Conversations", 1)[0].rstrip()
+    recent = _state_recent(current)
+    recent.append(f"- User: {_preview(user, 180)}\n  Friday: {_preview(assistant, 220)}")
+    recent = recent[-RECENT_CONVERSATION_LIMIT:]
+    updated = f"{head}\n\n## Recent Conversations\n" + "\n".join(recent) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
+
+
+def _state_recent(text: str) -> list[str]:
+    if "## Recent Conversations" not in text:
+        return []
+    body = text.split("## Recent Conversations", 1)[1]
+    next_section = re.search(r"\n##\s+", body)
+    if next_section:
+        body = body[: next_section.start()]
+    items = []
+    current: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("- User:") and current:
+            items.append("\n".join(current).rstrip())
+            current = [line]
+        elif line.strip() or current:
+            current.append(line)
+    if current:
+        items.append("\n".join(current).rstrip())
+    return [item for item in items if item.strip()]
+
+
+def _recent_conversations(context: RunContext) -> str:
+    if not hasattr(context, "get_messages"):
+        return ""
+    turns = []
+    for message in context.get_messages():
+        role = message.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+        turns.append(f"{str(role).title()}: {_preview(str(message.get('content', '')), 500)}")
+    return "\n".join(turns[-RECENT_CONVERSATION_LIMIT * 2 :])
+
+
+def _default_short_state() -> str:
+    return """# Short-Term State
+
+## Current Goal
+
+## Completed
+
+## Open Items
+
+## Tried Methods
+
+## Decisions
+
+## Working Files
+
+## Commands And Results
+
+## Verification State
+
+## Next Steps
+
+## Recent Conversations
+"""
+
+
 def _exists_exact(path: Path) -> bool:
     return path.exists() and any(child.name == path.name for child in path.parent.iterdir())
 
@@ -294,6 +400,10 @@ Memory targets: user updates USER.md, global updates global MEMORY.md, project u
 Memory writes affect disk immediately, but the frozen startup prompt sees them next session.
 Do not save temporary task progress, raw command output, compact summaries, permission rules, or project rules as memory.
 SOUL.md, AGENTS.md, FRIDAY.md, FRIDAY.local.md, and permission files require an explicit user request before editing.
+
+Short-term state:
+Use workspace .friday/STATE.md for current task state: current goal, completed work, open items, tried methods, working files, verification state, next steps, and recent conversations.
+Update STATE.md when the task goal or important progress changes. It is session state, not durable memory.
 
 Permissions:
 Bash commands are checked against workspace .friday/permissions.json before execution.
@@ -351,6 +461,7 @@ Tell Friday how to work in this project.
 - Keep project-specific Friday rules here.
 - Put cross-agent project rules in `AGENTS.md`.
 - Put durable project facts in `.friday/MEMORY.md`.
+- Put short-term task state in `.friday/STATE.md`.
 - Put persistent Bash permissions in `.friday/permissions.json`.
 
 ## Notes
