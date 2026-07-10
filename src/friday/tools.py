@@ -7,6 +7,9 @@ import re
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -187,6 +190,24 @@ def build_tools(workspace: Path, friday_dir: Path):
             [workspace / match["path"] for match in matches],
         )
 
+    @tool(description="Search the live web with Tavily when current external information is needed.", name="WebSearch")
+    def web_search(
+        query: Annotated[str, "Search query."],
+        max_results: Annotated[int, "Maximum results to return, 1-10."] = 5,
+        search_depth: Annotated[Literal["basic", "advanced"], "Search depth."] = "basic",
+        topic: Annotated[Literal["general", "news", "finance"], "Search topic."] = "general",
+        include_answer: Annotated[bool, "Include Tavily's answer summary."] = True,
+        time_range: Annotated[str, "Optional time range: day, week, month, or year."] = "",
+    ) -> dict:
+        return _tavily_search(query, max_results, search_depth, topic, include_answer, time_range)
+
+    @tool(description="Fetch a specific URL as clean Markdown with Jina Reader.", name="WebFetch")
+    def web_fetch(
+        url: Annotated[str, "HTTP or HTTPS URL to fetch."],
+        max_chars: Annotated[int, "Maximum characters to return."] = 8000,
+    ) -> dict:
+        return _jina_fetch(url, max_chars)
+
     @tool(description="List or read on-demand SKILL.md instructions. Use list first; read only when a skill is relevant.", name="Skill")
     def skill(
         action: Annotated[Literal["list", "read"], "Skill action to perform."],
@@ -241,7 +262,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         _write_text(path, updated)
         return {"target": target, "path": str(path), "chars": len(updated)}
 
-    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, skill, memory]
+    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, web_search, web_fetch, skill, memory]
 
 
 def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> dict:
@@ -285,6 +306,85 @@ def skill_catalog(workspace: Path) -> str:
     lines = ["Available skills. Use the Skill tool to read a full SKILL.md only when relevant:"]
     lines.extend(f"- {name}: {item['description']}" for name, item in skills.items())
     return "\n".join(lines)
+
+
+def _tavily_search(query: str, max_results: int, search_depth: str, topic: str, include_answer: bool, time_range: str) -> dict:
+    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    if not api_key:
+        return {"error": "TAVILY_API_KEY is not configured."}
+    payload = {
+        "query": query,
+        "search_depth": search_depth,
+        "topic": topic,
+        "max_results": min(10, max(1, int(max_results))),
+        "include_answer": bool(include_answer),
+        "include_raw_content": False,
+        "include_images": False,
+    }
+    if time_range.strip():
+        payload["time_range"] = time_range.strip()
+    request = urllib.request.Request(
+        "https://api.tavily.com/search",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return {"error": f"Tavily HTTP {error.code}", "detail": error.read().decode("utf-8", errors="replace")[:1000]}
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        return {"error": f"Tavily search failed: {error}"}
+    return {
+        "query": data.get("query", query),
+        "answer": data.get("answer", ""),
+        "results": [_tavily_result(item) for item in data.get("results", []) if isinstance(item, dict)],
+    }
+
+
+def _tavily_result(item: dict) -> dict:
+    return {
+        "title": item.get("title", ""),
+        "url": item.get("url", ""),
+        "content": _clip(" ".join(str(item.get("content", "")).split()), 800),
+        "score": item.get("score"),
+        "published_date": item.get("published_date", ""),
+    }
+
+
+def _jina_fetch(url: str, max_chars: int) -> dict:
+    target = url.strip()
+    if urllib.parse.urlsplit(target).scheme not in {"http", "https"}:
+        return {"error": "WebFetch URL must start with http:// or https://."}
+    request = urllib.request.Request(
+        "https://r.jina.ai/" + urllib.parse.quote(target, safe=":/?&=%"),
+        headers=_jina_headers(),
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            content = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        return {"error": f"Jina HTTP {error.code}", "detail": error.read().decode("utf-8", errors="replace")[:1000]}
+    except (urllib.error.URLError, TimeoutError) as error:
+        return {"error": f"Jina fetch failed: {error}"}
+    limit = min(50000, max(1000, int(max_chars)))
+    return {"url": target, "content": _clip(content, limit), "chars": len(content), "truncated": len(content) > limit}
+
+
+def _jina_headers() -> dict[str, str]:
+    headers = {"Accept": "text/markdown", "User-Agent": "FridayAgent/0.1"}
+    api_key = os.getenv("JINA_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 def _join_lines(lines: list[str], trailing_newline: bool) -> str:

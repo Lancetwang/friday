@@ -8,12 +8,18 @@ Friday keeps the tool surface small:
 - `Bash`: run shell commands in the workspace.
 - `Glob`: find files by path pattern.
 - `Grep`: search file contents by regex.
+- `WebSearch`: search the live web through Tavily when current external information is needed.
+- `WebFetch`: fetch a known URL as clean Markdown through Jina Reader.
 - `Skill`: list or read reusable `SKILL.md` workflows.
 - `Memory`: read or update user, global, or project memory.
 
 `Bash` runs PowerShell on Windows and `bash -lc` elsewhere.
 
 Dangerous Bash commands create `.friday/pending_approval.json`. Run `/approve` to execute the pending command or `/reject` to discard it.
+
+`WebSearch` requires `TAVILY_API_KEY` in the environment or `.env`.
+`WebFetch` works without a key through Jina Reader; set `JINA_API_KEY` for higher rate limits.
+They are Friday application tools, not part of `agent-core-runtime`.
 
 Persistent Bash policy lives in `.friday/permissions.json`:
 
@@ -27,4 +33,3 @@ Persistent Bash policy lives in `.friday/permissions.json`:
   }
 }
 ```
-

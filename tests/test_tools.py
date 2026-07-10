@@ -158,6 +158,117 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(grep["count"], 2)
             self.assertEqual(grep["matches"][0]["line"], 2)
 
+    def test_web_search_requires_tavily_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            with patch.dict(os.environ, {}, clear=True):
+                result = tools["WebSearch"]("latest Friday agent news")
+
+            self.assertEqual(result["error"], "TAVILY_API_KEY is not configured.")
+
+    def test_web_search_calls_tavily_api(self) -> None:
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "query": "Friday agent",
+                        "answer": "Friday is a local agent.",
+                        "results": [
+                            {
+                                "title": "Friday",
+                                "url": "https://example.com/friday",
+                                "content": "  useful   result  ",
+                                "score": 0.9,
+                                "published_date": "2026-07-10",
+                            }
+                        ],
+                    }
+                ).encode("utf-8")
+
+        seen = {}
+
+        def fake_urlopen(request, timeout):
+            seen["timeout"] = timeout
+            seen["url"] = request.full_url
+            seen["auth"] = request.get_header("Authorization")
+            seen["payload"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            with patch.dict(os.environ, {"TAVILY_API_KEY": "test-key"}, clear=True):
+                with patch("friday.tools.urllib.request.urlopen", side_effect=fake_urlopen):
+                    result = tools["WebSearch"](
+                        "Friday agent",
+                        max_results=20,
+                        search_depth="advanced",
+                        include_answer=True,
+                        time_range="week",
+                    )
+
+            self.assertEqual(seen["url"], "https://api.tavily.com/search")
+            self.assertEqual(seen["auth"], "Bearer test-key")
+            self.assertEqual(seen["timeout"], 20)
+            self.assertEqual(seen["payload"]["query"], "Friday agent")
+            self.assertEqual(seen["payload"]["max_results"], 10)
+            self.assertEqual(seen["payload"]["search_depth"], "advanced")
+            self.assertEqual(seen["payload"]["time_range"], "week")
+            self.assertFalse(seen["payload"]["include_raw_content"])
+            self.assertEqual(result["answer"], "Friday is a local agent.")
+            self.assertEqual(result["results"][0]["content"], "useful result")
+
+    def test_web_fetch_requires_http_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            result = tools["WebFetch"]("file:///etc/passwd")
+
+            self.assertIn("http:// or https://", result["error"])
+
+    def test_web_fetch_calls_jina_reader(self) -> None:
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self) -> bytes:
+                return b"# Title\n\ncontent"
+
+        seen = {}
+
+        def fake_urlopen(request, timeout):
+            seen["timeout"] = timeout
+            seen["url"] = request.full_url
+            seen["auth"] = request.get_header("Authorization")
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            with patch.dict(os.environ, {"JINA_API_KEY": "jina-key"}, clear=True):
+                with patch("friday.tools.urllib.request.urlopen", side_effect=fake_urlopen):
+                    result = tools["WebFetch"]("https://example.com/a b#section")
+
+            self.assertEqual(seen["timeout"], 30)
+            self.assertEqual(seen["auth"], "Bearer jina-key")
+            self.assertIn("https://r.jina.ai/https://example.com/a%20b%23section", seen["url"])
+            self.assertEqual(result["content"], "# Title\n\ncontent")
+            self.assertFalse(result["truncated"])
+
     def test_memory_tool_updates_scoped_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -297,6 +408,21 @@ class PromptTests(unittest.TestCase):
 
             self.assertNotIn("ship it", instructions)
             self.assertIn("ship it", context.get_messages()[-1]["content"])
+
+    def test_build_friday_loads_project_env_without_overriding_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text(
+                "\ufeffDEEPSEEK_API_KEY=dummy\nTAVILY_API_KEY=from-file\nLLM_MODEL=from-file\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"LLM_MODEL": "from-shell"}, clear=True):
+                with patch("friday.app.Path.home", return_value=root / "home"), patch("friday.tools.Path.home", return_value=root / "home"):
+                    build_friday(root, stream=False)
+                self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "dummy")
+                self.assertEqual(os.environ["TAVILY_API_KEY"], "from-file")
+                self.assertEqual(os.environ["LLM_MODEL"], "from-shell")
 
     def test_large_project_instructions_are_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

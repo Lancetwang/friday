@@ -23,7 +23,7 @@ Detailed usage docs live in [docs](docs/index.md).
 - Local traces: each turn writes a JSONL trace with a prompt summary, runtime timeline, tool calls, verification results, metrics, and final answer.
 - Program-enforced Bash permissions: `.friday/permissions.json` provides persistent allow/deny/approval rules; `/approve` executes the pending command and feeds the result back into the same session.
 - Session resume: new sessions save the full message snapshot and can be restored as a session; older rows fall back to compact text context.
-- Small tool surface: file read/write/edit, shell, glob, grep, and memory cover the core coding loop without a large framework.
+- Small tool surface: file read/write/edit, shell, glob, grep, web search/fetch, skills, and memory cover the core loop without a large framework.
 - Local state: project state lives in `<workspace>/.friday`; user state lives in `~/.friday`.
 
 ## Architecture
@@ -40,7 +40,7 @@ flowchart TD
     Prefix["Prefix caching<br/>stable harness before volatile state"] --> AgentLoop
     Context["Context engineering<br/>budget, tool compact, structured compact"] --> AgentLoop
     Memory["Memory management<br/>long-term memory + short-term STATE"] --> AgentLoop
-    Tools["Minimal tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Skill / Memory"] --> AgentLoop
+    Tools["Minimal tool set<br/>Read / Edit / Write / Bash / Glob / Grep / WebSearch / WebFetch / Skill / Memory"] --> AgentLoop
 ```
 
 ## Harness

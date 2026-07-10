@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import shutil
@@ -48,6 +49,11 @@ Do not write memory. Do not restate stable system, tool, user, or project instru
 
 def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
+    cwd_env = Path.cwd().resolve() / ".env"
+    root_env = root / ".env"
+    _load_env(root_env)
+    if root_env != cwd_env:
+        _load_env(cwd_env)
     friday_dir = root / ".friday"
     _ensure_short_state(friday_dir)
     instructions = build_instructions(root, friday_dir)
@@ -64,6 +70,23 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
     if state.strip():
         context.add_message("system", f"## Short-Term State\n{state}")
     return agent, context
+
+
+def _load_env(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().lstrip("\ufeff")
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ[key] = value
 
 
 def build_instructions(workspace: Path, friday_dir: Path) -> str:
@@ -398,7 +421,9 @@ def _read_limited(path: Path, limit: int) -> str:
 
 def _runtime_notes() -> str:
     return """
-Available tools are Read, Write, Edit, Bash, Glob, Grep, Skill, and Memory.
+Available tools are Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, Skill, and Memory.
+WebSearch uses Tavily for live web search when TAVILY_API_KEY is configured.
+Use WebSearch for discovery and WebFetch for known URLs.
 
 Project instructions:
 AGENTS.md is cross-agent project guidance. FRIDAY.md is Friday-specific project guidance. FRIDAY.local.md is private local Friday guidance.
