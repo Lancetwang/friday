@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--disallowed-tools", "--disallowedTools", action="append", default=[])
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("init", help="Create Friday project files.")
+    sub.add_parser("init", help="Create the project's AGENTS.md.")
 
     ask = sub.add_parser("ask", help="Ask once.")
     ask.add_argument("text", nargs="+")

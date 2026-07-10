@@ -24,10 +24,6 @@ PERMISSIONS_FILE = "permissions.json"
 INSTRUCTION_FILE_NAMES = (
     "AGENTS.md",
     ".friday/AGENTS.md",
-    "FRIDAY.md",
-    ".friday/FRIDAY.md",
-    "FRIDAY.local.md",
-    ".friday/FRIDAY.local.md",
 )
 
 

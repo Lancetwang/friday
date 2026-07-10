@@ -5,6 +5,7 @@ from typing import Any, Callable, Literal
 
 from agent_core import Agent, CallableNode, Flow, RunContext
 
+from friday.prompts import goal_attempt_prompt, retry_prompt
 from friday.verification import record_verification, verify_friday
 
 AGENT_MAX_STEPS = 10000
@@ -119,13 +120,9 @@ def _loop_flow() -> Flow:
 def _attempt(state: dict[str, Any]):
     state["attempt"] += 1
     if state["attempt"] == 1:
-        prompt = (
-            f"Goal mode. Work toward this goal until the verifier passes or proves it impossible:\n\n{state['goal']}"
-            if state["force_verify"]
-            else state["goal"]
-        )
+        prompt = goal_attempt_prompt(state["goal"]) if state["force_verify"] else state["goal"]
     else:
-        prompt = f"Verification failed after attempt {state['attempt'] - 1}. Continue working toward the original goal.\n\nVerifier feedback:\n{state['feedback']}"
+        prompt = retry_prompt(state["attempt"] - 1, state["feedback"])
     state["answer"] = state["agent"].chat(
         prompt,
         context=state["context"],

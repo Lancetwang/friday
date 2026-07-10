@@ -7,21 +7,10 @@ from typing import Any, Callable
 
 from agent_core import Agent, RunContext
 
+from friday.prompts import VERIFIER_NOTES
 from friday.tools import build_tools, pending_approval
 
 VERIFIER_MAX_STEPS = 10000
-
-VERIFIER_NOTES = """
-You are Friday Verifier.
-
-Do not trust the main agent's claims. Verify the workspace state against the user goal.
-Use tools to inspect files and run checks when useful.
-Do not modify files, memory, project rules, or permissions.
-Return only JSON with this shape:
-{"passed": true, "blocked": false, "evidence": ["..."], "feedback": ""}
-If the goal is not met, set passed to false and make feedback short and actionable.
-Set blocked to true only when there is concrete evidence the goal cannot be completed in this workspace.
-""".strip()
 
 
 def build_verifier(instructions: str, workspace: Path) -> tuple[Agent, RunContext]:

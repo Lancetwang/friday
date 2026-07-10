@@ -153,8 +153,8 @@ class Gateway:
         metrics = {
             "elapsed_ms": int((time.perf_counter() - start) * 1000),
             "estimated_tokens": estimated,
-            "input_tokens": usage["input_tokens"] or _estimate_tokens(_input_text(context, answer)),
-            "output_tokens": usage["output_tokens"] or _estimate_tokens(answer),
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": usage["output_tokens"],
         }
         self.event("message.complete", {"text": answer, "metrics": metrics})
         write_trace(
@@ -227,21 +227,6 @@ def _approval_followup_prompt(result: dict[str, Any]) -> str:
         "Use the approval result in the system context to continue or briefly report the final state to the user. "
         "Do not ask for approval again unless a new dangerous action is required."
     )
-
-
-def _input_text(context: RunContext, answer: str) -> str:
-    parts = []
-    for message in context.get_messages():
-        content = str(message.get("content", ""))
-        if message.get("role") == "assistant" and content == answer:
-            continue
-        parts.append(content)
-    return "\n".join(parts)
-
-
-def _estimate_tokens(text: str) -> int:
-    # ponytail: local display estimate; provider usage wins when present.
-    return max(1, (len(text) + 3) // 4)
 
 
 if __name__ == "__main__":

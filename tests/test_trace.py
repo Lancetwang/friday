@@ -47,6 +47,33 @@ class TraceTests(unittest.TestCase):
             self.assertNotIn("messages_after", row)
             self.assertNotIn("events", row)
 
+    def test_write_trace_records_provider_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = RunContext()
+            prompt_messages = []
+            start_event = len(context.events)
+            context.emit("model.request", category="model", data={"message_count": 1})
+            context.emit(
+                "model.response",
+                category="model",
+                data={"usage": {"prompt_tokens": 11, "completion_tokens": 5}},
+            )
+
+            path = write_trace(
+                root,
+                mode="chat",
+                user="hi",
+                assistant="hello",
+                context=context,
+                start_event=start_event,
+                prompt_messages=prompt_messages,
+            )
+
+            row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(row["performance"]["totals"]["input_tokens"], 11)
+            self.assertEqual(row["performance"]["totals"]["output_tokens"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

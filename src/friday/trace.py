@@ -24,7 +24,7 @@ def write_trace(
 ) -> Path:
     events = [_event_dict(event) for event in context.events[start_event:]]
     row = {
-        "schema_version": 1,
+        "schema_version": 2,
         "time": datetime.now().isoformat(timespec="seconds"),
         "turn_id": uuid4().hex,
         "session_id": str(context.metadata.get("session_id") or ""),
@@ -34,6 +34,7 @@ def write_trace(
         "assistant": assistant,
         "context_notice": context_notice,
         "metrics": metrics or {},
+        "performance": _performance(events),
         "prompt": _prompt_summary(prompt_messages),
         "timeline": _timeline(events),
         "tools": _tool_events(events),
@@ -59,9 +60,60 @@ def _tool_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if event.get("type") == "tool.call":
             tools.append({"type": "call", "name": data.get("name"), "arguments": data.get("arguments")})
         elif event.get("type") == "tool.result":
-            content = data.get("content", "")
-            tools.append({"type": "result", "name": data.get("name"), "error": bool(data.get("is_error")), "content": _clip(str(content))})
+            tools.append({"type": "result", "name": data.get("name"), "error": bool(data.get("is_error")), "content": str(data.get("content", ""))})
     return tools
+
+
+def _performance(events: list[dict[str, Any]]) -> dict[str, Any]:
+    model_calls: list[dict[str, Any]] = []
+    tool_calls: list[dict[str, Any]] = []
+    request_ts: float | None = None
+    pending: list[tuple[float | None, Any, str]] = []
+    for event in events:
+        event_type = event.get("type")
+        timestamp = event.get("timestamp")
+        data = event.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
+        if event_type == "model.request":
+            request_ts = _as_float(timestamp)
+        elif event_type == "model.response":
+            usage = data.get("usage", {}) if isinstance(data.get("usage"), dict) else {}
+            model_calls.append(
+                {
+                    "duration_ms": _duration_ms(request_ts, timestamp),
+                    "input_tokens": _usage_int(usage, "input_tokens", "prompt_tokens"),
+                    "output_tokens": _usage_int(usage, "output_tokens", "completion_tokens"),
+                    "content_length": data.get("content_length"),
+                    "has_tool_calls": bool(data.get("has_tool_calls")),
+                }
+            )
+            request_ts = None
+        elif event_type == "tool.call":
+            pending.append((_as_float(timestamp), data.get("name"), str(data.get("tool_call_id") or "")))
+        elif event_type == "tool.result":
+            start_ts, name, call_id = pending.pop(0) if pending else (None, data.get("name"), "")
+            tool_calls.append(
+                {
+                    "name": name or data.get("name"),
+                    "tool_call_id": call_id or str(data.get("tool_call_id") or ""),
+                    "duration_ms": _duration_ms(start_ts, timestamp),
+                    "is_error": bool(data.get("is_error")),
+                    "content_chars": len(str(data.get("content", ""))),
+                }
+            )
+    return {
+        "model_calls": model_calls,
+        "tool_calls": tool_calls,
+        "totals": {
+            "model_call_count": len(model_calls),
+            "tool_call_count": len(tool_calls),
+            "model_ms": _sum_ms(model_calls),
+            "tool_ms": _sum_ms(tool_calls),
+            "input_tokens": _sum_tokens(model_calls, "input_tokens"),
+            "output_tokens": _sum_tokens(model_calls, "output_tokens"),
+        },
+    }
 
 
 def _timeline(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -71,14 +123,15 @@ def _timeline(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(data, dict):
             data = {}
         event_type = event.get("type")
+        timestamp = event.get("timestamp")
         if event_type == "model.request":
-            timeline.append({"type": event_type, "message_count": data.get("message_count"), "tool_names": data.get("tool_names")})
+            timeline.append({"type": event_type, "timestamp": timestamp, "message_count": data.get("message_count"), "tool_names": data.get("tool_names")})
         elif event_type == "model.response":
-            timeline.append({"type": event_type, "has_tool_calls": data.get("has_tool_calls"), "content_length": data.get("content_length"), "usage": data.get("usage")})
+            timeline.append({"type": event_type, "timestamp": timestamp, "has_tool_calls": data.get("has_tool_calls"), "content_length": data.get("content_length"), "usage": data.get("usage")})
         elif event_type == "tool.observe":
-            timeline.append({"type": event_type, "tool_call_count": data.get("tool_call_count")})
+            timeline.append({"type": event_type, "timestamp": timestamp, "tool_call_count": data.get("tool_call_count")})
         elif event_type == "flow.end":
-            timeline.append({"type": event_type})
+            timeline.append({"type": event_type, "timestamp": timestamp})
     return timeline
 
 
@@ -90,8 +143,6 @@ def _prompt_summary(messages: list[dict[str, Any]]) -> dict[str, Any]:
         item: dict[str, Any] = {"role": role, "chars": len(content)}
         if role == "system":
             item["sections"] = _sections(content)
-        else:
-            item["preview"] = _clip(content, 200)
         items.append(item)
     return {
         "message_count": len(messages),
@@ -104,6 +155,31 @@ def _sections(text: str) -> list[str]:
     return [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
 
 
-def _clip(text: str, limit: int = 1000) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 3] + "..."
+def _as_float(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _duration_ms(start: Any, end: Any) -> float | None:
+    start_value = _as_float(start)
+    end_value = _as_float(end)
+    if start_value is None or end_value is None:
+        return None
+    return round((end_value - start_value) * 1000, 1)
+
+
+def _usage_int(usage: dict[str, Any], *names: str) -> int | None:
+    for name in names:
+        value = usage.get(name)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _sum_ms(calls: list[dict[str, Any]]) -> float:
+    return round(sum(call["duration_ms"] for call in calls if isinstance(call.get("duration_ms"), (int, float))), 1)
+
+
+def _sum_tokens(calls: list[dict[str, Any]], key: str) -> int | None:
+    # Return None (unknown) rather than a misleading 0 when the provider gave no usage.
+    values = [call[key] for call in calls if isinstance(call.get(key), int)]
+    return sum(values) if values else None

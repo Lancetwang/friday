@@ -11,16 +11,16 @@ Friday 是一个本地命令行编码 agent。在工作区里运行 `friday`，�
 - 默认感知工作区：在任意目录运行 `friday`，该目录就是 agent 的工作目录。
 - Harness 优先的上下文设计：runtime 规则、skill 目录、用户画像、长期记忆、项目规则和环境信息按稳定顺序组装，方便 prefix caching。
 - Agent 只做路由：启动 prompt 保持克制，项目文件、嵌套指令、记忆和工具按需进入上下文。
-- 项目规则分层：`AGENTS.md` 是跨 agent 规则；`FRIDAY.md` 是 Friday 专属规则；local 变体保持本机私有。
+- 规则分层：`~/.friday/AGENTS.md` 是你在所有项目通用的全局规则；项目里的 `AGENTS.md`（根目录或嵌套）是项目规则，并覆盖全局规则。
 - 即插即用 skills：从项目和 home 目录发现可复用的 `SKILL.md` 工作流，按需加载。
-- 分层记忆：用户、全局、项目记忆彼此独立，和短期任务状态、可丢弃的 compact 会话摘要分开。
+- 分层记忆：用户、全局、项目记忆保存耐久的声明式事实；短期任务上下文活在会话里，不落成持久文件。
 - 多阶段上下文压缩：大体积工具结果只有在 cheap probe 判断收益足够时才压缩；否则直接进入会话 compact。
 - 自动 verification loop：修改交付物的 turn 会由独立 verifier agent 检查，失败时给 main agent 一次修复机会。
 - Goal mode：`/goal <task>` 会结合 verifier 反馈持续尝试，直到通过、被证明阻塞，或达到尝试上限。
 - 上下文预算报告：`/context` 展示 system prompt、skill catalog、tool schema、messages、tool results 的本地估算占用；如果最近一次 API 返回了 usage，也会展示精确输入/输出 token。
 - 本地 traces：每个 turn 都会写一行 JSONL，记录 prompt 摘要、runtime timeline、工具调用、验证结果、metrics 和最终回答。
 - 程序执行的 Bash 权限：`.friday/permissions.json` 提供持久 allow、deny、approval 规则；`/approve` 会执行待审批命令，并把结果带回同一个会话。
-- 会话恢复：新的 `.friday/sessions` 会保存完整消息快照，恢复时按 session 还原；旧记录会退回到紧凑文本上下文。
+- 会话恢复：每个会话在 `.friday/sessions/<id>.json` 保存一份快照、就地覆盖；恢复时在重建的最新前缀下还原它。
 - 小工具集：读写编辑文件、shell、glob、grep、memory 覆盖核心编码循环，不依赖庞大框架。
 - 本地状态：项目状态在 `<workspace>/.friday`，用户状态在 `~/.friday`。
 
@@ -37,7 +37,7 @@ flowchart TD
 
     Prefix["Prefix caching<br/>稳定 harness 在易变状态之前"] --> AgentLoop
     Context["Context engineering<br/>预算、工具压缩、结构化 compact"] --> AgentLoop
-    Memory["Memory management<br/>长期记忆 + 短期 STATE"] --> AgentLoop
+    Memory["Memory management<br/>长期记忆(事实) + 会话内短期上下文"] --> AgentLoop
     Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Skill / Memory"] --> AgentLoop
 ```
 
@@ -48,18 +48,23 @@ Friday 会按稳定顺序组装模型上下文，方便 prefix caching：
 1. `SOUL.md`：Friday 是谁。
 2. Runtime instructions：工具、memory policy、项目规则发现、skills、permissions 和上下文压缩机制。
 3. Tool Guidance：工具使用偏好。
-4. Skill Catalog：只放 skill 名称和描述。
+4. 全局规则：`~/.friday/AGENTS.md`，你在所有项目通用的 Friday 操作规则。
 5. `USER.md`：用户是谁，以及用户偏好如何工作。
 6. 全局 `MEMORY.md`：跨项目事实和长期经验。
-7. 项目指令：`AGENTS.md`、`.friday/AGENTS.md`、`FRIDAY.md`、`.friday/FRIDAY.md`、`FRIDAY.local.md` 和 `.friday/FRIDAY.local.md`。
-8. 环境信息：工作区、平台、shell。
-9. 项目 `.friday/MEMORY.md`：项目决策和本地上下文。
+7. Skill Catalog：只放 skill 名称和描述。
+8. 项目指令：`AGENTS.md` 和 `.friday/AGENTS.md`，从文件系统根向工作区逐级发现。
+9. 环境信息：工作区、OS、shell、Friday home、安装路径、权限模式。
+10. 项目 `.friday/MEMORY.md`：项目决策和本地上下文。
 
-内置默认文件放在 `src/friday/prompt_templates/`。`friday init` 会把它们复制到 `~/.friday/`，运行时使用 home 目录下可编辑的文件。`friday init` 也会创建项目内的 `FRIDAY.md`、`.friday/MEMORY.md` 和 `.friday/permissions.json`。
+全局且由代码维护的前缀（第 1-3 项）在每个工作区都相同、只在升级时变化，因此排在最前面以利于 provider prefix caching；随后是全局用户层（4-6），最后是随项目变化的尾部（7-10）。环境信息为动态注入，因此实时 OS 和路径不会过期。
 
-过大的项目指令文件会在启动 prompt 中截断。嵌套目录里的 `AGENTS.md` 和 `FRIDAY.md` 会在 Friday 触达该目录文件时按需加载，并且每个嵌套文件每个 session 只注入一次。
+提示词文本集中在 `src/friday/prompts.py`，harness 各模块引用它而不是内嵌大字符串。内置默认文档模板放在 `src/friday/prompt_templates/`。
 
-`.friday/STATE.md` 会在稳定 prompt 之后作为易变短期状态注入，因此更新它不会破坏 harness 前缀缓存。
+Friday 在首次运行时自动就位全局目录：任意 `friday` 命令都会确保 `~/.friday/` 里有 `SOUL.md`、`AGENTS.md`、`USER.md`、`MEMORY.md` 和 `FridaySkills/`（只补缺失的文件，运行时使用这些可编辑的 home 文件）。`friday init` 则是**项目级**，且**只生成项目的 `AGENTS.md`**；项目用到的记忆、权限、skills、会话都和项目规则无关，由运行时在需要时惰性创建。
+
+过大的项目指令文件会在启动 prompt 中截断。嵌套目录里的 `AGENTS.md` 会在 Friday 触达该目录文件时按需加载，并且每个嵌套文件每个 session 只注入一次。
+
+短期任务状态不落盘：它活在实时对话里，由 `friday resume` 恢复，上下文过长时压缩成会话内摘要消息。
 
 ## 记忆
 
@@ -69,12 +74,12 @@ Friday 按用途区分记忆：
 - `USER.md`：稳定的用户画像和偏好。
 - `~/.friday/MEMORY.md`：跨项目的全局记忆。
 - `<workspace>/.friday/MEMORY.md`：只属于当前项目的记忆。
-- `<workspace>/.friday/STATE.md`：当前工作区的短期任务状态。
-- `AGENTS.md` 和 `FRIDAY.md`：项目规则，不是记忆。
+- `~/.friday/AGENTS.md`：Friday 在所有工作区遵循的全局规则，不是记忆。
+- 项目 `AGENTS.md`：项目规则，不是记忆。
 
 `Memory` 工具可以 `read`、`add`、`replace` 或 `remove` 条目。写入会立刻落盘，但启动 prompt 是冻结快照；新的长期记忆会在下一次会话自然生效。
 
-`/compact` 会先让 Friday 用 `Memory` 工具保存真正值得长期保留的事实，然后把当前对话压缩成结构化短期状态。这个状态会写入 `.friday/STATE.md` 并注入新的上下文，但它不是长期记忆。
+`/compact` 会先让 Friday 用 `Memory` 工具保存真正值得长期保留的事实，然后把当前对话压缩成结构化摘要。摘要作为会话内消息注入（由下一次快照保存、由 resume 恢复），它不是长期记忆。
 
 ## 上下文管理
 
@@ -84,7 +89,7 @@ Friday 把上下文拆成几层，而不是把所有东西塞进一个不断增�
 - 路由上下文：文件、嵌套 `AGENTS.md`、完整 skill 内容和 memory 读取结果，只有在 agent 需要时才进入对话。
 - 工具压缩：当上下文占用达到窗口的 85% 时，Friday 会先 probe 大体积结构化工具结果；如果压缩它们预计能释放当前上下文至少 25% 的空间，就替换成短摘要。
 - 会话压缩：如果工具 probe 不值得做，Friday 保留原有 compact 流程，并在压缩前先给 agent 一次机会把长期事实写入 memory。
-- 短期状态：conversation compact 会按固定结构保留当前目标、已完成、未完成、尝试过的方法、决策、工作文件、命令结果、验证状态、下一步和最近对话。
+- 短期上下文：conversation compact 会按固定结构（当前目标、已完成、未完成、尝试过的方法、决策、工作文件、命令结果、验证状态、下一步、最近对话）压缩，结果留在会话里而不是文件。
 - 验证循环：当某一轮修改了交付物，Friday 会用独立 verifier 检查工作区状态，并在失败时把反馈交给 main agent 修复一次。
 - Goal loop：`/goal <task>` 每轮都会强制验证，并持续到 verifier 通过、给出阻塞证据，或达到尝试上限。
 - 预算可见：`/context` 会拆分展示 system prompt、skill catalog、tool schemas、messages、tool results 的当前占用。Friday 会对本地拼出的部分做估算，并在 provider 返回 usage 时记录最近一次精确输入/输出 token。
@@ -93,7 +98,7 @@ Friday 把上下文拆成几层，而不是把所有东西塞进一个不断增�
 
 ## 会话
 
-Friday 会把会话记录写到 `<workspace>/.friday/sessions`。当前记录包含用户输入、assistant 回复、最近工具事件、session id，以及当前 active message 的完整快照。恢复时优先使用这个快照，因此恢复的是模型可见的同一个会话，而不是从摘要里重新拼一个近似上下文。
+Friday 把每个会话写成 `<workspace>/.friday/sessions/<session_id>.json` 的**单份快照，每轮就地原子覆盖**（不再按轮追加，磁盘占用随当前上下文线性增长，而非平方级）。文件含 session id、时间、轮数、首条用户/末条回复的预览，以及当前完整消息列表。恢复时直接读这份快照、在重建的最新 system 前缀下原样还原对话体；列表与读取都不写盘。
 
 CLI 和 TUI 使用同一套保存/恢复路径。TUI 会给最近会话的交互式选择；CLI 的 `friday resume` 默认恢复最近会话。
 
@@ -107,7 +112,7 @@ Friday 把持久权限和 prompt 规则分开：
 
 - `.friday/permissions.json`：机器可读的 Bash 策略，包含 `allow`、`deny` 和 `require_approval` 列表。
 - `.friday/pending_approval.json`：命令需要用户确认时写入的一次性 pending approval。
-- `FRIDAY.md`：人类可读的项目规则，可以说明权限策略，但不负责执行。
+- `AGENTS.md`：人类可读的项目规则，可以说明权限策略，但不负责执行。
 
 Bash 运行前会先检查 `permissions.json`。deny 规则会阻止命令，allow 规则会直接运行，approval 规则会创建待审批项，内置危险命令启发式作为兜底。审批通过后，Friday 会把命令执行结果写回上下文，再由 agent 生成面向用户的最终回复。
 

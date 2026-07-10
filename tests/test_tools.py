@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from agent_core import RunContext
 
-from friday.app import PROJECT_INSTRUCTIONS_LIMIT, STATE_FILE, build_friday, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
+from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
@@ -289,7 +289,6 @@ class ToolTests(unittest.TestCase):
             root = Path(tmp)
             (root / "src").mkdir()
             (root / "src" / "AGENTS.md").write_text("src rules", encoding="utf-8")
-            (root / "src" / "FRIDAY.md").write_text("friday src rules", encoding="utf-8")
             (root / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
@@ -298,8 +297,7 @@ class ToolTests(unittest.TestCase):
 
             self.assertEqual(first["context"][0]["path"].replace("\\", "/"), "src/AGENTS.md")
             self.assertIn("src rules", first["context"][0]["content"])
-            self.assertEqual(first["context"][1]["path"].replace("\\", "/"), "src/FRIDAY.md")
-            self.assertIn("friday src rules", first["context"][1]["content"])
+            self.assertEqual(len(first["context"]), 1)
             self.assertNotIn("context", second)
 
     def test_skill_tool_lists_and_reads_skill_md(self) -> None:
@@ -331,28 +329,29 @@ class ResetTests(unittest.TestCase):
             (state / "sessions").mkdir(parents=True)
             global_state.mkdir(parents=True)
             (state / "MEMORY.md").write_text("# Memory\nold", encoding="utf-8")
-            (state / "sessions" / "x.jsonl").write_text("{}", encoding="utf-8")
+            (state / "sessions" / "x.json").write_text("{}", encoding="utf-8")
             (global_state / "MEMORY.md").write_text("old", encoding="utf-8")
             (global_state / "USER.md").write_text("old", encoding="utf-8")
             (global_state / "SOUL.md").write_text("old", encoding="utf-8")
 
             reset_friday(root, user_home=home)
 
-            self.assertEqual((state / "MEMORY.md").read_text(encoding="utf-8"), "# Project Memory\n")
-            self.assertFalse((state / "sessions").exists())
+            # Project state is wiped and recreated lazily on use, not by reset.
+            self.assertFalse(state.exists())
+            # Global defaults are re-provisioned.
             self.assertEqual((global_state / "MEMORY.md").read_text(encoding="utf-8"), "# User Memory\n")
             self.assertIn("Friday Soul", (global_state / "SOUL.md").read_text(encoding="utf-8"))
+            self.assertTrue((global_state / "FridaySkills").is_dir())
 
-    def test_init_migrates_legacy_prompt_files(self) -> None:
+    def test_ensure_user_home_migrates_legacy_prompt_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            home = root / "home"
+            home = Path(tmp) / "home"
             user_dir = home / ".friday"
             user_dir.mkdir(parents=True)
             (user_dir / "soul.md").write_text("legacy soul", encoding="utf-8")
             (user_dir / "user.md").write_text("legacy user", encoding="utf-8")
 
-            init_project(root, user_home=home)
+            ensure_user_home(home)
 
             self.assertEqual((user_dir / "SOUL.md").read_text(encoding="utf-8"), "legacy soul")
             self.assertEqual((user_dir / "USER.md").read_text(encoding="utf-8"), "legacy user")
@@ -362,18 +361,31 @@ class ResetTests(unittest.TestCase):
             self.assertNotIn("soul.md", names)
             self.assertNotIn("user.md", names)
 
-    def test_init_creates_friday_project_files_not_agents_md(self) -> None:
+    def test_init_creates_only_project_agents_md(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            created = init_project(root)
+
+            self.assertEqual(created, [root / "AGENTS.md"])
+            self.assertTrue((root / "AGENTS.md").exists())
+            self.assertFalse((root / "FRIDAY.md").exists())
+            # init touches only project rules; memory/permissions/skills stay lazy.
+            self.assertFalse((root / ".friday").exists())
+            self.assertEqual(init_project(root), [])
+
+    def test_build_friday_provisions_user_home_on_first_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             home = root / "home"
 
-            init_project(root, user_home=home)
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                build_friday(root, stream=False)
 
-            self.assertTrue((root / "FRIDAY.md").exists())
-            self.assertFalse((root / "AGENTS.md").exists())
-            self.assertTrue((root / ".friday" / "MEMORY.md").exists())
-            self.assertTrue((root / ".friday" / STATE_FILE).exists())
-            self.assertTrue((root / ".friday" / PERMISSIONS_FILE).exists())
+            user_dir = home / ".friday"
+            for name in ("SOUL.md", "AGENTS.md", "USER.md", "MEMORY.md"):
+                self.assertTrue((user_dir / name).exists(), name)
+            self.assertTrue((user_dir / "FridaySkills").is_dir())
 
 
 class PromptTests(unittest.TestCase):
@@ -381,33 +393,43 @@ class PromptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "AGENTS.md").write_text("project rules", encoding="utf-8")
-            (root / "FRIDAY.md").write_text("friday rules", encoding="utf-8")
             (root / ".friday").mkdir()
             (root / ".friday" / "MEMORY.md").write_text("# Project Memory\n", encoding="utf-8")
-            (root / ".friday" / STATE_FILE).write_text("# Short-Term State\n", encoding="utf-8")
             text = build_instructions(root, root / ".friday")
 
             self.assertLess(text.index("## Soul"), text.index("## Runtime"))
             self.assertLess(text.index("## Runtime"), text.index("## Tool Guidance"))
-            self.assertLess(text.index("## Tool Guidance"), text.index("## Project Instructions"))
+            self.assertLess(text.index("## Tool Guidance"), text.index("## Global Rules"))
+            self.assertLess(text.index("## Global Rules"), text.index("## Project Instructions"))
             self.assertLess(text.index("## Project Instructions"), text.index("## Environment"))
             self.assertIn("## Project Memory", text)
             self.assertNotIn("## Short-Term State", text)
-            self.assertLess(text.index("AGENTS.md"), text.index("FRIDAY.md"))
-            self.assertIn("friday rules", text)
+            self.assertIn("project rules", text)
 
-    def test_short_term_state_is_not_part_of_stable_instructions(self) -> None:
+    def test_global_rules_layer_reads_home_agents_md(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            init_project(root, user_home=root / "home")
-            (root / ".friday" / STATE_FILE).write_text("# Short-Term State\n\n## Current Goal\nship it\n", encoding="utf-8")
+            home = root / "home"
+            ensure_user_home(home)
+            (home / ".friday" / "AGENTS.md").write_text(
+                "# Friday Global Rules\n\n## My rules\n- always run tests with uv\n",
+                encoding="utf-8",
+            )
 
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                text = build_instructions(root, root / ".friday")
+
+            self.assertIn("## Global Rules", text)
+            self.assertIn("always run tests with uv", text)
+
+    def test_build_friday_does_not_persist_or_inject_short_term_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
             with patch("friday.app.Path.home", return_value=root / "home"), patch("friday.tools.Path.home", return_value=root / "home"):
-                instructions = build_instructions(root, root / ".friday")
                 _agent, context = build_friday(root, stream=False)
 
-            self.assertNotIn("ship it", instructions)
-            self.assertIn("ship it", context.get_messages()[-1]["content"])
+            self.assertFalse((root / ".friday" / "STATE.md").exists())
+            self.assertNotIn("Short-Term State", "".join(str(m.get("content", "")) for m in context.get_messages()))
 
     def test_build_friday_loads_project_env_without_overriding_shell(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -432,25 +454,28 @@ class PromptTests(unittest.TestCase):
                 text = build_instructions(root, root / ".friday")
 
             self.assertIn("[truncated:", text)
-            self.assertLess(len(text), PROJECT_INSTRUCTIONS_LIMIT + 4000)
+            self.assertLess(len(text), PROJECT_INSTRUCTIONS_LIMIT + 8000)
 
 
 class CompactTests(unittest.TestCase):
-    def test_save_turn_updates_short_term_recent_conversations(self) -> None:
+    def test_save_turn_writes_one_snapshot_per_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            init_project(root, user_home=root / "home")
+            sessions = root / ".friday" / "sessions"
 
-            for index in range(12):
-                save_turn(root, f"user {index}", f"assistant {index}", [], "s1")
+            save_turn(root, "hi", "hello", [], "s1", [{"role": "user", "content": "hi"}])
+            data = json.loads((sessions / "s1.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["session_id"], "s1")
+            self.assertEqual(data["turns"], 1)
+            self.assertEqual(data["messages"], [{"role": "user", "content": "hi"}])
+            self.assertNotIn("events", data)
+            self.assertFalse((root / ".friday" / "STATE.md").exists())
 
-            state = (root / ".friday" / STATE_FILE).read_text(encoding="utf-8")
-            row = json.loads(next((root / ".friday" / "sessions").glob("*.jsonl")).read_text(encoding="utf-8").splitlines()[-1])
-            self.assertIn("## Recent Conversations", state)
-            self.assertNotIn("user 0", state)
-            self.assertIn("user 11", state)
-            self.assertEqual(state.count("- User:"), 10)
-            self.assertNotIn("events", row)
+            save_turn(root, "hi", "hello again", [], "s1", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi2"}])
+            updated = json.loads((sessions / "s1.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated["turns"], 2)
+            self.assertEqual(len(updated["messages"]), 2)
+            self.assertEqual(len(list(sessions.glob("*.json"))), 1)
 
     def test_context_report_breaks_down_prompt_tools_and_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -523,15 +548,13 @@ class CompactTests(unittest.TestCase):
             self.assertIsNot(agent, fake_agent)
             self.assertIn("conversation compacted", notice)
 
-    def test_compact_reviews_memory_then_rebuilds_context(self) -> None:
+    def test_compact_saves_memory_and_summarizes_in_one_pass(self) -> None:
         class FakeAgent:
             def __init__(self) -> None:
                 self.prompts = []
 
             def chat(self, prompt, *args, **kwargs) -> str:
                 self.prompts.append(prompt)
-                if "Before compacting" in prompt:
-                    return "No durable memory updates."
                 return "Continue with the memory harness work."
 
         class FakeContext:
@@ -554,20 +577,21 @@ class CompactTests(unittest.TestCase):
             fake_agent = FakeAgent()
 
             def fake_build(workspace, *, stream=True):
-                rebuilt = FakeContext()
-                rebuilt.add_message("system", "## Short-Term State\n" + (Path(workspace) / ".friday" / STATE_FILE).read_text(encoding="utf-8"))
-                return object(), rebuilt
+                return object(), FakeContext()
 
             with patch("friday.app.build_friday", side_effect=fake_build):
                 agent, new_context, summary = compact_friday(fake_agent, context, stream=False)
 
-            self.assertIn("Before compacting", fake_agent.prompts[0])
-            self.assertIn("Compact the conversation", fake_agent.prompts[1])
-            self.assertIn("## Current Goal", fake_agent.prompts[1])
-            self.assertIn("Recent Conversations", fake_agent.prompts[1])
+            # Single in-band pass: one chat carrying both the memory step and the schema.
+            self.assertEqual(len(fake_agent.prompts), 1)
+            self.assertIn("Memory tool", fake_agent.prompts[0])
+            self.assertIn("## Current Goal", fake_agent.prompts[0])
+            self.assertIn("Recent Conversations", fake_agent.prompts[0])
             self.assertEqual(summary, "Continue with the memory harness work.")
-            self.assertIn("Short-Term State", new_context.messages[-1]["content"])
-            self.assertEqual((root / ".friday" / STATE_FILE).read_text(encoding="utf-8"), "Continue with the memory harness work.\n")
+            self.assertEqual(new_context.messages[-1]["role"], "assistant")
+            self.assertIn("## Session Summary", new_context.messages[-1]["content"])
+            self.assertIn("Continue with the memory harness work.", new_context.messages[-1]["content"])
+            self.assertFalse((root / ".friday" / "STATE.md").exists())
             self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])
 
 
@@ -728,75 +752,99 @@ class VerificationTests(unittest.TestCase):
 
 
 class ResumeTests(unittest.TestCase):
-    def test_resume_adds_recent_session_context(self) -> None:
+    def test_resume_without_snapshot_restores_no_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             sessions = root / ".friday" / "sessions"
             sessions.mkdir(parents=True)
-            (sessions / "20260701.jsonl").write_text(
-                '{"session_id":"s1","user":"hi","assistant":"hello","events":[]}\n',
+            (sessions / "s1.json").write_text(
+                json.dumps({"session_id": "s1", "turns": 1, "user": "hi", "assistant": "hello"}),
                 encoding="utf-8",
             )
 
-            agent, context, count = resume_friday(root, stream=False)
+            home = root / "home"
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                agent, context, count = resume_friday(root, stream=False)
 
             self.assertEqual(count, 1)
-            self.assertIn("Resumed Session", context.messages[-1]["content"])
-            self.assertIn("User: hi", context.messages[-1]["content"])
+            self.assertEqual(context.metadata["session_id"], "s1")
+            self.assertEqual([m for m in context.get_messages() if m.get("role") != "system"], [])
+            self.assertNotIn("Resumed Session", "".join(str(m.get("content", "")) for m in context.get_messages()))
 
-    def test_resume_restores_full_message_snapshot_when_available(self) -> None:
+    def test_resume_rebuilds_fresh_prefix_and_restores_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = RunContext()
-            context.add_message("system", "prefix")
-            context.add_message("user", "hi")
-            context.add_message("assistant", "hello")
+            snapshot = [
+                {"role": "system", "content": "stale prefix"},
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ]
 
-            save_turn(root, "hi", "hello", [], "s1", context.get_messages())
-            _agent, resumed, count = resume_friday(root, stream=False)
+            save_turn(root, "hi", "hello", [], "s1", snapshot)
+            home = root / "home"
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                _agent, resumed, count = resume_friday(root, stream=False)
 
+            messages = resumed.get_messages()
+            non_system = [m for m in messages if m.get("role") != "system"]
             self.assertEqual(count, 1)
-            self.assertEqual(resumed.get_messages(), context.get_messages())
-            self.assertNotIn("Resumed Session", resumed.get_messages()[-1]["content"])
-
-    def test_resume_clears_legacy_rows_without_session_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            sessions = root / ".friday" / "sessions"
-            sessions.mkdir(parents=True)
-            path = sessions / "20260701.jsonl"
-            path.write_text(
-                '{"time":"1","user":"old","assistant":"legacy","events":[]}\n'
-                '{"time":"2","session_id":"s1","user":"new","assistant":"fresh","events":[]}\n',
-                encoding="utf-8",
-            )
-
-            choices = resume_choices(root)
-
-            self.assertEqual(len(choices), 1)
-            self.assertEqual(choices[0]["user"], "new")
-            self.assertNotIn("legacy", path.read_text(encoding="utf-8"))
+            self.assertEqual(non_system, [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
+            self.assertEqual(messages[0]["role"], "system")
+            self.assertNotIn("stale prefix", "".join(str(m.get("content", "")) for m in messages if m.get("role") == "system"))
 
     def test_resume_can_select_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             sessions = root / ".friday" / "sessions"
             sessions.mkdir(parents=True)
-            (sessions / "20260701.jsonl").write_text(
-                '{"time":"1","session_id":"s1","user":"first","assistant":"one","events":[]}\n'
-                '{"time":"2","session_id":"s1","user":"follow","assistant":"one more","events":[]}\n'
-                '{"time":"3","session_id":"s2","user":"second","assistant":"two","events":[]}\n',
+            (sessions / "s1.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "turns": 2,
+                        "updated": "2",
+                        "user": "first",
+                        "assistant": "one more",
+                        "messages": [
+                            {"role": "user", "content": "first"},
+                            {"role": "assistant", "content": "one"},
+                            {"role": "user", "content": "follow"},
+                            {"role": "assistant", "content": "one more"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (sessions / "s2.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s2",
+                        "turns": 1,
+                        "updated": "3",
+                        "user": "second",
+                        "assistant": "two",
+                        "messages": [
+                            {"role": "user", "content": "second"},
+                            {"role": "assistant", "content": "two"},
+                        ],
+                    }
+                ),
                 encoding="utf-8",
             )
 
             choices = resume_choices(root)
-            agent, context, count = resume_friday(root, stream=False, resume_id=choices[1]["id"])
+            home = root / "home"
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                agent, context, count = resume_friday(root, stream=False, resume_id=choices[1]["id"])
 
+            non_system = [m for m in context.get_messages() if m.get("role") != "system"]
+            self.assertEqual([choice["id"] for choice in choices], ["s2", "s1"])
             self.assertEqual(count, 2)
             self.assertEqual(choices[1]["turns"], "2")
-            self.assertIn("User: first", context.messages[-1]["content"])
-            self.assertIn("User: follow", context.messages[-1]["content"])
-            self.assertNotIn("User: second", context.messages[-1]["content"])
+            self.assertEqual(context.metadata["session_id"], "s1")
+            self.assertEqual(non_system[-1], {"role": "assistant", "content": "one more"})
+            self.assertIn({"role": "user", "content": "follow"}, non_system)
+            self.assertNotIn({"role": "user", "content": "second"}, non_system)
 
 
 if __name__ == "__main__":
