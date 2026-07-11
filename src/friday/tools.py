@@ -18,7 +18,6 @@ from agent_core import tool
 USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
 CONTEXT_FILE_LIMIT = 8000
-SKILL_LIMIT = 12000
 APPROVAL_FILE = "pending_approval.json"
 PERMISSIONS_FILE = "permissions.json"
 INSTRUCTION_FILE_NAMES = (
@@ -204,21 +203,10 @@ def build_tools(workspace: Path, friday_dir: Path):
     ) -> dict:
         return _jina_fetch(url, max_chars)
 
-    @tool(description="List or read on-demand SKILL.md instructions. Use list first; read only when a skill is relevant.", name="Skill")
-    def skill(
-        action: Annotated[Literal["list", "read"], "Skill action to perform."],
-        name: Annotated[str, "Skill name to read. Leave empty when listing."] = "",
-    ) -> dict:
+    @tool(description="List available skills with their names, descriptions, and SKILL.md paths.", name="Skill")
+    def skill() -> dict:
         skills = _discover_skills(workspace, user_dir)
-        if action == "list":
-            return {"skills": [{"name": key, "description": item["description"], "path": str(item["path"])} for key, item in skills.items()]}
-        if action == "read":
-            key = name.strip().lower()
-            if key not in skills:
-                raise ValueError(f"Unknown skill: {name}")
-            item = skills[key]
-            return {"name": key, "path": str(item["path"]), "content": _read_limited(item["path"], SKILL_LIMIT)}
-        raise ValueError(f"Unknown skill action: {action}")
+        return {"skills": [{"name": key, "description": item["description"], "path": str(item["path"])} for key, item in skills.items()]}
 
     @tool(description="Read or update Friday memory files.", name="Memory")
     def memory(
@@ -296,12 +284,14 @@ def default_permissions() -> dict:
 
 
 def skill_catalog(workspace: Path) -> str:
-    skills = _discover_skills(workspace.resolve(), Path.home() / ".friday")
-    if not skills:
-        return ""
-    lines = ["Available skills. Use the Skill tool to read a full SKILL.md only when relevant:"]
-    lines.extend(f"- {name}: {item['description']}" for name, item in skills.items())
-    return "\n".join(lines)
+    return "\n".join(
+        [
+            "Available skills live under:",
+            f"- {workspace.resolve() / '.friday' / 'FridaySkills'}",
+            f"- {Path.home() / '.friday' / 'FridaySkills'}",
+            "Use Skill to list them, then use Bash to read only the relevant SKILL.md and referenced resources.",
+        ]
+    )
 
 
 def _tavily_search(query: str, max_results: int, search_depth: str, topic: str, include_answer: bool, time_range: str) -> dict:

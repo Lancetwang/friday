@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from agent_core import RunContext
 
-from friday.app import PROJECT_INSTRUCTIONS_LIMIT, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
+from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
@@ -300,25 +300,26 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(len(first["context"]), 1)
             self.assertNotIn("context", second)
 
-    def test_skill_tool_lists_and_reads_skill_md(self) -> None:
+    def test_skill_tool_dynamically_lists_skill_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
             skill_dir = root / ".friday" / "FridaySkills" / "review"
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text(
                 "---\nname: review\ndescription: Review code changes.\n---\n\nFull review workflow.",
                 encoding="utf-8",
             )
-            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
-            listed = tools["Skill"]("list")
-            loaded = tools["Skill"]("read", "review")
+            listed = tools["Skill"]()
 
-            self.assertIn("review", {skill["name"] for skill in listed["skills"]})
-            self.assertIn("Review code changes.", skill_catalog(root))
-            self.assertIn("Full review workflow.", loaded["content"])
+            self.assertEqual(listed["skills"][0]["name"], "review")
+            self.assertEqual(listed["skills"][0]["description"], "Review code changes.")
+            self.assertEqual(Path(listed["skills"][0]["path"]), skill_dir / "SKILL.md")
+            self.assertNotIn("Review code changes.", skill_catalog(root))
 
 
+@patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
 class ResetTests(unittest.TestCase):
     def test_reset_clears_project_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -388,7 +389,18 @@ class ResetTests(unittest.TestCase):
             self.assertTrue((user_dir / "FridaySkills").is_dir())
 
 
+@patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
 class PromptTests(unittest.TestCase):
+    def test_incompatible_runtime_fails_during_startup(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "--force --reinstall"):
+            _require_runtime(object())
+
+    def test_pinned_runtime_mismatch_fails_during_startup(self) -> None:
+        with patch("friday.app._pinned_core_url", return_value="https://example/core-v2.zip"):
+            with patch("friday.app._installed_core_url", return_value="https://example/core-v1.zip"):
+                with self.assertRaisesRegex(RuntimeError, "--force --reinstall"):
+                    _require_runtime(RunContext())
+
     def test_prompt_keeps_stable_prefix_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -445,6 +457,24 @@ class PromptTests(unittest.TestCase):
                 self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "dummy")
                 self.assertEqual(os.environ["TAVILY_API_KEY"], "from-file")
                 self.assertEqual(os.environ["LLM_MODEL"], "from-shell")
+
+    def test_build_friday_uses_global_env_as_project_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            (home / ".friday").mkdir(parents=True)
+            (root / ".env").write_text("LLM_MODEL=project-model\n", encoding="utf-8")
+            (home / ".friday" / ".env").write_text(
+                "LLM_API_KEY=dummy\nLLM_MODEL=global-model\nTAVILY_API_KEY=global-tavily\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                    build_friday(root, stream=False)
+                self.assertEqual(os.environ["LLM_MODEL"], "project-model")
+                self.assertEqual(os.environ["TAVILY_API_KEY"], "global-tavily")
 
     def test_large_project_instructions_are_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -767,6 +797,7 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(VERIFIER_MAX_STEPS, 10000)
 
 
+@patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
 class ResumeTests(unittest.TestCase):
     def test_resume_without_snapshot_restores_no_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

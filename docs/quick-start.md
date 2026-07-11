@@ -1,44 +1,66 @@
 # Quick Start
 
-Initialize Friday files in a project:
+Complete [Install](install.md) first. Then open any project and start Friday:
+
+```powershell
+cd path\to\your-project
+friday
+```
+
+The directory where `friday` is launched becomes the workspace. Friday reads and writes only relative to that project unless an explicitly approved Bash command does otherwise.
+
+## First Session
+
+Inside the TUI:
+
+```text
+Summarize this project and tell me how to run its tests.
+```
+
+Use `/help` to see interactive commands. Press `Ctrl+O` to expand or collapse tool details.
+
+Project initialization is optional:
 
 ```powershell
 friday init
 ```
 
-Start the terminal UI:
+It creates `AGENTS.md`, where you can record project commands and rules. Friday creates `.friday/` state lazily when memory, sessions, permissions, or traces are needed.
 
-```powershell
-friday
-```
+## One-Shot And Plain Chat
 
-Ask once without opening chat:
+Ask once without opening the TUI:
 
 ```powershell
 friday ask "summarize this project"
 ```
 
-Run a goal loop:
+Use the plain terminal chat instead of the TUI:
+
+```powershell
+friday chat
+```
+
+CLI and TUI use the same turn, context, memory, verification, approval, session, and trace implementation.
+
+## Common Workflows
+
+Run a verified goal loop:
 
 ```text
 /goal fix the failing test and verify it passes
 ```
 
-Resume recent work:
+Resume a previous session:
 
-```powershell
-friday resume
+```text
+/resume
 ```
 
-Show current context usage:
+Inspect or compact context:
 
 ```text
 /context
-```
-
-Compact the live conversation:
-
-```text
 /compact
 ```
 
@@ -49,5 +71,4 @@ Approve or reject a pending dangerous Bash command:
 /reject
 ```
 
-Local project state is stored in `.friday/`. User state is stored in `~/.friday/`.
-
+Project state is stored in `<workspace>/.friday/`. Global configuration, user profile, memory, rules, and user skills are stored in `~/.friday/`.

@@ -9,7 +9,7 @@ Friday discovers skills from:
 ~/.friday/FridaySkills/<skill>/SKILL.md
 ```
 
-Only skill names and descriptions enter the startup prompt. Full skill content is loaded on demand through the `Skill` tool.
+The startup prompt contains only these directory locations. Call `Skill` to dynamically list each available skill's `name`, `description`, and `SKILL.md` path. After selecting one, use Bash to read its `SKILL.md`, referenced files, or scripts as needed.
 
 A minimal skill:
 
@@ -37,11 +37,11 @@ Use when the user asks Friday to review code changes.
 - Do not rewrite code unless the user asks.
 ```
 
-The frontmatter is the skill catalog:
+The frontmatter is returned by the dynamic `Skill` listing:
 
 - `name`: stable skill id shown to the agent.
 - `description`: short routing text used before the full skill is loaded.
 
-The Markdown body is progressive disclosure. It is not included in the startup prompt; Friday reads it only after the agent chooses the skill with the `Skill` tool.
+The Markdown body is progressive disclosure. It is not included in the startup prompt or listing; Friday reads it with Bash only after choosing the skill. Supporting references, templates, and scripts remain in the skill directory and are accessed only when the selected `SKILL.md` calls for them.
 
 Keep skills focused. A skill should teach one repeatable workflow, not become a second system prompt.

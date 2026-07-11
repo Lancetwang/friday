@@ -58,7 +58,7 @@ Project instructions:
 Nested AGENTS.md files are auto-loaded once when tools touch files under their directory. Later (deeper) project instructions override earlier ones.
 
 Skills:
-The startup prompt contains only skill names and descriptions. Use Skill to list on-demand workflows, then read only the relevant SKILL.md.
+Skill locations are listed in the Skill Catalog. Use Skill to list available workflows, then use Bash to read only the relevant SKILL.md and any resources it references.
 
 Memory:
 Use Memory only for durable, declarative facts: user preferences, environment details, conventions, tool quirks, and lasting project decisions.

@@ -4,7 +4,9 @@ import json
 import os
 import shutil
 import tempfile
+import tomllib
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, distribution
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -27,11 +29,9 @@ RECENT_CONVERSATION_LIMIT = 10
 
 def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
-    cwd_env = Path.cwd().resolve() / ".env"
     root_env = root / ".env"
     _load_env(root_env)
-    if root_env != cwd_env:
-        _load_env(cwd_env)
+    _load_env(Path.home() / ".friday" / ".env")
     ensure_user_home(Path.home())
     friday_dir = root / ".friday"
     instructions = build_instructions(root, friday_dir)
@@ -42,9 +42,44 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
         chat_kwargs={"temperature": 0.2, "max_tokens": 1200, "tool_choice": "auto"},
     )
     context = agent.new_context()
+    _require_runtime(context)
     context.metadata["workspace"] = str(root)
     context.metadata["session_id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
     return agent, context
+
+
+def _require_runtime(context: Any) -> None:
+    expected = _pinned_core_url()
+    installed = _installed_core_url()
+    if not hasattr(context, "usage") or (expected and installed != expected):
+        raise RuntimeError(
+            "Incompatible agent-core-runtime installation. Reinstall Friday and its pinned dependencies with "
+            f"`uv tool install -e \"{_source_root()}\" --force --reinstall`."
+        )
+
+
+def _source_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _pinned_core_url() -> str:
+    pyproject = _source_root() / "pyproject.toml"
+    if not pyproject.exists():
+        return ""
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    for requirement in data.get("project", {}).get("dependencies", []):
+        name, separator, url = str(requirement).partition("@")
+        if separator and name.strip() == "agent-core-runtime":
+            return url.strip()
+    return ""
+
+
+def _installed_core_url() -> str:
+    try:
+        direct_url = distribution("agent-core-runtime").read_text("direct_url.json")
+        return str(json.loads(direct_url or "{}").get("url") or "")
+    except (PackageNotFoundError, json.JSONDecodeError):
+        return ""
 
 
 def _load_env(path: Path) -> None:

@@ -14,8 +14,9 @@ over anything hardcoded here or stored in memory.
 
 1. If the workspace has an `AGENTS.md`, follow it first; project rules win over
    these global rules.
-2. Check the `Skill Catalog`. When a skill matches the task, read its `SKILL.md`
-   with the Skill tool before acting; never guess a skill's contents.
+2. When a task may benefit from a specialized workflow, use Skill to list
+   available metadata, then use Bash to read only the selected `SKILL.md` and
+   resources it references; never guess a skill's contents.
 3. Shell commands are gated by `.friday/permissions.json`; dangerous ones need
    `/approve`. Do not edit permission or rule files unless asked.
 
