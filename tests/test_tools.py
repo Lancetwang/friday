@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from agent_core import RunContext
 
@@ -493,6 +493,7 @@ class CompactTests(unittest.TestCase):
             self.assertIn("tool schemas", report)
             self.assertIn("messages", report)
             self.assertIn("input 123 / output 7 / total 130", report)
+            self.assertIn("last turn usage (provider)", report)
             self.assertIn("Local est. tokens", report)
 
     def test_tool_result_compaction_summarizes_structured_output(self) -> None:
@@ -684,6 +685,21 @@ class VerificationTests(unittest.TestCase):
 
         self.assertEqual(len(blocked_agent.prompts), 1)
         self.assertTrue(blocked[0]["blocked"])
+
+    def test_goal_chat_has_no_default_attempt_limit(self) -> None:
+        agent = Mock()
+        agent.chat.return_value = "answer"
+        context = Mock(events=[], metadata={"workspace": "."})
+        results = [
+            {"passed": False, "blocked": False, "feedback": "keep going"}
+            for _ in range(6)
+        ] + [{"passed": True, "blocked": False, "feedback": ""}]
+
+        with patch("friday.loop.verify_friday", side_effect=results):
+            _answer, verifications = goal_chat(agent, context, "finish it", "instructions")
+
+        self.assertEqual(agent.chat.call_count, 7)
+        self.assertTrue(verifications[-1]["passed"])
 
     def test_verifier_error_stops_without_repairing(self) -> None:
         class FakeAgent:

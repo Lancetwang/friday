@@ -180,6 +180,5 @@ def _sum_ms(calls: list[dict[str, Any]]) -> float:
 
 
 def _sum_tokens(calls: list[dict[str, Any]], key: str) -> int | None:
-    # Return None (unknown) rather than a misleading 0 when the provider gave no usage.
-    values = [call[key] for call in calls if isinstance(call.get(key), int)]
-    return sum(values) if values else None
+    values = [call.get(key) for call in calls]
+    return sum(values) if values and all(isinstance(value, int) for value in values) else None

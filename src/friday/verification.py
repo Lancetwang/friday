@@ -43,6 +43,7 @@ def verify_friday(goal: str, context: RunContext, start_event: int, instructions
             "required": True,
         }
     verifier, verifier_context = build_verifier(instructions, workspace)
+    verifier_context.usage = context.usage
     try:
         raw = verifier.chat(verification_prompt(goal, events), context=verifier_context, max_steps=VERIFIER_MAX_STEPS, stream=False)
     except Exception as exc:

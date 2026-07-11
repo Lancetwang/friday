@@ -52,7 +52,7 @@ def goal_chat(
     goal: str,
     instructions: str,
     *,
-    max_attempts: int = 5,
+    max_attempts: int | None = None,
     max_steps: int = AGENT_MAX_STEPS,
     on_delta: Any = None,
     on_verify: Callable[[dict[str, Any]], None] | None = None,
@@ -78,7 +78,7 @@ def run_loop(
     instructions: str,
     *,
     force_verify: bool,
-    max_attempts: int,
+    max_attempts: int | None,
     max_steps: int,
     on_delta: Any = None,
     on_verify: Callable[[dict[str, Any]], None] | None = None,
@@ -157,7 +157,7 @@ def _verify(state: dict[str, Any]):
     if result.get("error"):
         state["status"] = "error"
         return "finish", state
-    if state["attempt"] >= state["max_attempts"]:
+    if state["max_attempts"] is not None and state["attempt"] >= state["max_attempts"]:
         state["status"] = "max_attempts"
         return "finish", state
     state["feedback"] = str(result.get("feedback") or "Verifier did not pass the goal.")

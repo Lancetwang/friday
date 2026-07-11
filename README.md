@@ -18,8 +18,8 @@ Detailed usage docs live in [docs](docs/index.md).
 - Layered memory: user, global, and project memory hold durable declarative facts; short-term task context lives in the session, not a persisted file.
 - Multi-stage context compression: large tool results are compacted only when a cheap probe says the space gain is worth it; otherwise Friday goes straight to conversation compact.
 - Automatic verification loop: turns that change deliverables are checked by an independent verifier agent, with one repair attempt on failure.
-- Goal mode: `/goal <task>` repeats main-agent attempts with verifier feedback until pass, blocked, or attempt limit.
-- Context budget reporting: `/context` shows local estimates for the system prompt, skill catalog, tool schemas, messages, and tool results, plus exact provider usage from the latest API response when available.
+- Goal mode: `/goal <task>` repeats main-agent attempts with verifier feedback until pass, blocked, approval, or cancellation.
+- Context budget reporting: `/context` shows local estimates for the system prompt, skill catalog, tool schemas, messages, and tool results, plus provider usage aggregated across every model call in the latest turn.
 - Local traces: each turn writes a JSONL trace with a prompt summary, runtime timeline, tool calls, verification results, metrics, and final answer.
 - Program-enforced Bash permissions: `.friday/permissions.json` provides persistent allow/deny/approval rules; `/approve` executes the pending command and feeds the result back into the same session.
 - Session resume: each session keeps one snapshot file (`.friday/sessions/<id>.json`), overwritten in place; resume restores it under a freshly built prefix.
@@ -93,8 +93,8 @@ Friday treats context as layers instead of one ever-growing prompt:
 - Conversation compact: if the tool probe is not worthwhile, Friday keeps the existing compact flow and first gives the agent a chance to save durable facts to memory.
 - Short-term context: conversation compact uses a fixed schema (current goal, completed work, open items, tried methods, decisions, working files, command results, verification state, next steps, recent conversations) and keeps the result in the session instead of a file.
 - Verification: after a turn changes deliverables, Friday runs an independent verifier against the workspace state and feeds failure feedback back to the main agent once.
-- Goal loop: `/goal <task>` forces verification after each attempt and continues until the verifier passes, blocks with evidence, or reaches the attempt limit.
-- Budget visibility: `/context` prints the current breakdown for system prompt, skill catalog, tool schemas, messages, and tool results. Friday estimates the parts it builds locally and records exact input/output token usage from the latest API response when the provider returns it.
+- Goal loop: `/goal <task>` forces verification after each attempt and continues until the verifier passes, blocks with evidence, needs approval, or is cancelled.
+- Budget visibility: `/context` prints the current breakdown for system prompt, skill catalog, tool schemas, messages, and tool results. Friday estimates the parts it builds locally and records input/output usage across all main-agent and verifier calls in the latest turn; provider values are used when available and clearly marked estimates are used otherwise.
 
 The default context window is 128K tokens and can be overridden with `FRIDAY_CONTEXT_WINDOW`.
 

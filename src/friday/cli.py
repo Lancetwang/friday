@@ -4,15 +4,13 @@ import argparse
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, compact_friday, init_project, prepare_context_for_chat, reset_friday, resume_friday, save_turn
-from friday.context import context_report, usage_from_events
-from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
+from friday.app import build_friday, build_instructions, compact_friday, init_project, reset_friday, resume_friday
+from friday.context import context_report
 from friday.tui_node import run_tui
 from friday.tools import approve_pending, build_tools
-from friday.trace import write_trace
+from friday.turn import run_turn
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -88,8 +86,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "ask":
         text = " ".join(args.text)
-        agent, context, answer = _ask(agent, context, text, stream)
-        _save(context, text, answer)
+        _ask(agent, context, text, stream)
         return
 
     if command == "chat":
@@ -107,8 +104,7 @@ def main(argv: list[str] | None = None) -> None:
             if text.startswith("/"):
                 agent, context = _slash(text, stream, agent, context)
                 continue
-            agent, context, answer = _ask(agent, context, text, stream)
-            _save(context, text, answer)
+            agent, context, _ = _ask(agent, context, text, stream)
         return
 
     parser.error(f"unknown command: {command}")
@@ -151,15 +147,19 @@ def _slash(text: str, stream: bool, agent, context):
         if not goal:
             print("usage: /goal describe the goal")
         else:
-            agent, context, answer = _goal(agent, context, goal, stream)
-            _save(context, f"/goal {goal}", answer)
+            agent, context, _ = _goal(agent, context, goal, stream)
     elif command == "approve":
         result = approve_pending()
         print(json_dump(result))
         if result.get("approved"):
-            context.add_message("system", "## Approval Result\n" + json_dump(result))
-            agent, context, answer = _ask(agent, context, _approval_followup_prompt(), stream)
-            _save(context, "/approve", answer)
+            agent, context, _ = _ask(
+                agent,
+                context,
+                _approval_followup_prompt(),
+                stream,
+                approval_result=result,
+                user_label="/approve",
+            )
     elif command == "reject":
         print(json_dump(approve_pending(reject=True)))
     elif command == "reset":
@@ -192,62 +192,48 @@ def _reset(yes: bool) -> bool:
     return True
 
 
-def _ask(agent, context, text: str, stream: bool):
-    agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
-    if notice:
-        print(f"[context] {notice.split(':', 1)[0]}")
-    start_event = len(context.events)
-    prompt_messages = [dict(message) for message in context.get_messages()]
-    start = time.perf_counter()
-    answer, verifications = verified_chat(
+def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_label: str | None = None):
+    result = run_turn(
         agent,
         context,
         text,
-        agent.instructions or "",
-        max_steps=AGENT_MAX_STEPS,
+        stream=stream,
         on_delta=_print_delta if stream else None,
+        on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
+        approval_result=approval_result,
+        user_label=user_label,
     )
-    elapsed_ms = int((time.perf_counter() - start) * 1000)
     if stream:
         print()
     else:
-        print(answer)
-    _record_usage(context)
-    _write_trace(context, "chat", text, answer, start_event, prompt_messages, elapsed_ms, verifications, notice)
-    for result in verifications:
-        print(f"[verify] {'passed' if result.get('passed') else 'failed'}")
-        if result.get("feedback"):
-            print(result["feedback"])
-    return agent, context, answer
+        print(result.answer)
+    for verification in result.verifications:
+        print(f"[verify] {'passed' if verification.get('passed') else 'failed'}")
+        if verification.get("feedback"):
+            print(verification["feedback"])
+    return result.agent, result.context, result.answer
 
 
 def _goal(agent, context, text: str, stream: bool):
-    agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
-    if notice:
-        print(f"[context] {notice.split(':', 1)[0]}")
-    start_event = len(context.events)
-    prompt_messages = [dict(message) for message in context.get_messages()]
-    start = time.perf_counter()
-    answer, verifications = goal_chat(
+    result = run_turn(
         agent,
         context,
         text,
-        agent.instructions or "",
+        goal=True,
+        stream=stream,
         on_delta=_print_delta if stream else None,
+        on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
     )
-    elapsed_ms = int((time.perf_counter() - start) * 1000)
     if stream:
         print()
     else:
-        print(answer)
-    _record_usage(context)
-    _write_trace(context, "goal", text, answer, start_event, prompt_messages, elapsed_ms, verifications, notice)
-    for result in verifications:
-        status = "passed" if result.get("passed") else "blocked" if result.get("blocked") else "failed"
-        print(f"[goal verify] attempt {result.get('attempt')}: {status}")
-        if result.get("feedback"):
-            print(result["feedback"])
-    return agent, context, answer
+        print(result.answer)
+    for verification in result.verifications:
+        status = "passed" if verification.get("passed") else "blocked" if verification.get("blocked") else "failed"
+        print(f"[goal verify] attempt {verification.get('attempt')}: {status}")
+        if verification.get("feedback"):
+            print(verification["feedback"])
+    return result.agent, result.context, result.answer
 
 
 def _print_delta(text: str) -> None:
@@ -262,37 +248,6 @@ def json_dump(value) -> str:
 def _context_report(context) -> str:
     root = Path(context.metadata["workspace"])
     return context_report(context, build_tools(root, root / ".friday"))
-
-
-def _save(context, user: str, assistant: str) -> None:
-    workspace = Path(context.metadata["workspace"])
-    events = [event.to_dict() for event in context.events[-20:]]
-    save_turn(workspace, user, assistant, events, str(context.metadata.get("session_id") or ""), context.get_messages())
-
-
-def _record_usage(context) -> None:
-    context.metadata["friday.last_usage"] = usage_from_events([event.to_dict() for event in context.events])
-
-
-def _write_trace(context, mode: str, user: str, assistant: str, start_event: int, prompt_messages, elapsed_ms: int, verifications, notice: str) -> None:
-    usage = context.metadata.get("friday.last_usage") if isinstance(context.metadata.get("friday.last_usage"), dict) else {}
-    write_trace(
-        Path(context.metadata["workspace"]),
-        mode=mode,
-        user=user,
-        assistant=assistant,
-        context=context,
-        start_event=start_event,
-        prompt_messages=prompt_messages,
-        metrics={
-            "elapsed_ms": elapsed_ms,
-            "input_tokens": usage.get("input_tokens"),
-            "output_tokens": usage.get("output_tokens"),
-            "estimated_tokens": usage.get("input_tokens") is None or usage.get("output_tokens") is None,
-        },
-        verifications=verifications,
-        context_notice=notice,
-    )
 
 
 def _approval_followup_prompt() -> str:

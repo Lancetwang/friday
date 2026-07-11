@@ -86,7 +86,7 @@ Verification:
 After a turn changes deliverables, Friday may run an independent verifier agent before returning final state.
 The verifier checks the workspace state against the user goal and does not trust the main agent's claims.
 Failed verification feedback is sent back to the main agent for one repair attempt.
-Goal mode runs repeated main-agent attempts with verifier feedback until pass, blocked, or attempt limit.
+Goal mode runs repeated main-agent attempts with verifier feedback until pass, blocked, approval, or cancellation.
 
 Dangerous Bash commands are blocked for user approval; tell the user to run /approve or /reject.
 """.strip()

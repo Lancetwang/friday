@@ -5,18 +5,14 @@ requires-python = ">=3.12"
 [[package]]
 name = "agent-core-runtime"
 version = "0.1.0"
-source = { url = "https://github.com/Lancetwang/agent-core-runtime/archive/112a892ef38e3e47b482f1047a88402f73273d9b.zip" }
+source = { url = "https://github.com/Lancetwang/agent-core-runtime/archive/42e786b28df41eb6ced21ff01833de7d6eac887f.zip" }
 dependencies = [
     { name = "openai" },
-    { name = "python-dotenv" },
 ]
-sdist = { hash = "sha256:455319ee91ff8301c1eb6b4a8fa9bb0da496e243943283f1ddaa84ac2b1b8533" }
+sdist = { hash = "sha256:06dec7cae73c1d574eaad0d7e6e0e1d12d3bfc569ce41e42b71453070b194f51" }
 
 [package.metadata]
-requires-dist = [
-    { name = "openai", specifier = ">=1.88.0" },
-    { name = "python-dotenv", specifier = ">=1.0.1" },
-]
+requires-dist = [{ name = "openai", specifier = ">=1.88.0" }]
 
 [[package]]
 name = "annotated-types"
@@ -78,7 +74,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-core-runtime", url = "https://github.com/Lancetwang/agent-core-runtime/archive/112a892ef38e3e47b482f1047a88402f73273d9b.zip" },
+    { name = "agent-core-runtime", url = "https://github.com/Lancetwang/agent-core-runtime/archive/42e786b28df41eb6ced21ff01833de7d6eac887f.zip" },
     { name = "rich", specifier = ">=13.7.0" },
 ]
 
@@ -337,15 +333,6 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/c3/b2/bc9c9196916376152d655522fdcebac55e66de6603a76a02bca1b6414f6c/pygments-2.20.0.tar.gz", hash = "sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176" },
-]
-
-[[package]]
-name = "python-dotenv"
-version = "1.2.2"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a" },
 ]
 
 [[package]]

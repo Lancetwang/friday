@@ -5,7 +5,7 @@ description = "Friday, a personal CLI agent built on agent-core-runtime."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "agent-core-runtime @ https://github.com/Lancetwang/agent-core-runtime/archive/112a892ef38e3e47b482f1047a88402f73273d9b.zip",
+    "agent-core-runtime @ https://github.com/Lancetwang/agent-core-runtime/archive/42e786b28df41eb6ced21ff01833de7d6eac887f.zip",
     "rich>=13.7.0",
 ]
 

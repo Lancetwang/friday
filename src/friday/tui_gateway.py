@@ -3,17 +3,15 @@ from __future__ import annotations
 import json
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
 from agent_core import Agent, AgentEvent, RunContext
 
-from friday.app import build_friday, build_instructions, compact_friday, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
-from friday.context import context_report, usage_from_events
-from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
+from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday
+from friday.context import context_report
 from friday.tools import approve_pending, build_tools, pending_approval
-from friday.trace import write_trace
+from friday.turn import run_turn
 
 _real_stdout = sys.stdout
 sys.stdout = sys.stderr
@@ -109,74 +107,24 @@ class Gateway:
         save_user: str | None = None,
     ) -> dict[str, Any]:
         agent, context = self.ensure_agent()
-        self.agent, self.context, notice = prepare_context_for_chat(agent, context, stream=True)
-        agent, context = self.agent, self.context
-        if notice:
-            self.event("gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"})
-        if approval_result is not None:
-            context.add_message("system", "## Approval Result\n" + json.dumps(approval_result, ensure_ascii=False, indent=2))
         self.event("message.start", {"text": text})
-        start_event = len(context.events)
-        prompt_messages = [dict(message) for message in context.get_messages()]
-        start = time.perf_counter()
-        verifications: list[dict[str, Any]] = []
-
-        def delta(chunk: str) -> None:
-            self.event("message.delta", {"text": chunk})
-
-        if goal:
-            answer, verifications = goal_chat(
-                agent,
-                context,
-                text,
-                agent.instructions or "",
-                max_steps=AGENT_MAX_STEPS,
-                on_delta=delta,
-                on_verify=lambda result: self.event("verification.complete", result),
-            )
-        else:
-            answer, verifications = verified_chat(
-                agent,
-                context,
-                text,
-                agent.instructions or "",
-                max_steps=AGENT_MAX_STEPS,
-                on_delta=delta,
-                on_verify=lambda result: self.event("verification.complete", result),
-            )
-        if context.events:
-            pending = pending_approval(Path(context.metadata["workspace"]))
+        result = run_turn(
+            agent,
+            context,
+            text,
+            goal=goal,
+            on_delta=lambda chunk: self.event("message.delta", {"text": chunk}),
+            on_verify=lambda verification: self.event("verification.complete", verification),
+            on_context_notice=lambda notice: self.event("gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"}),
+            approval_result=approval_result,
+            user_label=save_user,
+        )
+        self.agent, self.context = result.agent, result.context
+        if self.context.events:
+            pending = pending_approval(Path(self.context.metadata["workspace"]))
             self.pending_after_approval = {"text": text, "goal": goal} if pending.get("pending") else None
-        usage = usage_from_events([event.to_dict() for event in context.events])
-        context.metadata["friday.last_usage"] = usage
-        estimated = usage["input_tokens"] is None or usage["output_tokens"] is None
-        metrics = {
-            "elapsed_ms": int((time.perf_counter() - start) * 1000),
-            "estimated_tokens": estimated,
-            "input_tokens": usage["input_tokens"],
-            "output_tokens": usage["output_tokens"],
-        }
-        self.event("message.complete", {"text": answer, "metrics": metrics})
-        write_trace(
-            Path(context.metadata["workspace"]),
-            mode="approve" if save_user == "/approve" else "goal" if goal else "chat",
-            user=save_user or (f"/goal {text}" if goal else text),
-            assistant=answer,
-            context=context,
-            start_event=start_event,
-            prompt_messages=prompt_messages,
-            metrics=metrics,
-            verifications=verifications,
-        )
-        save_turn(
-            Path(context.metadata["workspace"]),
-            save_user or (f"/goal {text}" if goal else text),
-            answer,
-            [event.to_dict() for event in context.events[-20:]],
-            str(context.metadata.get("session_id") or ""),
-            context.get_messages(),
-        )
-        return {"text": answer}
+        self.event("message.complete", {"text": result.answer, "metrics": result.metrics})
+        return {"text": result.answer}
 
     def ensure_agent(self) -> tuple[Agent, RunContext]:
         if self.agent is None or self.context is None:

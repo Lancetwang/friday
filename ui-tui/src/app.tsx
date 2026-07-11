@@ -28,7 +28,7 @@ const HELP_TEXT = `# Friday commands
 | \`/memory\` | Print the effective prompt, including user, project, and memory context. |
 | \`/context\` | Print current context usage. |
 | \`/compact\` | Summarize the live conversation into a fresh context. |
-| \`/goal <text>\` | Loop until the verifier passes, blocks, or the attempt limit is reached. |
+| \`/goal <text>\` | Loop until the verifier passes, blocks, needs approval, or is cancelled. |
 | \`/resume\` | Resume recent Friday session context. |
 | \`/approve\` | Run the pending dangerous shell command. |
 | \`/reject\` | Reject the pending dangerous shell command. |

@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from friday.context import usage_from_events
 from friday.tui_gateway import Gateway
 
 
@@ -23,14 +22,6 @@ class TuiGatewayTests(unittest.TestCase):
 
         self.assertEqual(info["cwd"], str(Path(tmp).resolve()))
         self.assertIn("Read", info["tools"])
-
-    def test_usage_from_events_accepts_openai_and_anthropic_names(self) -> None:
-        events = [
-            {"data": {"usage": {"prompt_tokens": 10, "completion_tokens": 3}}},
-            {"data": {"nested": {"usage": {"input_tokens": 12, "output_tokens": 4}}}},
-        ]
-
-        self.assertEqual(usage_from_events(events), {"input_tokens": 12, "output_tokens": 4})
 
     def test_gateway_continues_pending_goal_after_approval(self) -> None:
         gateway = Gateway()

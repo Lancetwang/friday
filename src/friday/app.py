@@ -98,6 +98,8 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     )
     workspace = Path(context.metadata["workspace"])
     new_agent, new_context = build_friday(workspace, stream=stream)
+    if hasattr(context, "usage") and hasattr(new_context, "usage"):
+        new_context.usage = context.usage
     # The compaction summary is in-session context, not a persisted file. It rides in
     # the conversation (saved by the next snapshot, restored by resume), after the fresh prefix.
     new_context.add_message("assistant", f"## Session Summary\n{summary.strip()}")

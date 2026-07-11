@@ -63,26 +63,16 @@ def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
         total = input_tokens + output_tokens if isinstance(input_tokens, int) and isinstance(output_tokens, int) else "n/a"
         input_value = input_tokens if isinstance(input_tokens, int) else "n/a"
         output_value = output_tokens if isinstance(output_tokens, int) else "n/a"
-        lines.append(f"- last provider usage: input {input_value} / output {output_value} / total {total}")
+        source = "estimated" if usage.get("estimated_tokens") else "provider"
+        lines.append(f"- last turn usage ({source}): input {input_value} / output {output_value} / total {total}")
     else:
-        lines.append("- last provider usage: n/a")
+        lines.append("- last turn usage: n/a")
     lines.append("")
     lines.append("| Part | Local est. tokens | Exact chars |")
     lines.append("| --- | ---: | ---: |")
     for name, value in rows:
         lines.append(f"| {name} | ~{_tokens(len(value))} | {len(value)} |")
     return "\n".join(lines)
-
-
-def usage_from_events(events: list[dict[str, Any]]) -> dict[str, int | None]:
-    for event in reversed(events):
-        usage = _find_usage(event)
-        if usage:
-            return {
-                "input_tokens": _int_value(usage, "input_tokens", "prompt_tokens"),
-                "output_tokens": _int_value(usage, "output_tokens", "completion_tokens"),
-            }
-    return {"input_tokens": None, "output_tokens": None}
 
 
 def should_compact_tools(context: RunContext, tools: list[Any] | None = None) -> bool:
@@ -131,31 +121,6 @@ def _sections(text: str) -> dict[str, str]:
         elif current:
             sections[current].append(line)
     return {key: "\n".join(value).strip() for key, value in sections.items()}
-
-
-def _find_usage(value: Any) -> dict[str, Any] | None:
-    if isinstance(value, dict):
-        usage = value.get("usage")
-        if isinstance(usage, dict):
-            return usage
-        for child in value.values():
-            found = _find_usage(child)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = _find_usage(child)
-            if found:
-                return found
-    return None
-
-
-def _int_value(value: dict[str, Any], *names: str) -> int | None:
-    for name in names:
-        item = value.get(name)
-        if isinstance(item, int):
-            return item
-    return None
 
 
 def _tokens(chars: int) -> int:
