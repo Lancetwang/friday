@@ -7,16 +7,19 @@ from typing import Any, Callable
 
 from agent_core import Agent, RunContext
 
+from friday.config import ModelConfig, build_model, load_model_config
 from friday.prompts import VERIFIER_NOTES
 from friday.tools import build_tools, pending_approval
 
 VERIFIER_MAX_STEPS = 10000
 
 
-def build_verifier(instructions: str, workspace: Path) -> tuple[Agent, RunContext]:
+def build_verifier(instructions: str, workspace: Path, config: ModelConfig | None = None) -> tuple[Agent, RunContext]:
     root = workspace.resolve()
     friday_dir = root / ".friday"
+    config = config or load_model_config(root)
     agent = Agent(
+        model=build_model(config),
         instructions=f"{instructions}\n\n## Verifier\n{VERIFIER_NOTES}",
         tools=build_tools(root, friday_dir),
         stream=False,
@@ -42,7 +45,9 @@ def verify_friday(goal: str, context: RunContext, start_event: int, instructions
             "passed": False,
             "required": True,
         }
-    verifier, verifier_context = build_verifier(instructions, workspace)
+    config_data = context.metadata.get("friday.model_config")
+    config = ModelConfig(**config_data) if isinstance(config_data, dict) else None
+    verifier, verifier_context = build_verifier(instructions, workspace, config)
     verifier_context.usage = context.usage
     try:
         raw = verifier.chat(verification_prompt(goal, events), context=verifier_context, max_steps=VERIFIER_MAX_STEPS, stream=False)

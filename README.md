@@ -16,11 +16,12 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
-Put model settings in `~/.friday/.env`, then run `friday` from any project directory. See [Install](docs/install.md) for prerequisites, configuration, verification, upgrades, and uninstall steps.
+Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json`, then run `friday` from any project directory. See [Install](docs/install.md) for prerequisites, configuration, verification, upgrades, and uninstall steps.
 
 ## Features
 
 - Workspace-aware startup: the directory where `friday` is launched becomes the active workspace.
+- Layered model configuration: non-secret provider and token budgets live in global JSON with optional project overrides; credentials remain in `.env`.
 - Harness-first context: stable runtime rules lead the prompt; user and project state are layered later for prefix caching.
 - Agent-as-router: files, nested rules, skill bodies, and memory reads enter context only when needed.
 - Layered rules: global `~/.friday/AGENTS.md` plus root and nested project `AGENTS.md` files.
@@ -31,7 +32,7 @@ Put model settings in `~/.friday/.env`, then run `friday` from any project direc
 - Goal mode: `/goal <task>` repeats execution and verification until pass, concrete blockage, approval, or cancellation.
 - Program-enforced permissions: dangerous Bash commands are stopped before execution and require explicit approval.
 - Exact runtime accounting: provider usage is accumulated across main-agent and verifier calls, with marked estimates only when usage is unavailable.
-- Local observability: each turn records a compact JSONL trace with prompt shape, model calls, tools, verification, timing, usage, and result.
+- Local observability: model and tool events are flushed incrementally so timeouts remain diagnosable; completed turns also record a compact JSONL summary with prompt shape, verification, timing, usage, and result.
 - Session resume: one atomic snapshot per session restores the conversation under a freshly rebuilt prefix.
 - Compatible runtime upgrades: Friday pins a tested agent-core source and checks the isolated tool environment before a turn starts.
 
@@ -86,7 +87,7 @@ The `Memory` tool can read, add, replace, or remove scoped entries. Before conve
 
 ## Context Management
 
-- The default context window is 128K tokens and can be changed with `FRIDAY_CONTEXT_WINDOW`.
+- The default context window is 353K tokens and the default per-response output budget is 64K tokens; both are configurable globally or per project.
 - At 85% usage, Friday probes oversized structured tool results.
 - Tool results are compacted only when the probe predicts at least 25% context gain.
 - Otherwise Friday performs one in-band structured compact pass, preserving the existing prefix.
@@ -111,6 +112,7 @@ Do not independently upgrade agent-core inside the tool environment. If a newer 
 
 - [Install](docs/install.md)
 - [Quick Start](docs/quick-start.md)
+- [Model Configuration](docs/model-configuration.md)
 - [CLI Commands](docs/cli.md)
 - [Tools](docs/tools.md)
 - [Memory](docs/memory.md)

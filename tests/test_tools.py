@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 from agent_core import RunContext
 
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
+from friday.config import DEFAULT_MODEL_CONFIG, load_model_config
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
@@ -344,6 +345,22 @@ class ResetTests(unittest.TestCase):
             self.assertIn("Friday Soul", (global_state / "SOUL.md").read_text(encoding="utf-8"))
             self.assertTrue((global_state / "FridaySkills").is_dir())
 
+    def test_reset_preserves_model_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            project_config = root / ".friday" / "config.json"
+            user_config = home / ".friday" / "config.json"
+            project_config.parent.mkdir(parents=True)
+            user_config.parent.mkdir(parents=True)
+            project_config.write_text('{"model":"project-model"}', encoding="utf-8")
+            user_config.write_text('{"model":"global-model"}', encoding="utf-8")
+
+            reset_friday(root, user_home=home)
+
+            self.assertEqual(project_config.read_text(encoding="utf-8"), '{"model":"project-model"}')
+            self.assertEqual(user_config.read_text(encoding="utf-8"), '{"model":"global-model"}')
+
     def test_ensure_user_home_migrates_legacy_prompt_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
@@ -386,7 +403,54 @@ class ResetTests(unittest.TestCase):
             user_dir = home / ".friday"
             for name in ("SOUL.md", "AGENTS.md", "USER.md", "MEMORY.md"):
                 self.assertTrue((user_dir / name).exists(), name)
+            self.assertTrue((user_dir / "config.json").exists())
             self.assertTrue((user_dir / "FridaySkills").is_dir())
+
+    def test_model_config_merges_global_and_project_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            (root / ".friday").mkdir(parents=True)
+            (home / ".friday").mkdir(parents=True)
+            (home / ".friday" / "config.json").write_text(
+                json.dumps({"provider": "openai", "model": "global-model", "base_url": "", "context_window": 200000}),
+                encoding="utf-8",
+            )
+            (root / ".friday" / "config.json").write_text(
+                json.dumps({"model": "project-model", "max_output_tokens": 4096}),
+                encoding="utf-8",
+            )
+
+            config = load_model_config(root, home=home)
+
+            self.assertEqual(config.provider, "openai")
+            self.assertEqual(config.model, "project-model")
+            self.assertEqual(config.context_window, 200000)
+            self.assertEqual(config.max_output_tokens, 4096)
+
+    def test_default_model_budget_is_353k_with_64k_output(self) -> None:
+        self.assertEqual(DEFAULT_MODEL_CONFIG.context_window, 353000)
+        self.assertEqual(DEFAULT_MODEL_CONFIG.max_output_tokens, 65536)
+
+    def test_build_friday_passes_configured_output_budget_to_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            (home / ".friday").mkdir(parents=True)
+            (home / ".friday" / "config.json").write_text(
+                json.dumps({"max_output_tokens": 4321}),
+                encoding="utf-8",
+            )
+            fake_agent = Mock()
+            fake_agent.new_context.return_value = RunContext()
+
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                with patch("friday.app.build_model", return_value=object()), patch("friday.app.Agent", return_value=fake_agent) as agent_class:
+                    with patch("friday.app._require_runtime"):
+                        _agent, context = build_friday(root, stream=False)
+
+            self.assertEqual(agent_class.call_args.kwargs["chat_kwargs"]["max_tokens"], 4321)
+            self.assertEqual(context.metadata["friday.model_config"]["context_window"], 353000)
 
 
 @patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
@@ -514,6 +578,7 @@ class CompactTests(unittest.TestCase):
             context.add_message("system", "## Runtime\nrules\n\n## Skill Catalog\n- test: skill")
             context.add_message("user", "hello")
             context.metadata["friday.last_usage"] = {"input_tokens": 123, "output_tokens": 7}
+            context.metadata["friday.model_config"] = {"context_window": 353000}
             tools = build_tools(root, root / ".friday")
 
             report = context_report(context, tools)
@@ -524,6 +589,7 @@ class CompactTests(unittest.TestCase):
             self.assertIn("messages", report)
             self.assertIn("input 123 / output 7 / total 130", report)
             self.assertIn("last turn usage (provider)", report)
+            self.assertIn("window: 353000 tokens", report)
             self.assertIn("Local est. tokens", report)
 
     def test_tool_result_compaction_summarizes_structured_output(self) -> None:

@@ -13,6 +13,7 @@ from typing import Any
 
 from agent_core import Agent, RunContext
 
+from friday.config import ModelConfig, build_model, default_config_text, load_model_config
 from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
 from friday.prompts import (
     COMPACT_PROMPT,
@@ -34,17 +35,26 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
     _load_env(Path.home() / ".friday" / ".env")
     ensure_user_home(Path.home())
     friday_dir = root / ".friday"
-    instructions = build_instructions(root, friday_dir)
+    config = load_model_config(root)
+    instructions = build_instructions(root, friday_dir, config)
     agent = Agent(
+        model=build_model(config),
         instructions=instructions,
         tools=build_tools(root, friday_dir),
         stream=stream,
-        chat_kwargs={"temperature": 0.2, "max_tokens": 1200, "tool_choice": "auto"},
+        chat_kwargs={"temperature": 0.2, "max_tokens": config.max_output_tokens, "tool_choice": "auto"},
     )
     context = agent.new_context()
     _require_runtime(context)
     context.metadata["workspace"] = str(root)
     context.metadata["session_id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    context.metadata["friday.model_config"] = {
+        "provider": config.provider,
+        "model": config.model,
+        "base_url": config.base_url,
+        "context_window": config.context_window,
+        "max_output_tokens": config.max_output_tokens,
+    }
     return agent, context
 
 
@@ -99,8 +109,9 @@ def _load_env(path: Path) -> None:
         os.environ[key] = value
 
 
-def build_instructions(workspace: Path, friday_dir: Path) -> str:
+def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | None = None) -> str:
     user_dir = Path.home() / ".friday"
+    config = config or load_model_config(workspace)
     parts = [
         # Global, code-owned prefix: identical across every workspace and only
         # changes on upgrade, so it stays at the front for provider prefix caching.
@@ -114,7 +125,7 @@ def build_instructions(workspace: Path, friday_dir: Path) -> str:
         # Workspace-specific tail: varies per project, kept after the global prefix.
         ("Skill Catalog", skill_catalog(workspace)),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
-        ("Environment", environment(workspace)),
+        ("Environment", environment(workspace, config)),
         ("Project Memory", _read_optional(friday_dir / "MEMORY.md")),
     ]
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
@@ -206,7 +217,7 @@ def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dic
 
 
 def ensure_user_home(home: Path | None = None) -> list[Path]:
-    """Provision the global ~/.friday defaults (soul, rules, profile, memory, skills).
+    """Provision global ~/.friday defaults (model config, prompts, memory, skills).
 
     Idempotent and cheap, so it runs on startup to give a just-installed Friday a
     populated home without requiring an explicit init. Only missing files are created.
@@ -227,6 +238,7 @@ def ensure_user_home(home: Path | None = None) -> list[Path]:
         user_dir / "AGENTS.md": _read_resource("AGENTS.md"),
         user_dir / "USER.md": _read_resource("USER.md"),
         user_dir / "MEMORY.md": "# User Memory\n",
+        user_dir / "config.json": default_config_text(),
     }.items():
         if not path.exists():
             path.write_text(content, encoding="utf-8")
@@ -259,6 +271,8 @@ def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None
     removed = []
     project_state = root / ".friday"
     user_state = home / ".friday"
+    project_config = _read_optional(project_state / "config.json")
+    user_config = _read_optional(user_state / "config.json")
     if project_state.exists():
         shutil.rmtree(project_state)
         removed.append(project_state)
@@ -266,6 +280,11 @@ def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None
         shutil.rmtree(user_state)
         removed.append(user_state)
     ensure_user_home(home)
+    if user_config:
+        (user_state / "config.json").write_text(user_config, encoding="utf-8")
+    if project_config:
+        project_state.mkdir(parents=True, exist_ok=True)
+        (project_state / "config.json").write_text(project_config, encoding="utf-8")
     return removed
 
 

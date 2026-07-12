@@ -6,13 +6,19 @@ from typing import Any
 
 from agent_core import RunContext
 
-DEFAULT_CONTEXT_WINDOW = 128000
+from friday.config import DEFAULT_MODEL_CONFIG
+
+DEFAULT_CONTEXT_WINDOW = DEFAULT_MODEL_CONFIG.context_window
 TOOL_COMPACT_AT = 0.85
 TOOL_COMPACT_GAIN = 0.25
 TOOL_RESULT_LIMIT = 900
 
 
-def context_window() -> int:
+def context_window(context: RunContext | None = None) -> int:
+    if context is not None:
+        config = context.metadata.get("friday.model_config")
+        if isinstance(config, dict) and isinstance(config.get("context_window"), int):
+            return max(1000, config["context_window"])
     try:
         return max(1000, int(os.getenv("FRIDAY_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW)))
     except ValueError:
@@ -25,7 +31,7 @@ def token_estimate(context: RunContext, tools: list[Any] | None = None) -> int:
 
 
 def context_ratio(context: RunContext, tools: list[Any] | None = None) -> float:
-    return token_estimate(context, tools) / context_window()
+    return token_estimate(context, tools) / context_window(context)
 
 
 def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
@@ -51,10 +57,11 @@ def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
     ]
     total_chars = sum(len(value) for _, value in rows)
     total_tokens = _tokens(total_chars)
+    window = context_window(context)
     lines = [
         "# Context",
-        f"- window: {context_window()} tokens",
-        f"- current local estimate: ~{total_tokens} tokens / {total_chars} chars / {total_tokens / context_window():.1%}",
+        f"- window: {window} tokens",
+        f"- current local estimate: ~{total_tokens} tokens / {total_chars} chars / {total_tokens / window:.1%}",
     ]
     usage = context.metadata.get("friday.last_usage")
     if isinstance(usage, dict):

@@ -16,11 +16,12 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
-将模型配置写入 `~/.friday/.env`，之后即可在任意项目目录运行 `friday`。完整的环境要求、配置、验证、升级与卸载步骤见 [安装文档](docs/install.md)。
+将 API Key 写入 `~/.friday/.env`，将模型配置写入 `~/.friday/config.json`，之后即可在任意项目目录运行 `friday`。完整的环境要求、配置、验证、升级与卸载步骤见 [安装文档](docs/install.md)。
 
 ## 特性
 
 - 工作区感知：从哪个目录启动 `friday`，哪个目录就是当前工作区。
+- 分层模型配置：供应商、模型和 Token 预算写入全局 JSON，并可由项目覆盖；密钥继续留在 `.env`。
 - Harness 优先的上下文设计：稳定规则放在前面，用户与项目状态放在后面，适配 Prefix Caching。
 - Agent 只负责路由：文件、嵌套规则、Skill 正文和记忆读取都按需进入上下文。
 - 分层规则：全局 `~/.friday/AGENTS.md`，以及项目根目录和嵌套目录中的 `AGENTS.md`。
@@ -31,7 +32,7 @@ uv tool install -e . --force --reinstall
 - Goal 模式：`/goal <任务>` 持续执行与验证，直到通过、明确阻塞、等待审批或被取消。
 - 程序级权限：危险 Bash 命令在执行前被拦截，需要用户明确批准。
 - 运行级 Token 统计：汇总主 Agent 和 Verifier 的模型调用；Provider 不返回 Usage 时才标记为估算。
-- 本地可观测性：每轮写入精简 JSONL Trace，记录 Prompt 结构、模型调用、工具、验证、耗时、Usage 和结果。
+- 本地可观测性：模型与工具事件增量落盘，超时后仍可诊断；完整轮次另写精简 JSONL 摘要，记录 Prompt 结构、验证、耗时、Usage 和结果。
 - Session 恢复：每个会话保存一个原子快照，在最新 Prefix 下恢复完整对话正文。
 - 兼容的 Runtime 升级：Friday 固定经过验证的 agent-core 源，并在每轮开始前检查隔离环境是否匹配。
 
@@ -86,7 +87,7 @@ Friday 将事实、规则与任务状态分开：
 
 ## 上下文管理
 
-- 默认上下文窗口为 128K，可通过 `FRIDAY_CONTEXT_WINDOW` 调整。
+- 默认上下文窗口为 353K，单次输出预算默认为 64K；两者均可通过全局或项目配置覆盖。
 - 上下文达到 85% 时，先探测超大工具结果的压缩收益。
 - 只有预计能释放至少 25% 上下文时，才执行工具结果压缩。
 - 否则执行一次带当前 Prefix 的结构化对话压缩。
@@ -111,6 +112,7 @@ uv tool install -e . --force --reinstall
 
 - [安装](docs/install.md)
 - [快速开始](docs/quick-start.md)
+- [模型配置](docs/model-configuration.md)
 - [CLI 命令](docs/cli.md)
 - [工具](docs/tools.md)
 - [记忆](docs/memory.md)

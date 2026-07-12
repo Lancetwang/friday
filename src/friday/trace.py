@@ -21,12 +21,13 @@ def write_trace(
     metrics: dict[str, Any] | None = None,
     verifications: list[dict[str, Any]] | None = None,
     context_notice: str = "",
+    turn_id: str | None = None,
 ) -> Path:
     events = [_event_dict(event) for event in context.events[start_event:]]
     row = {
         "schema_version": 2,
         "time": datetime.now().isoformat(timespec="seconds"),
-        "turn_id": uuid4().hex,
+        "turn_id": turn_id or uuid4().hex,
         "session_id": str(context.metadata.get("session_id") or ""),
         "mode": mode,
         "status": str(context.metadata.get("friday.loop_status") or "done"),
@@ -45,6 +46,83 @@ def write_trace(
     with path.open("a", encoding="utf-8") as file:
         file.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
     return path
+
+
+def begin_live_trace(
+    workspace: Path,
+    *,
+    context: RunContext,
+    mode: str,
+    user: str,
+    prompt_messages: list[dict[str, Any]],
+) -> tuple[Path, str]:
+    turn_id = uuid4().hex
+    path = workspace / ".friday" / "traces" / "events" / f"{context.metadata.get('session_id') or 'session'}.jsonl"
+    _append_live(
+        path,
+        {
+            "schema_version": 1,
+            "kind": "start",
+            "time": datetime.now().isoformat(timespec="milliseconds"),
+            "session_id": str(context.metadata.get("session_id") or ""),
+            "turn_id": turn_id,
+            "mode": mode,
+            "user_tail": user[-1000:],
+            "user_chars": len(user),
+            "prompt": _prompt_summary(prompt_messages),
+        },
+    )
+    return path, turn_id
+
+
+def write_live_event(path: Path, turn_id: str, event: Any) -> None:
+    value = _event_dict(event)
+    event_type = str(value.get("type") or "")
+    if event_type not in {"model.request", "model.response", "tool.call", "tool.result", "tool.observe", "flow.end"}:
+        return
+    data = value.get("data", {})
+    if not isinstance(data, dict):
+        data = {}
+    if event_type == "tool.result":
+        content = str(data.get("content", ""))
+        data = {**data, "content": content[:4000], "content_chars": len(content)}
+    _append_live(
+        path,
+        {
+            "schema_version": 1,
+            "kind": "event",
+            "time": datetime.now().isoformat(timespec="milliseconds"),
+            "turn_id": turn_id,
+            "event": {
+                "type": event_type,
+                "timestamp": value.get("timestamp"),
+                "category": value.get("category"),
+                "step": value.get("step"),
+                "node": value.get("node"),
+                "data": data,
+            },
+        },
+    )
+
+
+def finish_live_trace(path: Path, turn_id: str, *, status: str, metrics: dict[str, Any] | None = None) -> None:
+    _append_live(
+        path,
+        {
+            "schema_version": 1,
+            "kind": "finish",
+            "time": datetime.now().isoformat(timespec="milliseconds"),
+            "turn_id": turn_id,
+            "status": status,
+            "metrics": metrics or {},
+        },
+    )
+
+
+def _append_live(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
 
 
 def _event_dict(event: Any) -> dict[str, Any]:

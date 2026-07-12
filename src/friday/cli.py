@@ -28,7 +28,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("init", help="Create the project's AGENTS.md.")
 
     ask = sub.add_parser("ask", help="Ask once.")
-    ask.add_argument("text", nargs="+")
+    ask.add_argument("--stdin", action="store_true", help="Read the request from standard input.")
+    ask.add_argument("text", nargs="*")
 
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("tui", help="Start a simple terminal UI.")
@@ -85,7 +86,9 @@ def main(argv: list[str] | None = None) -> None:
         agent, context = build_friday(stream=stream)
 
     if command == "ask":
-        text = " ".join(args.text)
+        text = sys.stdin.read() if args.stdin else " ".join(args.text)
+        if not text.strip():
+            parser.error("ask requires text or --stdin")
         _ask(agent, context, text, stream)
         return
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -99,6 +101,16 @@ class CliTests(unittest.TestCase):
                 cli.main(["--permission-mode", "dont-ask"])
 
             self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "dont-ask")
+
+    def test_ask_can_read_long_request_from_stdin(self) -> None:
+        agent = object()
+        context = RunContext()
+        with patch.object(sys, "stdin", StringIO("long request\nwith context")):
+            with patch("friday.cli.build_friday", return_value=(agent, context)):
+                with patch("friday.cli._ask", return_value=(agent, context, "done")) as ask:
+                    cli.main(["--no-stream", "ask", "--stdin"])
+
+        ask.assert_called_once_with(agent, context, "long request\nwith context", False)
 
 
 if __name__ == "__main__":

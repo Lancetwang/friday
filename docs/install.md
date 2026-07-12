@@ -42,7 +42,9 @@ PowerShell:
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\.friday" | Out-Null
 Copy-Item .env.example "$HOME\.friday\.env"
+Copy-Item config.example.json "$HOME\.friday\config.json"
 notepad "$HOME\.friday\.env"
+notepad "$HOME\.friday\config.json"
 ```
 
 bash:
@@ -50,26 +52,40 @@ bash:
 ```bash
 mkdir -p "$HOME/.friday"
 cp .env.example "$HOME/.friday/.env"
+cp config.example.json "$HOME/.friday/config.json"
 ${EDITOR:-vi} "$HOME/.friday/.env"
+${EDITOR:-vi} "$HOME/.friday/config.json"
 ```
 
-Configure an OpenAI-compatible model:
+Put secrets in `.env`:
 
 ```text
 LLM_API_KEY=your-key
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-v4-flash
 TAVILY_API_KEY=optional-web-search-key
 JINA_API_KEY=optional-web-fetch-key
 ```
 
-Configuration priority is:
+Put non-secret model settings in `config.json`:
+
+```json
+{
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "base_url": "https://api.deepseek.com",
+  "context_window": 353000,
+  "max_output_tokens": 65536
+}
+```
+
+Friday also reads `<workspace>/.friday/config.json` when present. A project config overrides only the keys it contains; all other values come from the global file. Provider-specific keys such as `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` are supported, with `LLM_API_KEY` as the generic fallback. Configuration changes apply the next time Friday starts or rebuilds its context.
+
+Secret priority is:
 
 1. Process environment variables.
 2. The active workspace's `.env`.
 3. `~/.friday/.env`.
 
-This lets one global model configuration work everywhere while allowing a project to override it locally.
+This lets one global secret configuration work everywhere while allowing a project to override it locally.
 
 ## Verify The Installation
 

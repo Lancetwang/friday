@@ -13,6 +13,8 @@ import os
 import platform
 from pathlib import Path
 
+from friday.config import ModelConfig
+
 COMPACT_PROMPT = """
 The conversation is being compacted. Do two steps in order, in this one turn, then stop.
 
@@ -68,6 +70,7 @@ Reusable procedures and workflows belong in a skill, not memory.
 Do not save task progress, completed-work logs, temporary TODO state, command output, compact summaries, or anything that will be stale in a week; those live in the session, not memory.
 Memory writes affect disk immediately, but the frozen startup prompt sees them next session.
 SOUL.md, AGENTS.md, and permission files require an explicit user request before editing.
+Model config files contain no secrets and may be edited only on explicit user request; changes apply after a new session or context rebuild.
 
 Short-term state:
 Current-task state lives in the live conversation, not a file. Session history is restored by resume; when context runs long it is compacted into an in-session summary.
@@ -102,7 +105,7 @@ def tool_guidance() -> str:
 """.strip()
 
 
-def environment(workspace: Path) -> str:
+def environment(workspace: Path, config: ModelConfig) -> str:
     system = platform.system()
     shell = "PowerShell" if system == "Windows" else "bash"
     mode = os.getenv("FRIDAY_PERMISSION_MODE", "manual").strip() or "manual"
@@ -112,6 +115,11 @@ def environment(workspace: Path) -> str:
 - Shell: {shell} (the Bash tool runs {shell} here; prefer {shell} syntax)
 - Friday home: {Path.home() / ".friday"}
 - Friday install: {Path(__file__).resolve().parent}
+- Global model config: {Path.home() / ".friday" / "config.json"}
+- Project model config override: {workspace / ".friday" / "config.json"}
+- Model: {config.provider}/{config.model}
+- Context window: {config.context_window} tokens
+- Maximum output: {config.max_output_tokens} tokens
 - Permission mode: {mode}
 """.strip()
 

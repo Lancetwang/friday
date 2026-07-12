@@ -9,6 +9,7 @@ from typing import Any
 from agent_core import Agent, AgentEvent, RunContext
 
 from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday
+from friday.config import load_model_config
 from friday.context import context_report
 from friday.tools import approve_pending, build_tools, pending_approval
 from friday.turn import run_turn
@@ -92,9 +93,10 @@ class Gateway:
             self.err(rid, str(exc))
 
     def session_info(self) -> dict[str, Any]:
+        config = load_model_config(Path.cwd().resolve())
         return {
             "cwd": str(Path.cwd().resolve()),
-            "model": "model from .env",
+            "model": f"{config.provider}/{config.model}",
             "tools": [tool.name for tool in build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")],
         }
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from agent_core import RunContext
 
-from friday.trace import write_trace
+from friday.trace import begin_live_trace, finish_live_trace, write_live_event, write_trace
 
 
 class TraceTests(unittest.TestCase):
@@ -73,6 +73,21 @@ class TraceTests(unittest.TestCase):
             row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
             self.assertEqual(row["performance"]["totals"]["input_tokens"], 11)
             self.assertEqual(row["performance"]["totals"]["output_tokens"], 5)
+
+    def test_live_trace_survives_before_turn_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = RunContext()
+            context.metadata["session_id"] = "s1"
+            path, turn_id = begin_live_trace(root, context=context, mode="chat", user="search", prompt_messages=[])
+            event = context.emit("model.request", category="model", data={"message_count": 1})
+            write_live_event(path, turn_id, event)
+            finish_live_trace(path, turn_id, status="error")
+
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([row["kind"] for row in rows], ["start", "event", "finish"])
+            self.assertEqual(rows[1]["event"]["type"], "model.request")
+            self.assertEqual({row["turn_id"] for row in rows}, {turn_id})
 
 
 if __name__ == "__main__":

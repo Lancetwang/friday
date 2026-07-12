@@ -6,8 +6,9 @@ Start here:
 
 - [Install](install.md)
 - [Quick Start](quick-start.md)
+- [Model Configuration](model-configuration.md)
+- [Evaluation Results](evaluation-results.md)
 - [CLI Commands](cli.md)
 - [Tools](tools.md)
 - [Memory](memory.md)
 - [Skills](skills.md)
-
