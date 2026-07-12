@@ -6,10 +6,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_core import AgentEvent
+
 from friday.tui_gateway import Gateway
 
 
 class TuiGatewayTests(unittest.TestCase):
+    def test_gateway_exposes_verification_as_status_event(self) -> None:
+        gateway = Gateway()
+
+        with patch.object(gateway, "event") as event:
+            gateway.on_agent_event(AgentEvent("verification.start", category="verification"))
+
+        event.assert_called_once_with("verification.start", {})
+
     def test_session_info_does_not_require_llm_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"LLM_API_KEY": "", "OPENAI_API_KEY": "", "DEEPSEEK_API_KEY": ""}, clear=False):

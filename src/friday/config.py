@@ -17,6 +17,7 @@ class ModelConfig:
     base_url: str = "https://api.deepseek.com"
     context_window: int = 353000
     max_output_tokens: int = 65536
+    run_token_budget: int = 2824000
 
 
 DEFAULT_MODEL_CONFIG = ModelConfig()
@@ -62,7 +63,7 @@ def _validate(values: dict[str, Any]) -> ModelConfig:
             raise ValueError(f"Friday config '{key}' must be a string.")
     if not values["provider"].strip() or not values["model"].strip():
         raise ValueError("Friday config 'provider' and 'model' cannot be empty.")
-    for key in ("context_window", "max_output_tokens"):
+    for key in ("context_window", "max_output_tokens", "run_token_budget"):
         if not isinstance(values.get(key), int) or isinstance(values.get(key), bool) or values[key] < 1:
             raise ValueError(f"Friday config '{key}' must be a positive integer.")
     if values["max_output_tokens"] > values["context_window"]:

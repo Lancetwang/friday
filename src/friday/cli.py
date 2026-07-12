@@ -211,9 +211,9 @@ def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_
     else:
         print(result.answer)
     for verification in result.verifications:
-        print(f"[verify] {'passed' if verification.get('passed') else 'failed'}")
-        if verification.get("feedback"):
-            print(verification["feedback"])
+        status = verification.get("verdict") or ("pass" if verification.get("passed") else "failed")
+        stopped = f" ({verification['stop_reason']})" if verification.get("stop_reason") else ""
+        print(f"[verify] {status}{stopped}")
     return result.agent, result.context, result.answer
 
 
@@ -232,10 +232,9 @@ def _goal(agent, context, text: str, stream: bool):
     else:
         print(result.answer)
     for verification in result.verifications:
-        status = "passed" if verification.get("passed") else "blocked" if verification.get("blocked") else "failed"
-        print(f"[goal verify] attempt {verification.get('attempt')}: {status}")
-        if verification.get("feedback"):
-            print(verification["feedback"])
+        status = verification.get("verdict") or ("passed" if verification.get("passed") else "blocked" if verification.get("blocked") else "failed")
+        stopped = f" ({verification['stop_reason']})" if verification.get("stop_reason") else ""
+        print(f"[goal verify] attempt {verification.get('attempt')}: {status}{stopped}")
     return result.agent, result.context, result.answer
 
 

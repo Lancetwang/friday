@@ -29,7 +29,8 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Layered memory: user profile, global memory, and project memory store durable facts; current task state remains in the resumable session.
 - Multi-stage context compression: Friday probes structured tool-result compaction first, then falls back to structured conversation compact when the gain is insufficient.
 - Independent verification: a verifier agent inspects the workspace without trusting the main agent's claims.
-- Goal mode: `/goal <task>` repeats execution and verification until pass, concrete blockage, approval, or cancellation.
+- Adaptive verification: simple deliverables receive the smallest sufficient independent check; only concrete repair verdicts can repeat work.
+- Goal mode: `/goal <task>` stops on pass, blockage, insufficient evidence, repeated no-progress, approval, or Token Budget.
 - Program-enforced permissions: dangerous Bash commands are stopped before execution and require explicit approval.
 - Exact runtime accounting: provider usage is accumulated across main-agent and verifier calls, with marked estimates only when usage is unavailable.
 - Local observability: model and tool events are flushed incrementally so timeouts remain diagnosable; completed turns also record a compact JSONL summary with prompt shape, verification, timing, usage, and result.

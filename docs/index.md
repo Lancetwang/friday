@@ -12,3 +12,4 @@ Start here:
 - [Tools](tools.md)
 - [Memory](memory.md)
 - [Skills](skills.md)
+- [Verification](verification.md)

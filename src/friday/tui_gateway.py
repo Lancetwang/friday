@@ -135,7 +135,9 @@ class Gateway:
         return self.agent, self.context
 
     def on_agent_event(self, event: AgentEvent) -> None:
-        if event.type == "tool.call":
+        if event.type == "verification.start":
+            self.event("verification.start", {})
+        elif event.type == "tool.call":
             self.event(
                 "tool.start",
                 {

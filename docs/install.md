@@ -73,7 +73,8 @@ Put non-secret model settings in `config.json`:
   "model": "deepseek-v4-flash",
   "base_url": "https://api.deepseek.com",
   "context_window": 353000,
-  "max_output_tokens": 65536
+  "max_output_tokens": 65536,
+  "run_token_budget": 2824000
 }
 ```
 

@@ -7,8 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from agent_core import RunContext
+from agent_core import Agent, RunContext, tool
 
+from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
 from friday.config import DEFAULT_MODEL_CONFIG, load_model_config
 from friday.context import compact_tool_results, context_report
@@ -431,6 +432,7 @@ class ResetTests(unittest.TestCase):
     def test_default_model_budget_is_353k_with_64k_output(self) -> None:
         self.assertEqual(DEFAULT_MODEL_CONFIG.context_window, 353000)
         self.assertEqual(DEFAULT_MODEL_CONFIG.max_output_tokens, 65536)
+        self.assertEqual(DEFAULT_MODEL_CONFIG.run_token_budget, 2824000)
 
     def test_build_friday_passes_configured_output_budget_to_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -445,12 +447,14 @@ class ResetTests(unittest.TestCase):
             fake_agent.new_context.return_value = RunContext()
 
             with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
-                with patch("friday.app.build_model", return_value=object()), patch("friday.app.Agent", return_value=fake_agent) as agent_class:
+                with patch("friday.app.build_model", return_value=object()), patch("friday.app.build_guarded_flow", return_value=object()) as flow_builder, patch("friday.app.Agent", return_value=fake_agent) as agent_class:
                     with patch("friday.app._require_runtime"):
                         _agent, context = build_friday(root, stream=False)
 
-            self.assertEqual(agent_class.call_args.kwargs["chat_kwargs"]["max_tokens"], 4321)
+            self.assertEqual(flow_builder.call_args.kwargs["chat_kwargs"]["max_tokens"], 4321)
+            self.assertIn("flow", agent_class.call_args.kwargs)
             self.assertEqual(context.metadata["friday.model_config"]["context_window"], 353000)
+            self.assertEqual(context.metadata["friday.model_config"]["run_token_budget"], 2824000)
 
 
 @patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
@@ -693,6 +697,70 @@ class CompactTests(unittest.TestCase):
 
 
 class VerificationTests(unittest.TestCase):
+    def test_inner_loop_repeated_tool_cycle_forces_final_answer(self) -> None:
+        class RepeatingModel:
+            def __init__(self) -> None:
+                self.tool_choices = []
+
+            def chat_message(self, _messages, *, tool_choice=None, **_kwargs):
+                self.tool_choices.append(tool_choice)
+                if tool_choice == "none":
+                    return {"role": "assistant", "content": "best supported answer", "usage": {"input_tokens": 10, "output_tokens": 2}}
+                call_id = f"call-{len(self.tool_choices)}"
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": call_id, "type": "function", "function": {"name": "echo", "arguments": '{"text":"same"}'}}],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+
+        @tool(description="Echo text.")
+        def echo(text: str) -> str:
+            return text
+
+        model = RepeatingModel()
+        agent = Agent(flow=build_guarded_flow(model, [echo], chat_kwargs={"stream": False, "tool_choice": "auto"}))
+        context = agent.new_context()
+        begin_guarded_run(context, context.usage.snapshot())
+
+        answer = agent.chat("repeat", context=context, max_steps=20)
+
+        self.assertEqual(answer, "best supported answer")
+        self.assertEqual(model.tool_choices, ["auto", "auto", "none"])
+        self.assertEqual(context.metadata[GUARD_STOP_REASON], "no_progress")
+
+    def test_inner_loop_token_budget_reserves_a_final_answer(self) -> None:
+        class BudgetModel:
+            def __init__(self) -> None:
+                self.tool_choices = []
+
+            def chat_message(self, _messages, *, tool_choice=None, **_kwargs):
+                self.tool_choices.append(tool_choice)
+                if tool_choice == "none":
+                    return {"role": "assistant", "content": "budget summary", "usage": {"input_tokens": 5, "output_tokens": 1}}
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "one", "type": "function", "function": {"name": "echo", "arguments": '{"text":"one"}'}}],
+                    "usage": {"input_tokens": 80, "output_tokens": 10},
+                }
+
+        @tool(description="Echo text.")
+        def echo(text: str) -> str:
+            return text
+
+        model = BudgetModel()
+        agent = Agent(flow=build_guarded_flow(model, [echo], chat_kwargs={"stream": False, "tool_choice": "auto"}))
+        context = agent.new_context()
+        context.metadata["friday.model_config"] = {"run_token_budget": 100}
+        begin_guarded_run(context, context.usage.snapshot())
+
+        answer = agent.chat("work", context=context, max_steps=12)
+
+        self.assertEqual(answer, "budget summary")
+        self.assertEqual(model.tool_choices, ["auto", "none"])
+        self.assertEqual(context.metadata[GUARD_STOP_REASON], "token_budget")
+
     def test_verification_is_required_only_for_delivery_changes(self) -> None:
         read_events = [{"type": "tool.call", "data": {"name": "Read", "arguments": {"path": "x.py"}}}]
         write_events = [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}]
@@ -706,8 +774,79 @@ class VerificationTests(unittest.TestCase):
         prompt = verification_prompt("fix the bug", [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}])
 
         self.assertIn("fix the bug", prompt)
-        self.assertIn("Do not trust", prompt)
+        self.assertIn("Independently verify", prompt)
+        self.assertIn('"path": "x.py"', prompt)
         self.assertNotIn("main answer", prompt.lower())
+
+    def test_simple_goal_passes_after_one_verifier_run(self) -> None:
+        agent = Mock()
+        agent.chat.return_value = "written"
+        context = RunContext(metadata={"workspace": "."})
+        passed = {"verdict": "pass", "evidence": ["intro.md -> exists and contains an introduction"], "feedback": "", "next_check": ""}
+
+        with patch("friday.loop.verify_friday", return_value=passed):
+            _answer, verifications = goal_chat(agent, context, "write intro.md")
+
+        self.assertEqual(agent.chat.call_count, 1)
+        self.assertEqual(verifications[0]["verdict"], "pass")
+        self.assertEqual(context.metadata["friday.loop_status"], "done")
+
+    def test_goal_chat_stops_when_verifier_is_inconclusive(self) -> None:
+        agent = Mock()
+        agent.chat.return_value = "best available answer"
+        context = RunContext(metadata={"workspace": "."})
+        inconclusive = {"verdict": "inconclusive", "evidence": [], "feedback": "Available evidence cannot support the claim.", "next_check": ""}
+
+        with patch("friday.loop.verify_friday", return_value=inconclusive):
+            _answer, verifications = goal_chat(agent, context, "establish the claim")
+
+        self.assertEqual(agent.chat.call_count, 1)
+        self.assertEqual(verifications[0]["verdict"], "inconclusive")
+        self.assertEqual(context.metadata["friday.loop_status"], "inconclusive")
+
+    def test_repair_requires_a_concrete_next_check(self) -> None:
+        agent = Mock()
+        agent.chat.return_value = "answer"
+        context = RunContext(metadata={"workspace": "."})
+        vague = {"verdict": "repair", "evidence": [], "feedback": "Could be improved.", "next_check": ""}
+
+        with patch("friday.loop.verify_friday", return_value=vague):
+            _answer, verifications = goal_chat(agent, context, "finish it")
+
+        self.assertEqual(agent.chat.call_count, 1)
+        self.assertEqual(verifications[0]["verdict"], "inconclusive")
+        self.assertEqual(context.metadata["friday.loop_status"], "inconclusive")
+
+    def test_repeated_repair_without_changed_delivery_stops(self) -> None:
+        agent = Mock()
+        agent.chat.return_value = "same answer"
+        context = RunContext(metadata={"workspace": "."})
+        repair = {"verdict": "repair", "evidence": ["test still fails"], "feedback": "x.py still fails", "next_check": "Run the failing test after changing x.py."}
+
+        with patch("friday.loop.verify_friday", side_effect=[repair, repair]):
+            _answer, verifications = goal_chat(agent, context, "fix x.py")
+
+        self.assertEqual(agent.chat.call_count, 2)
+        self.assertEqual(verifications[-1]["stop_reason"], "no_progress")
+        self.assertEqual(context.metadata["friday.loop_status"], "no_progress")
+
+    def test_token_budget_stops_before_another_repair(self) -> None:
+        class UsageAgent:
+            def chat(self, _prompt, *, context, **_kwargs) -> str:
+                context.record_model_usage({"input_tokens": 80, "output_tokens": 10})
+                return "answer"
+
+        context = RunContext(
+            metadata={"workspace": ".", "friday.model_config": {"run_token_budget": 100}}
+        )
+        repair = {"verdict": "repair", "evidence": ["missing output"], "feedback": "Output is missing.", "next_check": "Create the requested output."}
+
+        with patch("friday.loop.verify_friday", return_value=repair):
+            _answer, verifications = goal_chat(UsageAgent(), context, "finish it")
+
+        self.assertEqual(verifications[-1]["stop_reason"], "token_budget")
+        self.assertEqual(verifications[-1]["tokens_used"], 90)
+        self.assertEqual(context.metadata["friday.loop_status"], "token_budget")
 
     def test_verified_chat_repairs_once_when_verifier_fails(self) -> None:
         class FakeAgent:
@@ -735,7 +874,7 @@ class VerificationTests(unittest.TestCase):
         ]
 
         with patch("friday.loop.verify_friday", side_effect=results):
-            answer, verifications = verified_chat(agent, context, "fix x", "instructions")
+            answer, verifications = verified_chat(agent, context, "fix x")
 
         self.assertEqual(answer, "answer")
         self.assertEqual(len(agent.prompts), 2)
@@ -768,7 +907,7 @@ class VerificationTests(unittest.TestCase):
         agent = FakeAgent()
         context = FakeContext()
         with patch("friday.loop.verify_friday", side_effect=results):
-            answer, verifications = goal_chat(agent, context, "finish it", "instructions", max_attempts=5)
+            answer, verifications = goal_chat(agent, context, "finish it", max_attempts=5)
 
         self.assertEqual(answer, "answer")
         self.assertEqual(len(agent.prompts), 2)
@@ -777,7 +916,7 @@ class VerificationTests(unittest.TestCase):
         blocked_agent = FakeAgent()
         blocked_context = FakeContext()
         with patch("friday.loop.verify_friday", return_value={"passed": False, "blocked": True, "feedback": "missing dependency"}):
-            _answer, blocked = goal_chat(blocked_agent, blocked_context, "finish it", "instructions", max_attempts=5)
+            _answer, blocked = goal_chat(blocked_agent, blocked_context, "finish it", max_attempts=5)
 
         self.assertEqual(len(blocked_agent.prompts), 1)
         self.assertTrue(blocked[0]["blocked"])
@@ -787,12 +926,12 @@ class VerificationTests(unittest.TestCase):
         agent.chat.return_value = "answer"
         context = Mock(events=[], metadata={"workspace": "."})
         results = [
-            {"passed": False, "blocked": False, "feedback": "keep going"}
-            for _ in range(6)
+            {"passed": False, "blocked": False, "feedback": f"keep going {index}"}
+            for index in range(6)
         ] + [{"passed": True, "blocked": False, "feedback": ""}]
 
         with patch("friday.loop.verify_friday", side_effect=results):
-            _answer, verifications = goal_chat(agent, context, "finish it", "instructions")
+            _answer, verifications = goal_chat(agent, context, "finish it")
 
         self.assertEqual(agent.chat.call_count, 7)
         self.assertTrue(verifications[-1]["passed"])
@@ -820,7 +959,7 @@ class VerificationTests(unittest.TestCase):
         context = FakeContext()
 
         with patch("friday.loop.verify_friday", return_value=error):
-            answer, verifications = verified_chat(agent, context, "fix x", "instructions")
+            answer, verifications = verified_chat(agent, context, "fix x")
 
         self.assertEqual(answer, "answer")
         self.assertEqual(len(agent.prompts), 1)
@@ -849,7 +988,7 @@ class VerificationTests(unittest.TestCase):
         context = FakeContext()
 
         with patch("friday.loop.verify_friday", return_value=pending):
-            _answer, verifications = verified_chat(agent, context, "delete x", "instructions")
+            _answer, verifications = verified_chat(agent, context, "delete x")
 
         self.assertEqual(len(agent.prompts), 1)
         self.assertTrue(verifications[0]["approval_required"])
@@ -857,10 +996,18 @@ class VerificationTests(unittest.TestCase):
     def test_parse_verification_accepts_blocked(self) -> None:
         parsed = parse_verification('{"passed": false, "blocked": true, "evidence": ["x"], "feedback": "cannot"}')
 
+        self.assertEqual(parsed["verdict"], "blocked")
         self.assertTrue(parsed["blocked"])
         self.assertFalse(parsed["passed"])
         self.assertEqual(AGENT_MAX_STEPS, 10000)
         self.assertEqual(VERIFIER_MAX_STEPS, 10000)
+
+    def test_parse_verification_accepts_four_state_schema(self) -> None:
+        parsed = parse_verification('{"verdict":"repair","evidence":["test fails"],"feedback":"fix x","next_check":"run test_x.py"}')
+
+        self.assertEqual(parsed["verdict"], "repair")
+        self.assertEqual(parsed["next_check"], "run test_x.py")
+        self.assertFalse(parsed["passed"])
 
 
 @patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})

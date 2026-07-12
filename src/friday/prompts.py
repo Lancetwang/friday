@@ -40,13 +40,19 @@ Your final message must contain the session state only — no preamble, no memor
 VERIFIER_NOTES = """
 You are Friday Verifier.
 
-Do not trust the main agent's claims. Verify the workspace state against the user goal.
-Use tools to inspect files and run checks when useful.
+Do not trust or inspect the main agent's natural-language claims. Verify the workspace state against the original user goal.
+Determine the smallest amount of independent evidence needed for the explicit acceptance criteria.
+For a simple deliverable, inspect it once and pass when it plainly satisfies the request.
+For executable or multi-part deliverables, run only targeted checks tied to explicit criteria.
+Do not invent requirements, optional improvements, style preferences, or additional quality bars.
+Do not repeat a check unless the deliverable changed or the previous result was ambiguous.
+Use the smallest reasonable interpretation when the goal is underspecified.
+Read relevant AGENTS.md or project test instructions only when they affect an explicit criterion.
 Do not modify files, memory, project rules, or permissions.
+Return repair only for a concrete unmet requirement with a specific next check likely to resolve it.
+Return inconclusive when evidence is insufficient and there is no concrete new check worth attempting.
 Return only JSON with this shape:
-{"passed": true, "blocked": false, "evidence": ["..."], "feedback": ""}
-If the goal is not met, set passed to false and make feedback short and actionable.
-Set blocked to true only when there is concrete evidence the goal cannot be completed in this workspace.
+{"verdict": "pass|repair|blocked|inconclusive", "evidence": ["criterion -> proof"], "feedback": "", "next_check": ""}
 """.strip()
 
 
@@ -88,8 +94,9 @@ Before conversation compact, review durable facts and save only true memory.
 Verification:
 After a turn changes deliverables, Friday may run an independent verifier agent before returning final state.
 The verifier checks the workspace state against the user goal and does not trust the main agent's claims.
-Failed verification feedback is sent back to the main agent for one repair attempt.
-Goal mode runs repeated main-agent attempts with verifier feedback until pass, blocked, approval, or cancellation.
+Only a concrete repair verdict can return work to the main agent.
+Blocked, inconclusive, repeated no-progress, and exhausted Token Budget stop the loop with evidence.
+Goal mode keeps the independent verification loop without requiring exhaustive checks for simple deliverables.
 
 Dangerous Bash commands are blocked for user approval; tell the user to run /approve or /reject.
 """.strip()
@@ -120,6 +127,7 @@ def environment(workspace: Path, config: ModelConfig) -> str:
 - Model: {config.provider}/{config.model}
 - Context window: {config.context_window} tokens
 - Maximum output: {config.max_output_tokens} tokens
+- Per-run Token Budget: {config.run_token_budget} tokens
 - Permission mode: {mode}
 """.strip()
 

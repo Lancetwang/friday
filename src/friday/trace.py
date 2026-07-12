@@ -78,7 +78,7 @@ def begin_live_trace(
 def write_live_event(path: Path, turn_id: str, event: Any) -> None:
     value = _event_dict(event)
     event_type = str(value.get("type") or "")
-    if event_type not in {"model.request", "model.response", "tool.call", "tool.result", "tool.observe", "flow.end"}:
+    if event_type not in {"model.request", "model.response", "tool.call", "tool.result", "tool.observe", "verification.start", "verification.result", "loop.guard", "flow.end"}:
         return
     data = value.get("data", {})
     if not isinstance(data, dict):

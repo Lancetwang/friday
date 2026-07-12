@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from agent_core import Agent, RunContext
 
+from friday.agent_flow import begin_guarded_run
 from friday.app import prepare_context_for_chat, save_turn
 from friday.context import token_estimate
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
@@ -43,6 +44,7 @@ def run_turn(
     agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
     if context.on_event is None:
         context.on_event = event_handler
+    begin_guarded_run(context, usage_start)
     if notice and on_context_notice:
         on_context_notice(notice)
     if approval_result is not None:
@@ -75,7 +77,6 @@ def run_turn(
             agent,
             context,
             text,
-            agent.instructions or "",
             max_steps=AGENT_MAX_STEPS,
             on_delta=on_delta,
             on_verify=on_verify,

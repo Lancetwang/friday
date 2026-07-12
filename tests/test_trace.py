@@ -82,11 +82,17 @@ class TraceTests(unittest.TestCase):
             path, turn_id = begin_live_trace(root, context=context, mode="chat", user="search", prompt_messages=[])
             event = context.emit("model.request", category="model", data={"message_count": 1})
             write_live_event(path, turn_id, event)
+            guard = context.emit("loop.guard", category="flow", action="finalize", data={"reason": "no_progress"})
+            write_live_event(path, turn_id, guard)
+            verification = context.emit("verification.start", category="verification", data={"goal_chars": 10})
+            write_live_event(path, turn_id, verification)
             finish_live_trace(path, turn_id, status="error")
 
             rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([row["kind"] for row in rows], ["start", "event", "finish"])
+            self.assertEqual([row["kind"] for row in rows], ["start", "event", "event", "event", "finish"])
             self.assertEqual(rows[1]["event"]["type"], "model.request")
+            self.assertEqual(rows[2]["event"]["data"]["reason"], "no_progress")
+            self.assertEqual(rows[3]["event"]["type"], "verification.start")
             self.assertEqual({row["turn_id"] for row in rows}, {turn_id})
 
 

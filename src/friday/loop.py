@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 from agent_core import Agent, CallableNode, Flow, RunContext
 
+from friday.agent_flow import GUARD_STOP_REASON
+from friday.config import DEFAULT_MODEL_CONFIG
 from friday.prompts import goal_attempt_prompt, retry_prompt
 from friday.verification import record_verification, verify_friday
 
 AGENT_MAX_STEPS = 10000
 FLOW_MAX_STEPS = 10000
+TOKEN_BUDGET_SOFT_LIMIT = 0.85
 
-LoopStatus = Literal["done", "needs_approval", "blocked", "error", "max_attempts"]
+LoopStatus = Literal[
+    "done",
+    "needs_approval",
+    "blocked",
+    "inconclusive",
+    "no_progress",
+    "token_budget",
+    "error",
+    "max_attempts",
+]
 
 
 @dataclass
@@ -25,7 +39,6 @@ def verified_chat(
     agent: Agent,
     context: RunContext,
     text: str,
-    instructions: str,
     *,
     max_steps: int = AGENT_MAX_STEPS,
     on_delta: Any = None,
@@ -36,7 +49,6 @@ def verified_chat(
         agent,
         context,
         text,
-        instructions,
         force_verify=False,
         max_attempts=repairs + 1,
         max_steps=max_steps,
@@ -50,7 +62,6 @@ def goal_chat(
     agent: Agent,
     context: RunContext,
     goal: str,
-    instructions: str,
     *,
     max_attempts: int | None = None,
     max_steps: int = AGENT_MAX_STEPS,
@@ -61,7 +72,6 @@ def goal_chat(
         agent,
         context,
         goal,
-        instructions,
         force_verify=True,
         max_attempts=max_attempts,
         max_steps=max_steps,
@@ -75,7 +85,6 @@ def run_loop(
     agent: Agent,
     context: RunContext,
     goal: str,
-    instructions: str,
     *,
     force_verify: bool,
     max_attempts: int | None,
@@ -91,17 +100,19 @@ def run_loop(
         "feedback": "",
         "force_verify": force_verify,
         "goal": goal,
-        "instructions": instructions,
+        "last_attempt_signature": None,
+        "last_repair_signature": None,
         "max_attempts": max_attempts,
         "max_steps": max_steps,
         "on_delta": on_delta,
         "on_verify": on_verify,
         "start_event": len(context.events),
         "status": "done",
+        "token_budget": _token_budget(context),
+        "usage_start": _usage_snapshot(context),
         "verifications": [],
     }
-    flow = _loop_flow()
-    result = flow.run(state, max_steps=FLOW_MAX_STEPS).payload["result"]
+    result = _loop_flow().run(state, max_steps=FLOW_MAX_STEPS).payload["result"]
     context.metadata["friday.loop_status"] = result.status
     return result
 
@@ -111,7 +122,6 @@ def _loop_flow() -> Flow:
     verify = CallableNode(_verify)
     finish = CallableNode(lambda state: ("default", {"result": _to_result(state)}))
     attempt - "verify" >> verify
-    attempt - "finish" >> finish
     verify - "retry" >> attempt
     verify - "finish" >> finish
     return Flow(attempt)
@@ -123,12 +133,14 @@ def _attempt(state: dict[str, Any]):
         prompt = goal_attempt_prompt(state["goal"]) if state["force_verify"] else state["goal"]
     else:
         prompt = retry_prompt(state["attempt"] - 1, state["feedback"])
+    event_start = len(state["context"].events)
     state["answer"] = state["agent"].chat(
         prompt,
         context=state["context"],
         max_steps=state["max_steps"],
         on_delta=state["on_delta"],
     )
+    state["attempt_signature"] = _event_signature(state["context"].events[event_start:])
     return "verify", state
 
 
@@ -137,31 +149,125 @@ def _verify(state: dict[str, Any]):
         state["goal"],
         state["context"],
         state["start_event"],
-        state["instructions"],
         force=state["force_verify"],
     )
     if not result:
         state["status"] = "done"
         return "finish", state
+
+    result = _normalize_result(result, state["attempt"])
+    verdict = result["verdict"]
+    if result.get("approval_required"):
+        return _finish(state, result, "needs_approval")
+    if result.get("error"):
+        return _finish(state, result, "error")
+    if verdict == "pass":
+        return _finish(state, result, "done")
+    if verdict == "blocked":
+        return _finish(state, result, "blocked")
+    if verdict == "inconclusive":
+        return _finish(state, result, "inconclusive")
+
+    guard_reason = result.get("guard_stop_reason") or state["context"].metadata.get(GUARD_STOP_REASON)
+    if guard_reason in {"no_progress", "token_budget"}:
+        result["stop_reason"] = guard_reason
+        return _finish(state, result, guard_reason)
+
+    next_check = str(result.get("next_check") or "").strip()
+    if not next_check:
+        result["verdict"] = "inconclusive"
+        result["feedback"] = str(result.get("feedback") or "Verifier requested repair without a concrete next check.")
+        return _finish(state, result, "inconclusive")
+
+    tokens_used = _tokens_used(state["context"], state.get("usage_start"))
+    if tokens_used is not None:
+        result["tokens_used"] = tokens_used
+        result["token_budget"] = state["token_budget"]
+
+    repair_signature = _repair_signature(result)
+    attempt_signature = state.get("attempt_signature")
+    if repair_signature == state.get("last_repair_signature") and attempt_signature == state.get("last_attempt_signature"):
+        result["stop_reason"] = "no_progress"
+        return _finish(state, result, "no_progress")
+
+    if tokens_used is not None:
+        if tokens_used >= int(state["token_budget"] * TOKEN_BUDGET_SOFT_LIMIT):
+            result["stop_reason"] = "token_budget"
+            return _finish(state, result, "token_budget")
+
+    if state["max_attempts"] is not None and state["attempt"] >= state["max_attempts"]:
+        result["stop_reason"] = "max_attempts"
+        return _finish(state, result, "max_attempts")
+
+    state["last_attempt_signature"] = attempt_signature
+    state["last_repair_signature"] = repair_signature
+    feedback = str(result.get("feedback") or "").strip()
+    state["feedback"] = f"{feedback}\n\nNext check: {next_check}".strip()
+    _record(state, result)
+    return "retry", state
+
+
+def _finish(state: dict[str, Any], result: dict[str, Any], status: LoopStatus):
+    state["status"] = status
+    if status not in {"done", "needs_approval"}:
+        result.setdefault("stop_reason", status)
+    _record(state, result)
+    return "finish", state
+
+
+def _record(state: dict[str, Any], result: dict[str, Any]) -> None:
     state["verifications"].append(result)
     record_verification(state["context"], result, state["on_verify"])
-    if result.get("passed"):
-        state["status"] = "done"
-        return "finish", state
-    if result.get("approval_required"):
-        state["status"] = "needs_approval"
-        return "finish", state
-    if result.get("blocked"):
-        state["status"] = "blocked"
-        return "finish", state
-    if result.get("error"):
-        state["status"] = "error"
-        return "finish", state
-    if state["max_attempts"] is not None and state["attempt"] >= state["max_attempts"]:
-        state["status"] = "max_attempts"
-        return "finish", state
-    state["feedback"] = str(result.get("feedback") or "Verifier did not pass the goal.")
-    return "retry", state
+
+
+def _normalize_result(result: dict[str, Any], attempt: int) -> dict[str, Any]:
+    value = dict(result)
+    legacy = "verdict" not in value
+    verdict = str(value.get("verdict") or "").strip().lower()
+    if verdict not in {"pass", "repair", "blocked", "inconclusive"}:
+        verdict = "pass" if value.get("passed") else "blocked" if value.get("blocked") else "repair" if value.get("feedback") else "inconclusive"
+    value["verdict"] = verdict
+    value["passed"] = verdict == "pass"
+    value["blocked"] = verdict == "blocked"
+    value["attempt"] = attempt
+    if verdict == "repair" and legacy and "next_check" not in value:
+        value["next_check"] = str(value.get("feedback") or "")
+    return value
+
+
+def _repair_signature(result: dict[str, Any]) -> str:
+    text = " ".join(" ".join(str(result.get(key) or "").lower().split()) for key in ("feedback", "next_check"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _event_signature(events: list[Any]) -> str:
+    rows = []
+    for event in events:
+        value = event.to_dict() if hasattr(event, "to_dict") else event
+        if not isinstance(value, dict) or value.get("type") not in {"tool.call", "tool.result", "artifact.set"}:
+            continue
+        data = value.get("data", {})
+        rows.append({"type": value.get("type"), "data": data})
+    return hashlib.sha256(json.dumps(rows, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def _usage_snapshot(context: RunContext) -> Any:
+    usage = getattr(context, "usage", None)
+    return usage.snapshot() if usage is not None and hasattr(usage, "snapshot") else None
+
+
+def _tokens_used(context: RunContext, start: Any) -> int | None:
+    usage = getattr(context, "usage", None)
+    if usage is None or start is None or not hasattr(usage, "since"):
+        return None
+    total = usage.since(start).to_dict().get("total_tokens")
+    return total if isinstance(total, int) else None
+
+
+def _token_budget(context: RunContext) -> int:
+    config = context.metadata.get("friday.model_config", {})
+    value = config.get("run_token_budget") if isinstance(config, dict) else None
+    return value if isinstance(value, int) and value > 0 else DEFAULT_MODEL_CONFIG.run_token_budget
 
 
 def _to_result(state: dict[str, Any]) -> LoopResult:

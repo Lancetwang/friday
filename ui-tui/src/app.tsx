@@ -4,7 +4,7 @@ import TextInput from 'ink-text-input'
 
 import type { GatewayClient } from './gatewayClient.js'
 import { Markdown, type Theme } from './markdown.js'
-import type { GatewayEvent, Message, SessionInfo } from './types.js'
+import type { GatewayEvent, Message, SessionInfo, VerificationResult } from './types.js'
 
 const theme: Theme = {
   accent: '#2F81F7',
@@ -75,7 +75,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
           setApprovalPicker(current => current ?? { approval, index: 0 })
         }
         setActivity(event.payload.error ? `tool ${event.payload.name} failed` : '')
+      } else if (event.type === 'verification.start') {
+        setActivity('verifying')
       } else if (event.type === 'verification.complete') {
+        setActivity('')
         setMessages(items => [...items, { role: 'system', text: formatVerification(event.payload) }])
       } else if (event.type === 'gateway.stderr') {
         setActivity(event.payload.line)
@@ -564,13 +567,10 @@ function openApprovalPicker(
   })
 }
 
-function formatVerification(result: { approval_required?: boolean; error?: boolean; evidence?: unknown[]; feedback?: string; passed?: boolean }) {
-  const status = result.approval_required ? 'approval pending' : result.error ? 'error' : result.passed ? 'passed' : 'failed'
-  const evidence = Array.isArray(result.evidence) && result.evidence.length
-    ? `\n\nEvidence:\n${result.evidence.map(item => `- ${String(item)}`).join('\n')}`
-    : ''
-  const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : ''
-  return `Verification ${status}.${evidence}${feedback}`
+function formatVerification(result: VerificationResult) {
+  const status = result.approval_required ? 'approval pending' : result.error ? 'error' : result.verdict ?? (result.passed ? 'pass' : 'failed')
+  const stopped = result.stop_reason ? ` (${result.stop_reason})` : ''
+  return `Verification ${status}${stopped}.`
 }
 
 function shortText(value: string, max: number) {

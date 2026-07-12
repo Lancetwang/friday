@@ -13,6 +13,7 @@ from typing import Any
 
 from agent_core import Agent, RunContext
 
+from friday.agent_flow import build_guarded_flow
 from friday.config import ModelConfig, build_model, default_config_text, load_model_config
 from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
 from friday.prompts import (
@@ -37,12 +38,14 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
     friday_dir = root / ".friday"
     config = load_model_config(root)
     instructions = build_instructions(root, friday_dir, config)
+    tools = build_tools(root, friday_dir)
     agent = Agent(
-        model=build_model(config),
+        flow=build_guarded_flow(
+            build_model(config),
+            tools,
+            chat_kwargs={"stream": stream, "temperature": 0.2, "max_tokens": config.max_output_tokens, "tool_choice": "auto"},
+        ),
         instructions=instructions,
-        tools=build_tools(root, friday_dir),
-        stream=stream,
-        chat_kwargs={"temperature": 0.2, "max_tokens": config.max_output_tokens, "tool_choice": "auto"},
     )
     context = agent.new_context()
     _require_runtime(context)
@@ -54,6 +57,7 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
         "base_url": config.base_url,
         "context_window": config.context_window,
         "max_output_tokens": config.max_output_tokens,
+        "run_token_budget": config.run_token_budget,
     }
     return agent, context
 
