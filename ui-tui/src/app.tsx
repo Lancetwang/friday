@@ -77,9 +77,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setActivity(event.payload.error ? `tool ${event.payload.name} failed` : '')
       } else if (event.type === 'verification.start') {
         setActivity('verifying')
+        setMessages(items => updateVerification(items, activeTurn.current, { running: true }))
       } else if (event.type === 'verification.complete') {
         setActivity('')
-        setMessages(items => [...items, { role: 'system', text: formatVerification(event.payload) }])
+        setMessages(items => updateVerification(items, activeTurn.current, event.payload))
       } else if (event.type === 'gateway.stderr') {
         setActivity(event.payload.line)
       } else if (event.type === 'gateway.protocol_error') {
@@ -303,6 +304,11 @@ function runCommand(
 type UiMessage = Message & {
   tools?: ToolRun[]
   turnId?: string
+  verification?: VerificationStatus
+}
+
+type VerificationStatus = VerificationResult & {
+  running?: boolean
 }
 
 type ResumeChoice = {
@@ -371,6 +377,16 @@ function updateToolRun(messages: UiMessage[], turnId: string | null, name: strin
   return next
 }
 
+function updateVerification(messages: UiMessage[], turnId: string | null, verification: VerificationStatus) {
+  const index = turnIndex(messages, turnId)
+  if (index === -1) {
+    return messages
+  }
+  const next = [...messages]
+  next[index] = { ...next[index]!, verification }
+  return next
+}
+
 function turnIndex(messages: UiMessage[], turnId: string | null) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!
@@ -420,6 +436,7 @@ function MessageLine({ toolsExpanded = false, message, now = Date.now(), streami
             <>
               <Text color={role.color}>{message.text}</Text>
               <ToolPanel toolsExpanded={toolsExpanded} now={now} runs={message.tools ?? []} />
+              {message.verification ? <VerificationLine verification={message.verification} /> : null}
             </>
           ) : (
             <>
@@ -437,6 +454,15 @@ function MessageLine({ toolsExpanded = false, message, now = Date.now(), streami
       </Box>
     </Box>
   )
+}
+
+function VerificationLine({ verification }: { verification: VerificationStatus }) {
+  if (verification.running) {
+    return <Text color={theme.warn}>verifying...</Text>
+  }
+  const status = verification.approval_required ? 'approval pending' : verification.error ? 'error' : verification.verdict ?? (verification.passed ? 'pass' : 'failed')
+  const color = status === 'pass' ? theme.ok : status === 'repair' || status === 'inconclusive' || status === 'approval pending' ? theme.warn : theme.error
+  return <Text color={color}>verification: {status}</Text>
 }
 
 function roleMeta(role: Message['role']) {
@@ -565,12 +591,6 @@ function openApprovalPicker(
       setMessages(items => [...items, { role: 'system', text: approval.message || 'No pending approval.' }])
     }
   })
-}
-
-function formatVerification(result: VerificationResult) {
-  const status = result.approval_required ? 'approval pending' : result.error ? 'error' : result.verdict ?? (result.passed ? 'pass' : 'failed')
-  const stopped = result.stop_reason ? ` (${result.stop_reason})` : ''
-  return `Verification ${status}${stopped}.`
 }
 
 function shortText(value: string, max: number) {

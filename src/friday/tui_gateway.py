@@ -27,6 +27,14 @@ def main() -> None:
             gateway.handle(json.loads(line))
 
 
+def verification_status(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: result[key]
+        for key in ("approval_required", "error", "passed", "verdict")
+        if key in result
+    }
+
+
 class Gateway:
     def __init__(self) -> None:
         self.agent: Agent | None = None
@@ -116,7 +124,7 @@ class Gateway:
             text,
             goal=goal,
             on_delta=lambda chunk: self.event("message.delta", {"text": chunk}),
-            on_verify=lambda verification: self.event("verification.complete", verification),
+            on_verify=lambda verification: self.event("verification.complete", verification_status(verification)),
             on_context_notice=lambda notice: self.event("gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"}),
             approval_result=approval_result,
             user_label=save_user,

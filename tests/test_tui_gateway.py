@@ -8,10 +8,22 @@ from unittest.mock import patch
 
 from agent_core import AgentEvent
 
-from friday.tui_gateway import Gateway
+from friday.tui_gateway import Gateway, verification_status
 
 
 class TuiGatewayTests(unittest.TestCase):
+    def test_verification_status_omits_trace_details(self) -> None:
+        result = verification_status(
+            {
+                "evidence": ["test passed"],
+                "feedback": "done",
+                "passed": True,
+                "verdict": "pass",
+            }
+        )
+
+        self.assertEqual(result, {"passed": True, "verdict": "pass"})
+
     def test_gateway_exposes_verification_as_status_event(self) -> None:
         gateway = Gateway()
 
