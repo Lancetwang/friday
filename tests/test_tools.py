@@ -596,32 +596,38 @@ class CompactTests(unittest.TestCase):
             self.assertIn("window: 353000 tokens", report)
             self.assertIn("Local est. tokens", report)
 
-    def test_tool_result_compaction_summarizes_structured_output(self) -> None:
+    def test_tool_result_compaction_simplifies_without_dropping_fields(self) -> None:
         context = RunContext()
-        context.emit(
-            "tool.call",
-            category="tool",
-            data={"tool_call_id": "call-1", "name": "Bash", "arguments": {"command": "python big.py"}},
+        output = "line one\nline two\n" * 200
+        original = json.dumps(
+            {"exit_code": 0, "timed_out": False, "output": output, "extra": {"kept": True}},
+            ensure_ascii=False,
         )
         context.add_message(
             "tool",
-            '{"exit_code":0,"timed_out":false,"output":"' + ("x" * 2000) + '"}',
+            original,
             tool_call_id="call-1",
         )
 
         count = compact_tool_results(context)
 
         self.assertEqual(count, 1)
-        self.assertIn("Tool: Bash", context.messages[-1]["content"])
-        self.assertIn("exit_code=0", context.messages[-1]["content"])
-        self.assertLess(len(context.messages[-1]["content"]), 800)
+        simplified = context.messages[-1]["content"]
+        self.assertIn("all fields preserved", simplified)
+        self.assertIn(output, simplified)
+        self.assertIn('"extra": {"kept":true}', simplified)
+        self.assertLess(len(simplified), len(original))
 
     def test_prepare_context_compacts_tools_when_probe_is_worthwhile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             context = RunContext()
             context.metadata["workspace"] = tmp
             context.emit("tool.call", category="tool", data={"tool_call_id": "call-1", "name": "Read", "arguments": {"path": "big.txt"}})
-            context.add_message("tool", '{"path":"big.txt","content":"' + ("x" * 5000) + '"}', tool_call_id="call-1")
+            context.add_message(
+                "tool",
+                json.dumps({"path": "big.txt", "content": "\n" * 5000}),
+                tool_call_id="call-1",
+            )
 
             fake_agent = object()
             with patch.dict("os.environ", {"FRIDAY_CONTEXT_WINDOW": "1000"}):
@@ -658,13 +664,6 @@ class CompactTests(unittest.TestCase):
                 self.prompts.append(prompt)
                 return "Continue with the memory harness work."
 
-        class FakeContext:
-            def __init__(self) -> None:
-                self.messages = []
-
-            def add_message(self, role: str, content: str) -> None:
-                self.messages.append({"role": role, "content": content})
-
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             friday_dir = root / ".friday"
@@ -673,12 +672,19 @@ class CompactTests(unittest.TestCase):
             tools = {tool.name: tool for tool in build_tools(root, friday_dir)}
             old_context = tools["Memory"]("read", "project")
 
-            context = type("Context", (), {})()
-            context.metadata = {"workspace": str(root)}
+            context = RunContext(metadata={"workspace": str(root), "session_id": "session-1"})
+            for index in range(12):
+                context.add_message("user", f"user-{index}")
+                context.add_message("assistant", f"assistant-{index}")
+            context.messages[-1]["tool_calls"] = [
+                {"id": "call-1", "type": "function", "function": {"name": "Read", "arguments": '{"path":"x"}'}}
+            ]
+            context.add_message("tool", "full tool result", tool_call_id="call-1")
+            context.add_message("assistant", "final assistant-11")
             fake_agent = FakeAgent()
 
             def fake_build(workspace, *, stream=True):
-                return object(), FakeContext()
+                return object(), RunContext()
 
             with patch("friday.app.build_friday", side_effect=fake_build):
                 agent, new_context, summary = compact_friday(fake_agent, context, stream=False)
@@ -687,11 +693,16 @@ class CompactTests(unittest.TestCase):
             self.assertEqual(len(fake_agent.prompts), 1)
             self.assertIn("Memory tool", fake_agent.prompts[0])
             self.assertIn("## Current Goal", fake_agent.prompts[0])
-            self.assertIn("Recent Conversations", fake_agent.prompts[0])
+            self.assertNotIn("## Recent Conversations", fake_agent.prompts[0])
             self.assertEqual(summary, "Continue with the memory harness work.")
-            self.assertEqual(new_context.messages[-1]["role"], "assistant")
-            self.assertIn("## Session Summary", new_context.messages[-1]["content"])
-            self.assertIn("Continue with the memory harness work.", new_context.messages[-1]["content"])
+            self.assertEqual(new_context.metadata["session_id"], "session-1")
+            self.assertIn("## Session Summary", new_context.messages[0]["content"])
+            self.assertEqual(new_context.messages[1]["content"], "user-2")
+            self.assertNotIn("user-1", [message["content"] for message in new_context.messages])
+            self.assertEqual(new_context.messages[-2]["role"], "tool")
+            self.assertEqual(new_context.messages[-2]["content"], "full tool result")
+            self.assertEqual(new_context.messages[-1]["content"], "final assistant-11")
+            self.assertEqual(new_context.messages[-3]["tool_calls"][0]["id"], "call-1")
             self.assertFalse((root / ".friday" / "STATE.md").exists())
             self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])
 

@@ -139,8 +139,10 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     # One in-band pass: inserted into the current conversation so it reuses the cached
     # prefix. Within this single turn the agent saves durable facts with the Memory tool
     # (so compaction never forgets them), then its final message is the structured summary.
+    recent_messages = _recent_turn_messages(context)
+    session_id = str(context.metadata.get("session_id") or "")
     summary = agent.chat(
-        f"{COMPACT_PROMPT}\n\nLatest turns to keep under Recent Conversations:\n{_recent_conversations(context)}",
+        COMPACT_PROMPT,
         context=context,
         max_steps=8,
         stream=False,
@@ -148,11 +150,17 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     )
     workspace = Path(context.metadata["workspace"])
     new_agent, new_context = build_friday(workspace, stream=stream)
+    if session_id:
+        new_context.metadata["session_id"] = session_id
     if hasattr(context, "usage") and hasattr(new_context, "usage"):
         new_context.usage = context.usage
-    # The compaction summary is in-session context, not a persisted file. It rides in
-    # the conversation (saved by the next snapshot, restored by resume), after the fresh prefix.
+    # C1 is the structured state summary. C2 keeps the latest complete turns verbatim,
+    # including assistant tool calls and their matching tool results.
     new_context.add_message("assistant", f"## Session Summary\n{summary.strip()}")
+    _replace_context_messages(
+        new_context,
+        [*map(dict, new_context.get_messages()), *recent_messages],
+    )
     return new_agent, new_context, summary
 
 
@@ -373,16 +381,14 @@ def _read_optional(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-def _recent_conversations(context: RunContext) -> str:
+def _recent_turn_messages(context: RunContext) -> list[dict[str, Any]]:
     if not hasattr(context, "get_messages"):
-        return ""
-    turns = []
-    for message in context.get_messages():
-        role = message.get("role")
-        if role not in {"user", "assistant"}:
-            continue
-        turns.append(f"{str(role).title()}: {_preview(str(message.get('content', '')), 500)}")
-    return "\n".join(turns[-RECENT_CONVERSATION_LIMIT * 2 :])
+        return []
+    messages = [dict(message) for message in context.get_messages() if isinstance(message, dict)]
+    user_indices = [index for index, message in enumerate(messages) if message.get("role") == "user"]
+    if not user_indices:
+        return []
+    return messages[user_indices[-RECENT_CONVERSATION_LIMIT] :]
 
 
 def _exists_exact(path: Path) -> bool:

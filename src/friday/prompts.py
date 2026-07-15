@@ -30,10 +30,9 @@ The conversation is being compacted. Do two steps in order, in this one turn, th
 ## Commands And Results
 ## Verification State
 ## Next Steps
-## Recent Conversations
 
 Keep only live working context: user goals, completed work, unfinished work, tried methods, decisions, files touched, commands run, test status, blockers, and next steps.
-Recent Conversations must preserve the latest user/assistant turns needed to continue naturally.
+The harness will append the latest 10 complete user turns and their assistant/tool messages verbatim after this summary. Do not reproduce that dialogue in the summary; mention recent details only when they are needed to describe the current state.
 Your final message must contain the session state only — no preamble, no memory notes, and do not restate stable system, tool, user, or project instructions.
 """.strip()
 

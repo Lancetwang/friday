@@ -27,7 +27,7 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Layered rules: global `~/.friday/AGENTS.md` plus root and nested project `AGENTS.md` files.
 - Progressive skills: the prompt keeps only skill locations; `Skill` lists structured metadata dynamically, then Bash reads only the selected `SKILL.md` and referenced resources.
 - Layered memory: user profile, global memory, and project memory store durable facts; current task state remains in the resumable session.
-- Multi-stage context compression: Friday probes structured tool-result compaction first, then falls back to structured conversation compact when the gain is insufficient.
+- Multi-stage context compression: Friday first probes lossless tool-result simplification, then falls back to a structured summary plus the latest ten complete turns when the gain is insufficient.
 - Independent verification: a verifier agent inspects the workspace without trusting the main agent's claims.
 - Adaptive verification: simple deliverables receive the smallest sufficient independent check; only concrete repair verdicts can repeat work.
 - Goal mode: `/goal <task>` stops on pass, blockage, insufficient evidence, repeated no-progress, approval, or Token Budget.
@@ -90,9 +90,9 @@ The `Memory` tool can read, add, replace, or remove scoped entries. Before conve
 
 - The default context window is 353K tokens and the default per-response output budget is 64K tokens; both are configurable globally or per project.
 - At 85% usage, Friday probes oversized structured tool results.
-- Tool results are compacted only when the probe predicts at least 25% context gain.
+- Tool results are simplified only when the lossless rewrite preserves every field and predicts at least 25% context gain.
 - Otherwise Friday performs one in-band structured compact pass, preserving the existing prefix.
-- The compact schema keeps goals, completed work, open items, attempts, decisions, files, command results, verification state, next steps, and recent conversations.
+- The rebuilt context is the fresh prefix followed by the structured summary and the latest ten complete user turns verbatim, including paired assistant tool calls and tool results.
 - `/context` separates system prompt, skill routing, tool schemas, messages, and tool results, and shows latest-turn provider usage when available.
 
 ## Upgrade

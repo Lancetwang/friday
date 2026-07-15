@@ -100,7 +100,7 @@ def compact_tool_results(context: RunContext, tools: list[Any] | None = None) ->
     count = 0
     for message, _, _ in _tool_compaction_probe(context):
         content = str(message.get("content", ""))
-        message["content"] = _tool_summary_for_message(context, message, content)
+        message["content"] = _simplify_tool_result(content)
         message["friday_compacted"] = True
         count += 1
     return count
@@ -134,16 +134,6 @@ def _tokens(chars: int) -> int:
     return max(1, (chars + 3) // 4)
 
 
-def _tool_calls(context: RunContext) -> dict[str, dict[str, Any]]:
-    calls = {}
-    for event in context.events:
-        if event.type == "tool.call":
-            tool_call_id = str(event.data.get("tool_call_id", ""))
-            if tool_call_id:
-                calls[tool_call_id] = dict(event.data)
-    return calls
-
-
 def _tool_compaction_probe(context: RunContext) -> list[tuple[dict[str, Any], int, int]]:
     probe = []
     for message in context.get_messages():
@@ -152,47 +142,25 @@ def _tool_compaction_probe(context: RunContext) -> list[tuple[dict[str, Any], in
         content = str(message.get("content", ""))
         if len(content) <= TOOL_RESULT_LIMIT:
             continue
-        probe.append((message, len(content), len(_tool_summary_for_message(context, message, content))))
+        simplified = _simplify_tool_result(content)
+        if len(simplified) < len(content):
+            probe.append((message, len(content), len(simplified)))
     return probe
 
 
-def _tool_summary_for_message(context: RunContext, message: dict[str, Any], content: str) -> str:
-    call = _tool_calls(context).get(str(message.get("tool_call_id", "")), {})
-    return _tool_summary(str(call.get("name") or "tool"), call.get("arguments", {}), content)
-
-
-def _tool_summary(name: str, arguments: Any, content: str) -> str:
-    parsed = _json(content)
-    if isinstance(parsed, dict):
-        result = _dict_summary(parsed)
-    else:
-        result = _clip(content)
-    return f"[tool result compacted]\nTool: {name}\nArgs: {_clip(json.dumps(arguments, ensure_ascii=False))}\nResult: {result}"
-
-
-def _dict_summary(value: dict[str, Any]) -> str:
-    parts = []
-    for key in ("exit_code", "timed_out", "count", "path", "mode", "chars", "lines", "total_lines", "start_line", "end_line"):
-        if key in value:
-            parts.append(f"{key}={value[key]}")
-    if "output" in value:
-        parts.append("output=" + _clip(str(value["output"])))
-    elif "matches" in value:
-        parts.append("matches=" + _clip(json.dumps(value["matches"][:5], ensure_ascii=False)))
-    elif "paths" in value:
-        parts.append("paths=" + _clip(json.dumps(value["paths"][:10], ensure_ascii=False)))
-    elif "content" in value:
-        parts.append("content=" + _clip(str(value["content"])))
-    return "; ".join(parts) or _clip(json.dumps(value, ensure_ascii=False))
-
-
-def _json(value: str) -> Any:
+def _simplify_tool_result(content: str) -> str:
     try:
-        return json.loads(value)
+        value = json.loads(content)
     except json.JSONDecodeError:
-        return None
+        return content
+    if not isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
-
-def _clip(value: str, limit: int = 500) -> str:
-    value = " ".join(value.split())
-    return value if len(value) <= limit else value[: limit - 3] + "..."
+    lines = ["[tool result simplified; all fields preserved]"]
+    for key, item in value.items():
+        label = json.dumps(str(key), ensure_ascii=False)
+        if isinstance(item, str):
+            lines.extend((f"{label}: string({len(item)})", item))
+        else:
+            lines.append(f"{label}: {json.dumps(item, ensure_ascii=False, separators=(',', ':'))}")
+    return "\n".join(lines)

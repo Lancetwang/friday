@@ -19,5 +19,4 @@ Rules are not memory. Edit rule files directly; the `Memory` tool never writes t
 
 Use the `Memory` tool for durable facts only. Do not save compact summaries, temporary command output, or transient task progress as memory.
 
-`/compact` first gives Friday a chance to save durable facts, then replaces the long conversation with a structured in-session summary message that continues the task and is restored by resume.
-
+`/compact` first gives Friday a chance to save durable facts, then rebuilds the live context from a structured in-session summary plus the latest ten complete user turns copied verbatim. Tool calls and their results inside those turns stay paired, and resume restores this rebuilt context.
