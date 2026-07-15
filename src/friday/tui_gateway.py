@@ -11,6 +11,7 @@ from agent_core import Agent, AgentEvent, RunContext
 from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday
 from friday.config import load_model_config
 from friday.context import context_report
+from friday.progress import current_progress, finish_progress
 from friday.tools import approve_pending, build_tools, pending_approval
 from friday.turn import run_turn
 
@@ -57,6 +58,9 @@ class Gateway:
             elif method == "context.get":
                 agent, context = self.ensure_agent()
                 self.ok(rid, {"text": context_report(context, build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))})
+            elif method == "progress.get":
+                _agent, context = self.ensure_agent()
+                self.ok(rid, {"progress": current_progress(context)})
             elif method == "session.reset":
                 removed = reset_friday(include_user=True)
                 self.agent = None
@@ -72,7 +76,7 @@ class Gateway:
                 self.agent, self.context, count = resume_friday(stream=True, resume_id=params.get("id"))
                 self.context.on_event = self.on_agent_event
                 self.pending_after_approval = None
-                self.ok(rid, {"count": count})
+                self.ok(rid, {"count": count, "progress": current_progress(self.context)})
             elif method == "session.resume_choices":
                 self.ok(rid, {"choices": resume_choices()})
             elif method == "approval.pending":
@@ -94,7 +98,10 @@ class Gateway:
                     self.ok(rid, result)
             elif method == "approval.reject":
                 self.pending_after_approval = None
-                self.ok(rid, approve_pending(reject=True))
+                result = approve_pending(reject=True)
+                if self.context is not None and result.get("rejected"):
+                    finish_progress(self.context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
+                self.ok(rid, result)
             else:
                 self.err(rid, f"unknown method: {method}")
         except Exception as exc:
@@ -105,6 +112,7 @@ class Gateway:
         return {
             "cwd": str(Path.cwd().resolve()),
             "model": f"{config.provider}/{config.model}",
+            "progress": current_progress(self.context) if self.context is not None else {},
             "tools": [tool.name for tool in build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")],
         }
 
@@ -133,7 +141,7 @@ class Gateway:
         if self.context.events:
             pending = pending_approval(Path(self.context.metadata["workspace"]))
             self.pending_after_approval = {"text": text, "goal": goal} if pending.get("pending") else None
-        self.event("message.complete", {"text": result.answer, "metrics": result.metrics})
+        self.event("message.complete", {"text": result.answer, "metrics": result.metrics, "progress": result.progress})
         return {"text": result.answer}
 
     def ensure_agent(self) -> tuple[Agent, RunContext]:
@@ -145,6 +153,8 @@ class Gateway:
     def on_agent_event(self, event: AgentEvent) -> None:
         if event.type == "verification.start":
             self.event("verification.start", {})
+        elif event.type == "progress.updated":
+            self.event("progress.update", dict(event.data))
         elif event.type == "tool.call":
             self.event(
                 "tool.start",

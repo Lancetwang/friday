@@ -12,6 +12,7 @@ from friday.agent_flow import begin_guarded_run
 from friday.app import prepare_context_for_chat, save_turn
 from friday.context import token_estimate
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
+from friday.progress import append_progress_checkpoint, begin_progress, finish_progress
 from friday.tools import build_tools
 from friday.trace import begin_live_trace, finish_live_trace, write_live_event, write_trace
 
@@ -23,6 +24,7 @@ class TurnResult:
     answer: str
     verifications: list[dict[str, Any]]
     metrics: dict[str, Any]
+    progress: dict[str, Any]
     context_notice: str = ""
 
 
@@ -35,6 +37,7 @@ def run_turn(
     stream: bool = True,
     on_delta: Callable[[str], None] | None = None,
     on_verify: Callable[[dict[str, Any]], None] | None = None,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
     on_context_notice: Callable[[str], None] | None = None,
     approval_result: dict[str, Any] | None = None,
     user_label: str | None = None,
@@ -51,6 +54,15 @@ def run_turn(
         context.add_message("system", "## Approval Result\n" + json.dumps(approval_result, ensure_ascii=False, indent=2))
 
     start_event = len(context.events)
+    progress = begin_progress(
+        context,
+        text,
+        mode="goal" if goal else "normal",
+        continuation=user_label == "/approve",
+    )
+    append_progress_checkpoint(context)
+    if on_progress:
+        on_progress(progress)
     prompt_messages = [dict(message) for message in context.get_messages()]
     workspace = Path(context.metadata["workspace"])
     user = user_label or (f"/goal {text}" if goal else text)
@@ -65,6 +77,8 @@ def run_turn(
 
     def on_event(event: Any) -> None:
         write_live_event(live_path, turn_id, event)
+        if event.type == "progress.updated" and on_progress:
+            on_progress(dict(event.data))
         if event_handler is not None:
             event_handler(event)
 
@@ -80,6 +94,11 @@ def run_turn(
             max_steps=AGENT_MAX_STEPS,
             on_delta=on_delta,
             on_verify=on_verify,
+        )
+        progress = finish_progress(
+            context,
+            str(context.metadata.get("friday.loop_status") or "done"),
+            verifications,
         )
     except BaseException:
         finish_live_trace(live_path, turn_id, status="error")
@@ -118,8 +137,9 @@ def run_turn(
         [event.to_dict() for event in context.events[-20:]],
         str(context.metadata.get("session_id") or ""),
         context.get_messages(),
+        progress,
     )
-    return TurnResult(agent, context, answer, verifications, metrics, notice)
+    return TurnResult(agent, context, answer, verifications, metrics, progress, notice)
 
 
 def _tokens(text: str) -> int:

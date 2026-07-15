@@ -3,17 +3,21 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from agent_core import Agent, RunContext, tool
+from agent_core import Agent, RunContext, reset_current_context, set_current_context, tool
 
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
 from friday.config import DEFAULT_MODEL_CONFIG, load_model_config
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
+from friday.prompts import goal_attempt_prompt, retry_prompt, runtime_notes
+from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
 from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt
 
@@ -65,6 +69,26 @@ class ToolTests(unittest.TestCase):
             result = tools["Bash"]("exit 7")
             self.assertEqual(result["exit_code"], 7)
             self.assertFalse(result["timed_out"])
+
+    def test_run_shell_preserves_unicode_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            result = tools["Bash"]("Write-Output '你好'" if os.name == "nt" else "printf '你好'")
+
+            self.assertIn("你好", result["output"])
+
+    def test_run_shell_timeout_kills_the_process_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            start = time.perf_counter()
+
+            result = tools["Bash"]('python -c "import time; time.sleep(6)"', timeout_seconds=1)
+
+            self.assertTrue(result["timed_out"])
+            self.assertLess(time.perf_counter() - start, 4)
 
     def test_bash_approval_blocks_dangerous_commands_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -160,15 +184,53 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(grep["count"], 2)
             self.assertEqual(grep["matches"][0]["line"], 2)
 
-    def test_web_search_requires_tavily_key(self) -> None:
+    def test_web_search_uses_anonymous_anysearch_without_tavily_key(self) -> None:
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "## Search Results\n\n### 1. Friday\n- **URL**: https://example.com/friday\n- useful result",
+                                }
+                            ]
+                        },
+                    }
+                ).encode("utf-8")
+
+        seen = {}
+
+        def fake_urlopen(request, timeout):
+            seen["url"] = request.full_url
+            seen["auth"] = request.get_header("Authorization")
+            seen["payload"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse()
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
             with patch.dict(os.environ, {}, clear=True):
-                result = tools["WebSearch"]("latest Friday agent news")
+                with patch("friday.tools.urllib.request.urlopen", side_effect=fake_urlopen):
+                    result = tools["WebSearch"]("latest Friday agent news")
 
-            self.assertEqual(result["error"], "TAVILY_API_KEY is not configured.")
+            self.assertEqual(seen["url"], "https://api.anysearch.com/mcp")
+            self.assertIsNone(seen["auth"])
+            self.assertEqual(seen["payload"]["method"], "tools/call")
+            self.assertEqual(seen["payload"]["params"]["name"], "search")
+            self.assertEqual(result["provider"], "anysearch")
+            self.assertEqual(result["results"][0]["title"], "Friday")
+            self.assertEqual(result["results"][0]["content"], "useful result")
 
     def test_web_search_calls_tavily_api(self) -> None:
         class FakeResponse:
@@ -226,8 +288,55 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(seen["payload"]["search_depth"], "advanced")
             self.assertEqual(seen["payload"]["time_range"], "week")
             self.assertFalse(seen["payload"]["include_raw_content"])
+            self.assertEqual(result["provider"], "tavily")
             self.assertEqual(result["answer"], "Friday is a local agent.")
             self.assertEqual(result["results"][0]["content"], "useful result")
+
+    def test_web_search_falls_back_to_anysearch_after_tavily_failure(self) -> None:
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "## Search Results\n\n### 1. Backup\n- **URL**: https://example.com/backup\n- fallback result",
+                                }
+                            ]
+                        },
+                    }
+                ).encode("utf-8")
+
+        seen = []
+
+        def fake_urlopen(request, timeout):
+            seen.append((request.full_url, request.get_header("Authorization"), timeout))
+            if request.full_url == "https://api.tavily.com/search":
+                raise urllib.error.URLError("offline")
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            with patch.dict(os.environ, {"TAVILY_API_KEY": "tavily-key", "ANYSEARCH_API_KEY": "anysearch-key"}, clear=True):
+                with patch("friday.tools.urllib.request.urlopen", side_effect=fake_urlopen):
+                    result = tools["WebSearch"]("Friday agent")
+
+            self.assertEqual([item[0] for item in seen], ["https://api.tavily.com/search", "https://api.anysearch.com/mcp"])
+            self.assertEqual(seen[1][1], "Bearer anysearch-key")
+            self.assertEqual(seen[1][2], 30)
+            self.assertEqual(result["provider"], "anysearch")
+            self.assertEqual(result["results"][0]["url"], "https://example.com/backup")
 
     def test_web_fetch_requires_http_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -486,6 +595,21 @@ class PromptTests(unittest.TestCase):
             self.assertNotIn("## Short-Term State", text)
             self.assertIn("project rules", text)
 
+    def test_runtime_prompt_defines_completion_and_web_research_stops(self) -> None:
+        prompt = runtime_notes()
+
+        self.assertIn("Do not stop at a plan", prompt)
+        self.assertIn("Search again only when", prompt)
+        self.assertIn("cite only retrieved sources", prompt)
+
+    def test_goal_and_repair_prompts_repeat_the_original_objective(self) -> None:
+        goal = "build and verify report.md"
+
+        self.assertIn(goal, goal_attempt_prompt(goal))
+        repair = retry_prompt(goal, 2, "report.md is missing")
+        self.assertIn(goal, repair)
+        self.assertIn("report.md is missing", repair)
+
     def test_global_rules_layer_reads_home_agents_md(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -553,6 +677,62 @@ class PromptTests(unittest.TestCase):
 
             self.assertIn("[truncated:", text)
             self.assertLess(len(text), PROJECT_INSTRUCTIONS_LIMIT + 8000)
+
+
+class ProgressTests(unittest.TestCase):
+    def test_update_plan_tool_uses_the_active_run_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = RunContext(metadata={"workspace": str(root), "session_id": "s1"})
+            begin_progress(context, "ship it", mode="normal")
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            token = set_current_context(context)
+            try:
+                result = tools["UpdatePlan"](
+                    [{"step": "run tests", "status": "in_progress"}],
+                    next_action="run unit tests",
+                )
+            finally:
+                reset_current_context(token)
+
+            self.assertEqual(result["steps"][0]["step"], "run tests")
+            self.assertEqual(current_progress(context)["next_action"], "run unit tests")
+
+    def test_progress_is_structured_persisted_and_restorable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = RunContext(metadata={"workspace": str(root), "session_id": "s1"})
+
+            begin_progress(context, "build report", mode="normal")
+            planned = update_plan(
+                context,
+                [
+                    {"step": "inspect inputs", "status": "completed"},
+                    {"step": "write report", "status": "in_progress"},
+                ],
+                next_action="write report.md",
+            )
+
+            saved = json.loads((root / ".friday" / "sessions" / "s1.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["progress"], planned)
+            self.assertEqual(planned["next_action"], "write report.md")
+            with self.assertRaises(ValueError):
+                update_plan(
+                    context,
+                    [
+                        {"step": "one", "status": "in_progress"},
+                        {"step": "two", "status": "in_progress"},
+                    ],
+                )
+
+            finished = finish_progress(context, "done", [{"verdict": "pass", "attempt": 1}])
+            restored = RunContext()
+            restore_progress(restored, finished)
+            append_progress_checkpoint(restored)
+
+            self.assertEqual(current_progress(restored)["status"], "done")
+            self.assertTrue(all(step["status"] == "completed" for step in current_progress(restored)["steps"]))
+            self.assertIn("## Current Session Progress", restored.messages[-1]["content"])
 
 
 class CompactTests(unittest.TestCase):
@@ -859,7 +1039,7 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(verifications[-1]["tokens_used"], 90)
         self.assertEqual(context.metadata["friday.loop_status"], "token_budget")
 
-    def test_verified_chat_repairs_once_when_verifier_fails(self) -> None:
+    def test_verified_chat_repairs_until_a_semantic_stop(self) -> None:
         class FakeAgent:
             def __init__(self) -> None:
                 self.prompts = []
@@ -880,7 +1060,9 @@ class VerificationTests(unittest.TestCase):
         agent = FakeAgent()
         context = FakeContext()
         results = [
-            {"passed": False, "feedback": "x.py still fails"},
+            {"passed": False, "feedback": "x.py still fails first check"},
+            {"passed": False, "feedback": "x.py still fails second check"},
+            {"passed": False, "feedback": "x.py still fails third check"},
             {"passed": True, "feedback": ""},
         ]
 
@@ -888,10 +1070,10 @@ class VerificationTests(unittest.TestCase):
             answer, verifications = verified_chat(agent, context, "fix x")
 
         self.assertEqual(answer, "answer")
-        self.assertEqual(len(agent.prompts), 2)
-        self.assertIn("x.py still fails", agent.prompts[1])
-        self.assertEqual([item["passed"] for item in verifications], [False, True])
-        self.assertEqual(len(context.emitted), 2)
+        self.assertEqual(len(agent.prompts), 4)
+        self.assertTrue(all("fix x" in prompt for prompt in agent.prompts[1:]))
+        self.assertEqual([item["passed"] for item in verifications], [False, False, False, True])
+        self.assertEqual(len(context.emitted), 4)
 
     def test_goal_chat_loops_until_pass_or_blocked(self) -> None:
         class FakeAgent:
@@ -1076,6 +1258,7 @@ class ResumeTests(unittest.TestCase):
                         "updated": "2",
                         "user": "first",
                         "assistant": "one more",
+                        "progress": {"objective": "finish first", "status": "blocked"},
                         "messages": [
                             {"role": "user", "content": "first"},
                             {"role": "assistant", "content": "one"},
@@ -1112,8 +1295,11 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual([choice["id"] for choice in choices], ["s2", "s1"])
             self.assertEqual(count, 2)
             self.assertEqual(choices[1]["turns"], "2")
+            self.assertEqual(choices[1]["objective"], "finish first")
+            self.assertEqual(choices[1]["status"], "blocked")
             self.assertEqual(context.metadata["session_id"], "s1")
-            self.assertEqual(non_system[-1], {"role": "assistant", "content": "one more"})
+            self.assertEqual(non_system[-2], {"role": "assistant", "content": "one more"})
+            self.assertIn("## Current Session Progress", non_system[-1]["content"])
             self.assertIn({"role": "user", "content": "follow"}, non_system)
             self.assertNotIn({"role": "user", "content": "second"}, non_system)
 

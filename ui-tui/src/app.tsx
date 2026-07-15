@@ -4,7 +4,7 @@ import TextInput from 'ink-text-input'
 
 import type { GatewayClient } from './gatewayClient.js'
 import { Markdown, type Theme } from './markdown.js'
-import type { GatewayEvent, Message, SessionInfo, VerificationResult } from './types.js'
+import type { GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
 
 const theme: Theme = {
   accent: '#2F81F7',
@@ -27,6 +27,7 @@ const HELP_TEXT = `# Friday commands
 | \`/help\` | Show this command reference. |
 | \`/memory\` | Print the effective prompt, including user, project, and memory context. |
 | \`/context\` | Print current context usage. |
+| \`/progress\` | Show the current objective and plan. |
 | \`/compact\` | Summarize the live conversation into a fresh context. |
 | \`/goal <text>\` | Loop until the verifier passes, blocks, needs approval, or is cancelled. |
 | \`/resume\` | Resume recent Friday session context. |
@@ -44,6 +45,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   const [busy, setBusy] = useState(false)
   const [toolsExpanded, setToolsExpanded] = useState(false)
   const [info, setInfo] = useState<SessionInfo | null>(null)
+  const [progress, setProgress] = useState<ProgressState | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [resumePicker, setResumePicker] = useState<ResumePicker | null>(null)
   const [approvalPicker, setApprovalPicker] = useState<ApprovalPicker | null>(null)
@@ -54,13 +56,17 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   useEffect(() => {
     const onEvent = (event: GatewayEvent) => {
       if (event.type === 'gateway.ready') {
-        void gateway.request<SessionInfo>('session.info').then(setInfo)
+        void gateway.request<SessionInfo>('session.info').then(value => {
+          setInfo(value)
+          setProgress(value.progress ?? null)
+        })
       } else if (event.type === 'message.delta') {
         setStreaming(text => text + event.payload.text)
       } else if (event.type === 'message.complete') {
         setMessages(items => [...items, { metrics: event.payload.metrics, role: 'assistant', text: event.payload.text }])
         activeTurn.current = null
         activeGoal.current = null
+        setProgress(event.payload.progress ?? null)
         setStreaming('')
         setBusy(false)
       } else if (event.type === 'tool.start') {
@@ -81,6 +87,8 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'verification.complete') {
         setActivity('')
         setMessages(items => updateVerification(items, activeTurn.current, event.payload))
+      } else if (event.type === 'progress.update') {
+        setProgress(event.payload)
       } else if (event.type === 'gateway.stderr') {
         setActivity(event.payload.line)
       } else if (event.type === 'gateway.protocol_error') {
@@ -133,9 +141,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         const choice = resumePicker.choices[resumePicker.index]
         if (choice) {
           setResumePicker(null)
-          void gateway.request<{ count: number }>('session.resume', { id: choice.id }).then(result =>
-            setMessages(items => [...items, { role: 'system', text: `Resumed session (${result.count} turns): ${choice.user}` }])
-          )
+          void gateway.request<{ count: number; progress?: ProgressState }>('session.resume', { id: choice.id }).then(result => {
+            setProgress(result.progress ?? null)
+            setMessages(items => [...items, { role: 'system', text: `Resumed session (${result.count} turns): ${choice.objective || choice.user}` }])
+          })
         }
       } else if (key.escape) {
         setResumePicker(null)
@@ -158,7 +167,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   })
 
   const commandContext = useMemo(
-    () => ({ app, gateway, setApprovalPicker, setMessages, setResumePicker }),
+    () => ({ app, gateway, setApprovalPicker, setMessages, setProgress, setResumePicker }),
     [app, gateway]
   )
 
@@ -209,7 +218,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Header activity={activity} busy={busy} info={info} />
+      <Header activity={activity} busy={busy} info={info} progress={progress} />
       <Box flexDirection="column" marginTop={1}>
         {messages.slice(-10).map((message, index) => <MessageLine toolsExpanded={toolsExpanded} key={index} message={message} now={now} />)}
         {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} streaming /> : null}
@@ -249,12 +258,14 @@ function runCommand(
     gateway,
     setApprovalPicker,
     setMessages,
+    setProgress,
     setResumePicker,
   }: {
     app: ReturnType<typeof useApp>
     gateway: GatewayClient
     setApprovalPicker: React.Dispatch<React.SetStateAction<ApprovalPicker | null>>
     setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>
+    setProgress: React.Dispatch<React.SetStateAction<ProgressState | null>>
     setResumePicker: React.Dispatch<React.SetStateAction<ResumePicker | null>>
   }
 ) {
@@ -275,6 +286,11 @@ function runCommand(
     void gateway.request<{ text: string }>('context.get').then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
     )
+  } else if (command.startsWith('/progress')) {
+    void gateway.request<{ progress: ProgressState }>('progress.get').then(result => {
+      setProgress(result.progress)
+      setMessages(items => [...items, { role: 'system', text: formatProgress(result.progress) }])
+    })
   } else if (command.startsWith('/compact')) {
     void gateway.request<{ text: string }>('session.compact').then(result =>
       setMessages(items => [...items, { role: 'system', text: `Compacted conversation:\n\n${result.text}` }])
@@ -293,6 +309,7 @@ function runCommand(
     openApprovalPicker(gateway, setApprovalPicker, setMessages, 1)
   } else if (command.startsWith('/reset')) {
     void gateway.request('session.reset').then(() => {
+      setProgress(null)
       setMessages(items => [...items, { role: 'system', text: 'Reset Friday.' }])
     })
   } else {
@@ -314,6 +331,8 @@ type VerificationStatus = VerificationResult & {
 type ResumeChoice = {
   assistant: string
   id: string
+  objective: string
+  status: string
   time: string
   turns: string
   user: string
@@ -397,7 +416,7 @@ function turnIndex(messages: UiMessage[], turnId: string | null) {
   return -1
 }
 
-function Header({ activity, busy, info }: { activity: string; busy: boolean; info: SessionInfo | null }) {
+function Header({ activity, busy, info, progress }: { activity: string; busy: boolean; info: SessionInfo | null; progress: ProgressState | null }) {
   const cwd = info?.cwd ?? process.cwd()
   const left = activity || (busy ? 'thinking' : 'ready')
   const model = info?.model ?? 'loading model'
@@ -410,6 +429,7 @@ function Header({ activity, busy, info }: { activity: string; busy: boolean; inf
         <Text color={theme.dim}>/help commands | Ctrl+O tools</Text>
       </Box>
       <Text color={theme.dim} wrap="truncate-end">{cwd}</Text>
+      {progress?.objective ? <ProgressLine progress={progress} /> : null}
       <Text color={theme.dim}> </Text>
       <Box>
         <Text color={busy ? theme.warn : theme.ok}>{left}</Text>
@@ -417,6 +437,15 @@ function Header({ activity, busy, info }: { activity: string; busy: boolean; inf
       </Box>
     </Box>
   )
+}
+
+function ProgressLine({ progress }: { progress: ProgressState }) {
+  const steps = progress.steps ?? []
+  const completed = steps.filter(step => step.status === 'completed').length
+  const count = steps.length ? ` | ${completed}/${steps.length}` : ''
+  const next = progress.next_action ? ` | next: ${shortText(progress.next_action, 60)}` : ''
+  const color = progress.status === 'done' ? theme.ok : progress.status === 'blocked' ? theme.error : progress.status === 'waiting' ? theme.warn : primary
+  return <Text color={color} wrap="truncate-end">task {progress.status ?? 'working'} | {shortText(progress.objective ?? '', 90)}{count}{next}</Text>
 }
 
 function MessageLine({ toolsExpanded = false, message, now = Date.now(), streaming = false }: { toolsExpanded?: boolean; message: UiMessage; now?: number; streaming?: boolean }) {
@@ -507,7 +536,7 @@ function ResumePickerView({ picker }: { picker: ResumePicker }) {
       {picker.choices.map((choice, index) => (
         <Box flexDirection="column" key={choice.id}>
           <Text color={index === picker.index ? theme.warn : theme.text}>
-            {index === picker.index ? '> ' : '  '}{choice.time || choice.id}  {choice.turns} turns  {choice.user}
+            {index === picker.index ? '> ' : '  '}{choice.time || choice.id}  {choice.turns} turns  {choice.status || 'unknown'}  {choice.objective || choice.user}
           </Text>
           {choice.assistant ? <Text color={theme.dim}>    {choice.assistant}</Text> : null}
         </Box>
@@ -600,6 +629,21 @@ function shortText(value: string, max: number) {
 
 function formatSeconds(seconds: number) {
   return `${Math.max(0, seconds).toFixed(1)}s`
+}
+
+function formatProgress(progress: ProgressState) {
+  if (!progress.objective) {
+    return 'No active session progress.'
+  }
+  const lines = [`[${progress.status ?? 'working'}] ${progress.objective}`]
+  for (const step of progress.steps ?? []) {
+    const mark = step.status === 'completed' ? '[x]' : step.status === 'in_progress' ? '[>]' : step.status === 'blocked' ? '[!]' : '[ ]'
+    lines.push(`${mark} ${step.step}`)
+  }
+  if (progress.next_action) {
+    lines.push(`next: ${progress.next_action}`)
+  }
+  return lines.join('\n')
 }
 
 function Composer({ busy, input, onChange, onSubmit }: { busy: boolean; input: string; onChange: (value: string) => void; onSubmit: (value: string) => void }) {

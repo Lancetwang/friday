@@ -26,15 +26,18 @@ uv tool install -e . --force --reinstall
 - Agent 只负责路由：文件、嵌套规则、Skill 正文和记忆读取都按需进入上下文。
 - 分层规则：全局 `~/.friday/AGENTS.md`，以及项目根目录和嵌套目录中的 `AGENTS.md`。
 - 渐进式 Skill：启动提示词只保存 Skill 目录；`Skill` 动态返回结构化元数据，Bash 只读取被选中的 `SKILL.md` 和引用资源。
-- 分层记忆：用户画像、全局记忆和项目记忆保存长期事实，当前任务状态留在可恢复的 Session 中。
+- 分层记忆：用户画像、全局记忆和项目记忆保存长期事实，当前进度作为显式 Session 快照独立恢复。
+- 可见进度：复杂任务维护一个目标、结构化计划、状态、下一步和验证结果，但不会为不同任务切换对话上下文。
 - 多级上下文压缩：先探测无损工具结果简化的收益，收益不足时再生成结构化摘要并原样保留最近十个完整 Turn。
+- 完成优先：普通执行请求也会继续完成实现与验证，不停在计划、进度或部分结果。
+- 有预算的联网检索：只有缺少必要证据时才继续搜索；有事实依据的回答只引用已检索来源，并区分事实与推断。
 - 独立验证：Verifier 不相信主 Agent 的描述，而是自己检查工作区交付物。
-- 自适应验证：简单交付物只做最小充分的独立检查，只有具体可执行的 Repair 才能继续循环。
-- Goal 模式：`/goal <任务>` 在通过、阻塞、证据不足、重复无进展、等待审批或 Token Budget 耗尽时停止。
+- 自适应验证：简单交付物只做最小充分的独立检查；具体 Repair 不受固定次数限制，直到语义停止条件成立。
+- Goal 模式：`/goal <任务>` 持续锚定原始目标并以 Verifier 通过为完成门槛，在阻塞、证据不足、重复无进展、等待审批或 Token Budget 耗尽时停止。
 - 程序级权限：危险 Bash 命令在执行前被拦截，需要用户明确批准。
 - 运行级 Token 统计：汇总主 Agent 和 Verifier 的模型调用；Provider 不返回 Usage 时才标记为估算。
 - 本地可观测性：模型与工具事件增量落盘，超时后仍可诊断；完整轮次另写精简 JSONL 摘要，记录 Prompt 结构、验证、耗时、Usage 和结果。
-- Session 恢复：每个会话保存一个原子快照，在最新 Prefix 下恢复完整对话正文。
+- Session 恢复：每个会话保存一个原子快照，在最新 Prefix 下同时恢复完整对话和当前进度。
 - 兼容的 Runtime 升级：Friday 固定经过验证的 agent-core 源，并在每轮开始前检查隔离环境是否匹配。
 
 ## 架构
@@ -52,7 +55,7 @@ flowchart TD
     Context["Context Engineering<br/>预算 -> 工具压缩 -> 对话压缩"] --> AgentLoop
     Memory["Memory Management<br/>长期文件 + 可恢复会话状态"] --> AgentLoop
     Skills["Progressive Skills<br/>目录 -> 元数据 -> 选中资源"] --> AgentLoop
-    Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Skill / Memory"] --> AgentLoop
+    Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Skill / Plan / Memory"] --> AgentLoop
 ```
 
 ## Harness
@@ -60,7 +63,7 @@ flowchart TD
 Friday 按以下顺序组装模型 Prefix：
 
 1. `SOUL.md`：身份和工作风格。
-2. Runtime 指令：工具、记忆策略、项目规则发现、Skill、权限、压缩和验证。
+2. Runtime 指令：任务完成、联网检索、记忆、项目规则发现、权限、压缩和验证。
 3. 工具使用指导。
 4. 全局 `~/.friday/AGENTS.md`。
 5. `~/.friday/USER.md` 用户画像。

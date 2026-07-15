@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from agent_core import RunContext
 
+from friday.progress import current_progress
+
 
 def write_trace(
     workspace: Path,
@@ -37,6 +39,7 @@ def write_trace(
         "metrics": metrics or {},
         "performance": _performance(events),
         "prompt": _prompt_summary(prompt_messages),
+        "progress": current_progress(context),
         "timeline": _timeline(events),
         "tools": _tool_events(events),
         "verifications": verifications or [],
@@ -78,7 +81,7 @@ def begin_live_trace(
 def write_live_event(path: Path, turn_id: str, event: Any) -> None:
     value = _event_dict(event)
     event_type = str(value.get("type") or "")
-    if event_type not in {"model.request", "model.response", "tool.call", "tool.result", "tool.observe", "verification.start", "verification.result", "loop.guard", "flow.end"}:
+    if event_type not in {"model.request", "model.response", "tool.call", "tool.result", "tool.observe", "verification.start", "verification.result", "progress.updated", "loop.guard", "flow.end"}:
         return
     data = value.get("data", {})
     if not isinstance(data, dict):
@@ -208,6 +211,8 @@ def _timeline(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             timeline.append({"type": event_type, "timestamp": timestamp, "has_tool_calls": data.get("has_tool_calls"), "content_length": data.get("content_length"), "usage": data.get("usage")})
         elif event_type == "tool.observe":
             timeline.append({"type": event_type, "timestamp": timestamp, "tool_call_count": data.get("tool_call_count")})
+        elif event_type == "progress.updated":
+            timeline.append({"type": event_type, "timestamp": timestamp, "status": data.get("status"), "objective": data.get("objective"), "next_action": data.get("next_action")})
         elif event_type == "flow.end":
             timeline.append({"type": event_type, "timestamp": timestamp})
     return timeline

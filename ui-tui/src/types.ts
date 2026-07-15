@@ -3,18 +3,30 @@ export type GatewayEvent =
   | { type: 'session.info'; payload: SessionInfo }
   | { type: 'message.start'; payload: { text: string } }
   | { type: 'message.delta'; payload: { text: string } }
-  | { type: 'message.complete'; payload: { metrics?: MessageMetrics; text: string } }
+  | { type: 'message.complete'; payload: { metrics?: MessageMetrics; progress?: ProgressState; text: string } }
   | { type: 'tool.start'; payload: { name: string; arguments?: unknown } }
   | { type: 'tool.complete'; payload: { name: string; error?: boolean; content?: string } }
   | { type: 'verification.start'; payload: Record<string, never> }
   | { type: 'verification.complete'; payload: VerificationResult }
+  | { type: 'progress.update'; payload: ProgressState }
   | { type: 'gateway.stderr'; payload: { line: string } }
   | { type: 'gateway.protocol_error'; payload: { preview: string } }
 
 export interface SessionInfo {
   cwd: string
   model: string
+  progress?: ProgressState
   tools: string[]
+}
+
+export interface ProgressState {
+  latest_request?: string
+  mode?: 'goal' | 'normal'
+  next_action?: string
+  objective?: string
+  status?: 'blocked' | 'done' | 'waiting' | 'working'
+  steps?: Array<{ status: 'blocked' | 'completed' | 'in_progress' | 'pending'; step: string }>
+  updated?: string
 }
 
 export interface Message {

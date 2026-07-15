@@ -13,6 +13,7 @@ friday approve
 friday reject
 friday memory
 friday context
+friday progress
 friday reset
 ```
 
@@ -22,6 +23,7 @@ Slash commands in chat/TUI:
 /help
 /memory
 /context
+/progress
 /compact
 /goal <task>
 /resume
@@ -50,4 +52,3 @@ Modes:
 - `accept-edits`: allow common write/edit shell commands, still ask for destructive commands.
 - `dont-ask`: deny commands that would require approval.
 - `bypass`: skip approval checks. Use only in a sandbox.
-

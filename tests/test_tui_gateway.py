@@ -32,6 +32,15 @@ class TuiGatewayTests(unittest.TestCase):
 
         event.assert_called_once_with("verification.start", {})
 
+    def test_gateway_exposes_progress_updates(self) -> None:
+        gateway = Gateway()
+        progress = {"objective": "finish report", "status": "working"}
+
+        with patch.object(gateway, "event") as event:
+            gateway.on_agent_event(AgentEvent("progress.updated", category="progress", data=progress))
+
+        event.assert_called_once_with("progress.update", progress)
+
     def test_session_info_does_not_require_llm_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"LLM_API_KEY": "", "OPENAI_API_KEY": "", "DEEPSEEK_API_KEY": ""}, clear=False):

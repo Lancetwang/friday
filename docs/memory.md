@@ -8,7 +8,7 @@ Long-term files:
 - `~/.friday/MEMORY.md`: global cross-project memory.
 - `<workspace>/.friday/MEMORY.md`: project memory.
 
-Short-term context is not a file. Current-task state lives in the live conversation; session history is restored with `friday resume`, and long conversations are compacted into an in-session summary that rides in the conversation itself.
+Short-term state is session-scoped rather than long-term memory. The message chain remains the single conversation context, while the session snapshot also persists the current objective, plan, status, next action, and verifier state. `friday resume` restores both.
 
 Rule files:
 
@@ -19,4 +19,4 @@ Rules are not memory. Edit rule files directly; the `Memory` tool never writes t
 
 Use the `Memory` tool for durable facts only. Do not save compact summaries, temporary command output, or transient task progress as memory.
 
-`/compact` first gives Friday a chance to save durable facts, then rebuilds the live context from a structured in-session summary plus the latest ten complete user turns copied verbatim. Tool calls and their results inside those turns stay paired, and resume restores this rebuilt context.
+`UpdatePlan` updates the visible progress for non-trivial work and emits append-only trace events. `/compact` first gives Friday a chance to save durable facts, then rebuilds the live context from a structured in-session summary plus the latest ten complete user turns copied verbatim and one current progress checkpoint. Tool calls and their results inside those turns stay paired.

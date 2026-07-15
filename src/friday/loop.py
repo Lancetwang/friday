@@ -43,14 +43,14 @@ def verified_chat(
     max_steps: int = AGENT_MAX_STEPS,
     on_delta: Any = None,
     on_verify: Callable[[dict[str, Any]], None] | None = None,
-    repairs: int = 1,
+    repairs: int | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     result = run_loop(
         agent,
         context,
         text,
         force_verify=False,
-        max_attempts=repairs + 1,
+        max_attempts=None if repairs is None else repairs + 1,
         max_steps=max_steps,
         on_delta=on_delta,
         on_verify=on_verify,
@@ -132,7 +132,7 @@ def _attempt(state: dict[str, Any]):
     if state["attempt"] == 1:
         prompt = goal_attempt_prompt(state["goal"]) if state["force_verify"] else state["goal"]
     else:
-        prompt = retry_prompt(state["attempt"] - 1, state["feedback"])
+        prompt = retry_prompt(state["goal"], state["attempt"] - 1, state["feedback"])
     event_start = len(state["context"].events)
     state["answer"] = state["agent"].chat(
         prompt,

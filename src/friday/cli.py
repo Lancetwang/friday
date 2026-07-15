@@ -8,6 +8,7 @@ from pathlib import Path
 
 from friday.app import build_friday, build_instructions, compact_friday, init_project, reset_friday, resume_friday
 from friday.context import context_report
+from friday.progress import current_progress, finish_progress, progress_line
 from friday.tui_node import run_tui
 from friday.tools import approve_pending, build_tools
 from friday.turn import run_turn
@@ -35,6 +36,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("tui", help="Start a simple terminal UI.")
     sub.add_parser("memory", help="Print effective instruction context.")
     sub.add_parser("context", help="Print current context usage.")
+    sub.add_parser("progress", help="Print progress for the latest Friday session.")
     sub.add_parser("resume", help="Resume recent Friday session context.")
     sub.add_parser("approve", help="Approve one pending dangerous shell command.")
     sub.add_parser("reject", help="Reject one pending dangerous shell command.")
@@ -62,6 +64,11 @@ def main(argv: list[str] | None = None) -> None:
         print(_context_report(context))
         return
 
+    if command == "progress":
+        _agent, context, _count = resume_friday(stream=False)
+        print(progress_line(current_progress(context)))
+        return
+
     if command == "approve":
         print(json_dump(approve_pending()))
         return
@@ -81,6 +88,7 @@ def main(argv: list[str] | None = None) -> None:
     if command == "resume":
         agent, context, count = resume_friday(stream=stream)
         print(f"resumed {count} turns")
+        print(f"[progress] {progress_line(current_progress(context))}")
         command = "chat"
     else:
         agent, context = build_friday(stream=stream)
@@ -133,11 +141,13 @@ def _configure_permissions(args) -> None:
 def _slash(text: str, stream: bool, agent, context):
     command = text[1:].strip().lower()
     if command in {"help", "?"}:
-        print("/help, /memory, /context, /compact, /goal <text>, /resume, /approve, /reject, /reset, /exit")
+        print("/help, /memory, /context, /progress, /compact, /goal <text>, /resume, /approve, /reject, /reset, /exit")
     elif command == "memory":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
     elif command == "context":
         print(_context_report(context))
+    elif command == "progress":
+        print(progress_line(current_progress(context)))
     elif command == "compact":
         agent, context, summary = compact_friday(agent, context, stream=stream)
         print("compacted conversation:")
@@ -145,6 +155,7 @@ def _slash(text: str, stream: bool, agent, context):
     elif command == "resume":
         agent, context, count = resume_friday(stream=stream)
         print(f"resumed {count} turns")
+        print(f"[progress] {progress_line(current_progress(context))}")
     elif command.startswith("goal"):
         goal = text.split(" ", 1)[1].strip() if " " in text else ""
         if not goal:
@@ -164,7 +175,11 @@ def _slash(text: str, stream: bool, agent, context):
                 user_label="/approve",
             )
     elif command == "reject":
-        print(json_dump(approve_pending(reject=True)))
+        result = approve_pending(reject=True)
+        print(json_dump(result))
+        if result.get("rejected"):
+            progress = finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
+            _print_progress(progress)
     elif command == "reset":
         if _reset(False):
             agent, context = build_friday(stream=stream)
@@ -202,6 +217,7 @@ def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_
         text,
         stream=stream,
         on_delta=_print_delta if stream else None,
+        on_progress=_print_progress,
         on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
         approval_result=approval_result,
         user_label=user_label,
@@ -225,6 +241,7 @@ def _goal(agent, context, text: str, stream: bool):
         goal=True,
         stream=stream,
         on_delta=_print_delta if stream else None,
+        on_progress=_print_progress,
         on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
     )
     if stream:
@@ -241,6 +258,10 @@ def _goal(agent, context, text: str, stream: bool):
 def _print_delta(text: str) -> None:
     sys.stdout.write(text)
     sys.stdout.flush()
+
+
+def _print_progress(progress: dict) -> None:
+    print(f"\n[progress] {progress_line(progress)}")
 
 
 def json_dump(value) -> str:

@@ -23,6 +23,7 @@ from friday.prompts import (
     runtime_notes,
     tool_guidance,
 )
+from friday.progress import append_progress_checkpoint, current_progress, is_progress_checkpoint, restore_progress
 from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions, skill_catalog
 
 PROJECT_INSTRUCTIONS_LIMIT = 12000
@@ -141,6 +142,7 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     # (so compaction never forgets them), then its final message is the structured summary.
     recent_messages = _recent_turn_messages(context)
     session_id = str(context.metadata.get("session_id") or "")
+    progress = current_progress(context)
     summary = agent.chat(
         COMPACT_PROMPT,
         context=context,
@@ -161,6 +163,8 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
         new_context,
         [*map(dict, new_context.get_messages()), *recent_messages],
     )
+    restore_progress(new_context, progress)
+    append_progress_checkpoint(new_context)
     return new_agent, new_context, summary
 
 
@@ -191,11 +195,13 @@ def resume_friday(workspace: Path | None = None, *, stream: bool = True, resume_
         # are kept. No summarization: the original turns come back as-is.
         body = _conversation_body(saved)
         _replace_context_messages(context, [dict(message) for message in context.get_messages()] + body)
+    restore_progress(context, session.get("progress"))
+    append_progress_checkpoint(context)
     return agent, context, int(session.get("turns", 0) or 0)
 
 
 def _conversation_body(messages: list[Any]) -> list[dict[str, Any]]:
-    body = [dict(message) for message in messages if isinstance(message, dict)]
+    body = [dict(message) for message in messages if isinstance(message, dict) and not is_progress_checkpoint(message)]
     start = 0
     while start < len(body) and body[start].get("role") == "system":
         start += 1
@@ -206,7 +212,7 @@ def _replace_context_messages(context: RunContext, messages: list[Any]) -> None:
     clean = [dict(message) for message in messages if isinstance(message, dict)]
     context.messages = clean
     if context.active_message_scope is not None:
-        context.message_scopes[context.active_message_scope] = clean
+        context.message_scopes[context.active_message_scope] = [dict(message) for message in clean]
 
 
 def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dict[str, str]]:
@@ -216,10 +222,13 @@ def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dic
         data = _read_session(path)
         if not data:
             continue
+        progress = data.get("progress") if isinstance(data.get("progress"), dict) else {}
         choices.append(
             {
                 "assistant": _preview(str(data.get("assistant", ""))),
                 "id": str(data.get("session_id") or path.stem),
+                "objective": _preview(str(progress.get("objective", ""))),
+                "status": str(progress.get("status", "")),
                 "time": str(data.get("updated") or ""),
                 "turns": str(data.get("turns", 0)),
                 "user": _preview(str(data.get("user", ""))),
@@ -307,6 +316,7 @@ def save_turn(
     events: list[dict[str, Any]] | None = None,
     session_id: str | None = None,
     messages: list[dict[str, Any]] | None = None,
+    progress: dict[str, Any] | None = None,
 ) -> Path:
     """Persist one snapshot per session, overwritten in place (atomic).
 
@@ -328,6 +338,28 @@ def save_turn(
         "user": existing.get("user") or _preview(user, 180),
         "assistant": _preview(assistant, 220),
         "messages": messages or [],
+        "progress": progress if isinstance(progress, dict) else existing.get("progress", {}),
+    }
+    _write_session(path, snapshot)
+    return path
+
+
+def save_progress(workspace: Path, session_id: str, progress: dict[str, Any]) -> Path:
+    sessions = workspace / ".friday" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    path = sessions / f"{session_id}.json"
+    existing = _read_session(path) or {}
+    now = datetime.now().isoformat(timespec="seconds")
+    snapshot = {
+        **existing,
+        "session_id": session_id,
+        "created": existing.get("created") or now,
+        "updated": now,
+        "turns": int(existing.get("turns", 0) or 0),
+        "user": existing.get("user") or _preview(str(progress.get("objective") or ""), 180),
+        "assistant": existing.get("assistant") or "",
+        "messages": existing.get("messages") or [],
+        "progress": progress,
     }
     _write_session(path, snapshot)
     return path
@@ -384,7 +416,7 @@ def _read_optional(path: Path) -> str:
 def _recent_turn_messages(context: RunContext) -> list[dict[str, Any]]:
     if not hasattr(context, "get_messages"):
         return []
-    messages = [dict(message) for message in context.get_messages() if isinstance(message, dict)]
+    messages = [dict(message) for message in context.get_messages() if isinstance(message, dict) and not is_progress_checkpoint(message)]
     user_indices = [index for index, message in enumerate(messages) if message.get("role") == "user"]
     if not user_indices:
         return []

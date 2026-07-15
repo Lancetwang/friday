@@ -26,15 +26,18 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Agent-as-router: files, nested rules, skill bodies, and memory reads enter context only when needed.
 - Layered rules: global `~/.friday/AGENTS.md` plus root and nested project `AGENTS.md` files.
 - Progressive skills: the prompt keeps only skill locations; `Skill` lists structured metadata dynamically, then Bash reads only the selected `SKILL.md` and referenced resources.
-- Layered memory: user profile, global memory, and project memory store durable facts; current task state remains in the resumable session.
+- Layered memory: user profile, global memory, and project memory store durable facts; current progress remains an explicit resumable session snapshot.
+- Visible progress: non-trivial work keeps one objective, structured plan, status, next action, and verifier state without splitting the conversation into task contexts.
 - Multi-stage context compression: Friday first probes lossless tool-result simplification, then falls back to a structured summary plus the latest ten complete turns when the gain is insufficient.
+- Completion-first turns: ordinary action requests continue through implementation and validation instead of stopping at a plan or partial result.
+- Bounded web research: search repeats only for missing required evidence, and grounded answers cite retrieved sources while separating inference from facts.
 - Independent verification: a verifier agent inspects the workspace without trusting the main agent's claims.
-- Adaptive verification: simple deliverables receive the smallest sufficient independent check; only concrete repair verdicts can repeat work.
-- Goal mode: `/goal <task>` stops on pass, blockage, insufficient evidence, repeated no-progress, approval, or Token Budget.
+- Adaptive verification: simple deliverables receive the smallest sufficient independent check; concrete repairs can continue without a fixed attempt cap until a semantic stop.
+- Goal mode: `/goal <task>` keeps the original objective pinned and requires verifier pass; it stops on blockage, insufficient evidence, repeated no-progress, approval, or Token Budget.
 - Program-enforced permissions: dangerous Bash commands are stopped before execution and require explicit approval.
 - Exact runtime accounting: provider usage is accumulated across main-agent and verifier calls, with marked estimates only when usage is unavailable.
 - Local observability: model and tool events are flushed incrementally so timeouts remain diagnosable; completed turns also record a compact JSONL summary with prompt shape, verification, timing, usage, and result.
-- Session resume: one atomic snapshot per session restores the conversation under a freshly rebuilt prefix.
+- Session resume: one atomic snapshot per session restores both the conversation and its current progress under a freshly rebuilt prefix.
 - Compatible runtime upgrades: Friday pins a tested agent-core source and checks the isolated tool environment before a turn starts.
 
 ## Architecture
@@ -52,7 +55,7 @@ flowchart TD
     Context["Context engineering<br/>budget -> tool compact -> conversation compact"] --> AgentLoop
     Memory["Memory management<br/>durable files + resumable session state"] --> AgentLoop
     Skills["Progressive skills<br/>locations -> metadata -> selected files"] --> AgentLoop
-    Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Skill / Memory"] --> AgentLoop
+    Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Skill / Plan / Memory"] --> AgentLoop
 ```
 
 ## Harness
@@ -60,7 +63,7 @@ flowchart TD
 Friday assembles the model prefix in this order:
 
 1. `SOUL.md`: identity and operating style.
-2. Runtime instructions: tools, memory policy, project-rule discovery, skills, permissions, compact, and verification.
+2. Runtime instructions: task completion, web research, memory, project-rule discovery, permissions, compact, and verification.
 3. Tool guidance.
 4. Global `~/.friday/AGENTS.md` rules.
 5. `~/.friday/USER.md` profile.

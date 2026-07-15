@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -13,7 +14,9 @@ import urllib.request
 from pathlib import Path
 from typing import Annotated, Literal
 
-from agent_core import tool
+from agent_core import get_current_context, tool
+
+from friday.progress import update_plan
 
 USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
@@ -185,16 +188,16 @@ def build_tools(workspace: Path, friday_dir: Path):
             [workspace / match["path"] for match in matches],
         )
 
-    @tool(description="Search the live web with Tavily when current external information is needed.", name="WebSearch")
+    @tool(description="Search the live web when current external information is needed.", name="WebSearch")
     def web_search(
         query: Annotated[str, "Search query."],
         max_results: Annotated[int, "Maximum results to return, 1-10."] = 5,
         search_depth: Annotated[Literal["basic", "advanced"], "Search depth."] = "basic",
         topic: Annotated[Literal["general", "news", "finance"], "Search topic."] = "general",
-        include_answer: Annotated[bool, "Include Tavily's answer summary."] = True,
+        include_answer: Annotated[bool, "Include a provider answer summary when available."] = True,
         time_range: Annotated[str, "Optional time range: day, week, month, or year."] = "",
     ) -> dict:
-        return _tavily_search(query, max_results, search_depth, topic, include_answer, time_range)
+        return _web_search(query, max_results, search_depth, topic, include_answer, time_range)
 
     @tool(description="Fetch a specific URL as clean Markdown with Jina Reader.", name="WebFetch")
     def web_fetch(
@@ -207,6 +210,24 @@ def build_tools(workspace: Path, friday_dir: Path):
     def skill() -> dict:
         skills = _discover_skills(workspace, user_dir)
         return {"skills": [{"name": key, "description": item["description"], "path": str(item["path"])} for key, item in skills.items()]}
+
+    @tool(description="Create or update the visible plan for the current non-trivial session goal.", name="UpdatePlan")
+    def update_session_plan(
+        plan: Annotated[list[dict], "Full plan. Each item has step and status=pending|in_progress|completed|blocked."],
+        objective: Annotated[str, "Updated effective objective when the user's request changed."] = "",
+        explanation: Annotated[str, "Short reason for a plan or scope change."] = "",
+        next_action: Annotated[str, "Immediate next action or blocker."] = "",
+    ) -> dict:
+        context = get_current_context()
+        if context is None:
+            raise RuntimeError("UpdatePlan requires an active agent run.")
+        return update_plan(
+            context,
+            plan,
+            objective=objective,
+            explanation=explanation,
+            next_action=next_action,
+        )
 
     @tool(description="Read or update Friday memory files.", name="Memory")
     def memory(
@@ -246,7 +267,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         _write_text(path, updated)
         return {"target": target, "path": str(path), "chars": len(updated)}
 
-    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, web_search, web_fetch, skill, memory]
+    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, web_search, web_fetch, skill, update_session_plan, memory]
 
 
 def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> dict:
@@ -294,6 +315,24 @@ def skill_catalog(workspace: Path) -> str:
     )
 
 
+def _web_search(query: str, max_results: int, search_depth: str, topic: str, include_answer: bool, time_range: str) -> dict:
+    tavily = _tavily_search(query, max_results, search_depth, topic, include_answer, time_range)
+    if "error" not in tavily:
+        return {"provider": "tavily", **tavily}
+
+    anysearch = _anysearch_search(query, max_results)
+    if "error" not in anysearch:
+        return {"provider": "anysearch", **anysearch}
+
+    return {
+        "error": "All WebSearch providers failed.",
+        "providers": {
+            "tavily": tavily["error"],
+            "anysearch": anysearch["error"],
+        },
+    }
+
+
 def _tavily_search(query: str, max_results: int, search_depth: str, topic: str, include_answer: bool, time_range: str) -> dict:
     api_key = os.getenv("TAVILY_API_KEY", "").strip()
     if not api_key:
@@ -337,6 +376,76 @@ def _tavily_result(item: dict) -> dict:
         "score": item.get("score"),
         "published_date": item.get("published_date", ""),
     }
+
+
+def _anysearch_search(query: str, max_results: int) -> dict:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "search",
+            "arguments": {"query": query, "max_results": min(10, max(1, int(max_results)))},
+        },
+    }
+    headers = {"Content-Type": "application/json", "X-Anysearch-Client": "friday/0.1"}
+    api_key = os.getenv("ANYSEARCH_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request = urllib.request.Request(
+        "https://api.anysearch.com/mcp",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return {"error": f"AnySearch HTTP {error.code}", "detail": error.read().decode("utf-8", errors="replace")[:1000]}
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        return {"error": f"AnySearch search failed: {error}"}
+
+    if not isinstance(data, dict):
+        return {"error": "AnySearch API error: invalid response"}
+    if isinstance(data.get("error"), dict):
+        return {"error": f"AnySearch API error: {data['error'].get('message', 'unknown error')}"}
+    result = data.get("result", {})
+    if not isinstance(result, dict):
+        return {"error": "AnySearch API error: invalid result"}
+    content = result.get("content", [])
+    text = next((str(item.get("text", "")) for item in content if isinstance(item, dict) and item.get("type") == "text"), "")
+    if result.get("isError") or not text:
+        return {"error": f"AnySearch API error: {_clip(text, 1000) or 'missing text result'}"}
+
+    results = _anysearch_results(text)
+    response = {"query": query, "answer": "", "results": results}
+    if not results:
+        response["content"] = _clip(text, 4000)
+    return response
+
+
+def _anysearch_results(text: str) -> list[dict]:
+    blocks = re.split(r"(?m)^###\s+\d+\.\s+", text)[1:]
+    results = []
+    for block in blocks:
+        title, _, body = block.partition("\n")
+        url_match = re.search(r"(?m)^-\s+\*\*URL\*\*:\s*(\S+)\s*$", body)
+        if not url_match:
+            continue
+        content = " ".join((body[: url_match.start()] + body[url_match.end() :]).split())
+        if content.startswith("- "):
+            content = content[2:]
+        results.append(
+            {
+                "title": title.strip(),
+                "url": url_match.group(1),
+                "content": _clip(content, 800),
+                "score": None,
+                "published_date": "",
+            }
+        )
+    return results
 
 
 def _jina_fetch(url: str, max_chars: int) -> dict:
@@ -389,22 +498,55 @@ def _write_text(path: Path, content: str) -> None:
 
 def _run_shell(workspace: Path, command: str, timeout_seconds: int = 60, max_chars: int = 8000) -> dict:
     if platform.system() == "Windows":
-        cmd = ["powershell", "-NoProfile", "-Command", command]
+        utf8_command = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;" + command
+        cmd = ["powershell", "-NoProfile", "-Command", utf8_command]
     else:
         cmd = ["bash", "-lc", command]
+    process = subprocess.Popen(
+        cmd,
+        cwd=workspace,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        start_new_session=os.name != "nt",
+    )
     try:
-        completed = subprocess.run(
-            cmd,
-            cwd=workspace,
-            text=True,
-            capture_output=True,
-            timeout=max(1, timeout_seconds),
-        )
+        output, _ = process.communicate(timeout=max(1, timeout_seconds))
     except subprocess.TimeoutExpired as error:
-        output = ((error.stdout or "") + (error.stderr or ""))[-max_chars:]
-        return {"exit_code": None, "timed_out": True, "output": output}
-    output = (completed.stdout + completed.stderr)[-max_chars:]
-    return {"exit_code": completed.returncode, "timed_out": False, "output": output}
+        _terminate_process_tree(process)
+        try:
+            output, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output = _timeout_output(error)
+        return {"exit_code": None, "timed_out": True, "output": (output or "")[-max_chars:]}
+    return {"exit_code": process.returncode, "timed_out": False, "output": (output or "")[-max_chars:]}
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        process.kill()
+
+
+def _timeout_output(error: subprocess.TimeoutExpired) -> str:
+    output = error.output or ""
+    return output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output
 
 
 def _dangerous_shell(command: str) -> str:
