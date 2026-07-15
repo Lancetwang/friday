@@ -489,6 +489,24 @@ class ResetTests(unittest.TestCase):
             self.assertNotIn("soul.md", names)
             self.assertNotIn("user.md", names)
 
+    def test_ensure_user_home_replaces_only_known_placeholder_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            user_dir = home / ".friday"
+            user_dir.mkdir(parents=True)
+            (user_dir / "USER.md").write_text(
+                "# User Profile\n\nPreferred language, style, and long-term preferences.\n",
+                encoding="utf-8",
+            )
+            (user_dir / "AGENTS.md").write_text("# Friday Global Rules\n\n- keep this rule\n", encoding="utf-8")
+
+            ensure_user_home(home)
+
+            text = (user_dir / "USER.md").read_text(encoding="utf-8")
+            self.assertIn("<!-- Add stable user preferences", text)
+            self.assertNotIn("Preferred language, style", text)
+            self.assertIn("keep this rule", (user_dir / "AGENTS.md").read_text(encoding="utf-8"))
+
     def test_init_creates_only_project_agents_md(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -581,10 +599,14 @@ class PromptTests(unittest.TestCase):
     def test_prompt_keeps_stable_prefix_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            home = root / "home"
+            ensure_user_home(home)
+            (home / ".friday" / "AGENTS.md").write_text("# Friday Global Rules\n\n- global rule\n", encoding="utf-8")
             (root / "AGENTS.md").write_text("project rules", encoding="utf-8")
             (root / ".friday").mkdir()
-            (root / ".friday" / "MEMORY.md").write_text("# Project Memory\n", encoding="utf-8")
-            text = build_instructions(root, root / ".friday")
+            (root / ".friday" / "MEMORY.md").write_text("# Project Memory\n\n- project fact\n", encoding="utf-8")
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                text = build_instructions(root, root / ".friday")
 
             self.assertLess(text.index("## Soul"), text.index("## Runtime"))
             self.assertLess(text.index("## Runtime"), text.index("## Tool Guidance"))
@@ -624,7 +646,31 @@ class PromptTests(unittest.TestCase):
                 text = build_instructions(root, root / ".friday")
 
             self.assertIn("## Global Rules", text)
+            self.assertIn("### My rules", text)
+            self.assertNotIn("# Friday Global Rules", text)
             self.assertIn("always run tests with uv", text)
+
+    def test_prompt_omits_empty_user_layers_and_normalizes_file_headings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            ensure_user_home(home)
+            (root / "AGENTS.md").write_text(
+                "# Project Instructions\n\n## Commands\n- Test: uv run unittest\n",
+                encoding="utf-8",
+            )
+
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                text = build_instructions(root, root / ".friday")
+
+            self.assertNotIn("## Global Rules", text)
+            self.assertNotIn("## User Profile", text)
+            self.assertNotIn("## Global Memory", text)
+            self.assertNotIn("# Friday Soul", text)
+            self.assertIn("## Project Instructions", text)
+            self.assertIn("#### Commands", text)
+            self.assertNotIn("\n# Project Instructions\n", text)
 
     def test_build_friday_does_not_persist_or_inject_short_term_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

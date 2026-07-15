@@ -1,3 +1,3 @@
 # User Profile
 
-Preferred language, style, and long-term preferences.
+<!-- Add stable user preferences and profile facts below. -->

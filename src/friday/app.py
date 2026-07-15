@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import tomllib
@@ -28,6 +30,14 @@ from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, 
 
 PROJECT_INSTRUCTIONS_LIMIT = 12000
 RECENT_CONVERSATION_LIMIT = 10
+# Replace shipped placeholders only when the user's file is still byte-for-byte equivalent.
+LEGACY_PROMPT_DEFAULT_HASHES = {
+    "AGENTS.md": {
+        "54ec6cc42c104c49ede0ef74780db5df2aedf9f2b37a33916b87e2fa59ac94d2",
+        "8e1df4cd31007379deb05e847db4f0c0d02f86ec3710269f5cf3a0f578c7cf86",
+    },
+    "USER.md": {"926239d7d488e0686f4c53b2d00d129433ccb4b5a1340b926e1f93d1cb3c7cdf"},
+}
 
 
 def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple[Agent, RunContext]:
@@ -120,18 +130,18 @@ def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | 
     parts = [
         # Global, code-owned prefix: identical across every workspace and only
         # changes on upgrade, so it stays at the front for provider prefix caching.
-        ("Soul", _read_optional(user_dir / "SOUL.md") or _read_optional(user_dir / "soul.md") or _read_resource("SOUL.md")),
+        ("Soul", _embedded_markdown(_read_optional(user_dir / "SOUL.md") or _read_optional(user_dir / "soul.md") or _read_resource("SOUL.md"))),
         ("Runtime", runtime_notes()),
         ("Tool Guidance", tool_guidance()),
         # Global, user-editable layers: rules, profile, and cross-project memory.
-        ("Global Rules", _read_optional(user_dir / "AGENTS.md") or _read_resource("AGENTS.md")),
-        ("User Profile", _read_optional(user_dir / "USER.md") or _read_optional(user_dir / "user.md")),
-        ("Global Memory", _read_optional(user_dir / "MEMORY.md")),
+        ("Global Rules", _embedded_markdown(_read_optional(user_dir / "AGENTS.md") or _read_resource("AGENTS.md"))),
+        ("User Profile", _embedded_markdown(_read_optional(user_dir / "USER.md") or _read_optional(user_dir / "user.md"))),
+        ("Global Memory", _embedded_markdown(_read_optional(user_dir / "MEMORY.md"))),
         # Workspace-specific tail: varies per project, kept after the global prefix.
         ("Skill Catalog", skill_catalog(workspace)),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
         ("Environment", environment(workspace, config)),
-        ("Project Memory", _read_optional(friday_dir / "MEMORY.md")),
+        ("Project Memory", _embedded_markdown(_read_optional(friday_dir / "MEMORY.md"))),
     ]
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
 
@@ -254,6 +264,10 @@ def ensure_user_home(home: Path | None = None) -> list[Path]:
             old_path.replace(temp_path)
             temp_path.replace(new_path)
             created.append(new_path)
+    for name, fingerprints in LEGACY_PROMPT_DEFAULT_HASHES.items():
+        path = user_dir / name
+        if path.exists() and _text_fingerprint(path.read_text(encoding="utf-8")) in fingerprints:
+            path.write_text(_read_resource(name), encoding="utf-8")
     for path, content in {
         user_dir / "SOUL.md": _read_resource("SOUL.md"),
         user_dir / "AGENTS.md": _read_resource("AGENTS.md"),
@@ -413,6 +427,32 @@ def _read_optional(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+def _text_fingerprint(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _embedded_markdown(text: str, *, heading_offset: int = 1) -> str:
+    lines = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL).strip().splitlines()
+    if lines and re.match(r"^#\s+", lines[0]):
+        lines = lines[1:]
+
+    fence = ""
+    output = []
+    for line in lines:
+        stripped = line.lstrip()
+        marker = stripped[:3] if stripped.startswith(("```", "~~~")) else ""
+        if marker:
+            fence = "" if fence == marker else marker if not fence else fence
+        elif not fence:
+            match = re.match(r"^(#{1,6})(\s+.*)$", line)
+            if match:
+                level = min(6, len(match.group(1)) + heading_offset)
+                line = "#" * level + match.group(2)
+        output.append(line)
+    return "\n".join(output).strip()
+
+
 def _recent_turn_messages(context: RunContext) -> list[dict[str, Any]]:
     if not hasattr(context, "get_messages"):
         return []
@@ -428,13 +468,16 @@ def _exists_exact(path: Path) -> bool:
 
 
 def _project_instruction_files(workspace: Path) -> list[str]:
-    paths = []
+    documents = []
+    global_rules = (Path.home() / ".friday" / "AGENTS.md").resolve()
     for parent in reversed([workspace, *workspace.parents]):
         for name in INSTRUCTION_FILE_NAMES:
             path = parent / name
-            if path.exists():
-                paths.append(path)
-    return [f"### {path}\n{_read_limited(path, PROJECT_INSTRUCTIONS_LIMIT)}" for path in paths]
+            if path.exists() and path.resolve() != global_rules:
+                body = _embedded_markdown(_read_limited(path, PROJECT_INSTRUCTIONS_LIMIT), heading_offset=2)
+                if body:
+                    documents.append(f"### {path}\n{body}")
+    return documents
 
 
 def _read_limited(path: Path, limit: int) -> str:

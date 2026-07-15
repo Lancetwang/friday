@@ -146,24 +146,11 @@ def environment(workspace: Path, config: ModelConfig) -> str:
 def default_project_instructions() -> str:
     return """# Project Instructions
 
-Tell agents how to work in this project.
-
-## Commands
-
-- Install:
-- Test:
-- Run:
-- Lint:
-
-## Rules
-
-- Keep project rules here.
-- Put durable project facts in `.friday/MEMORY.md`.
-- Put persistent Bash permissions in `.friday/permissions.json`.
-
-## Notes
-
--
+<!--
+Add project commands, validation steps, and operating rules below. Put durable
+project facts in `.friday/MEMORY.md` and Bash permissions in
+`.friday/permissions.json`.
+-->
 """
 
 
