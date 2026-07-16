@@ -8,9 +8,13 @@ friday init
 friday skill list
 friday skill list --json
 friday ask "..."
+friday goal "..."
 friday chat
 friday tui
+friday compact
 friday resume
+friday resume --list
+friday resume --session <id>
 friday approve
 friday reject
 friday memory
@@ -18,6 +22,11 @@ friday context
 friday progress
 friday reset
 ```
+
+Top-level `goal`, `compact`, `context`, `progress`, `resume`, `approve`, and
+`reject` operate on persisted sessions, so they have the same behavior as their
+chat/TUI counterparts. Use `--session <id>` when the latest session is not the
+one you want.
 
 Slash commands in chat/TUI:
 

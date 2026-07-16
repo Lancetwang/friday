@@ -62,8 +62,8 @@ flowchart TD
 
 Friday assembles the model prefix in this order:
 
-1. `SOUL.md`: identity and operating style.
-2. Bundled `RUNTIME.md`: task completion, web research, memory, project-rule discovery, permissions, compact, and verification.
+1. `SOUL.md`: Friday's identity and purpose.
+2. Bundled `RUNTIME.md`: outcomes, autonomy, evidence, memory boundaries, validation, and stopping conditions.
 3. Bundled `TOOL_GUIDANCE.md`.
 4. Global rules from `~/.friday/AGENTS.md`.
 5. `~/.friday/USER.md` profile.

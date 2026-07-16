@@ -138,6 +138,7 @@ def run_turn(
         str(context.metadata.get("session_id") or ""),
         context.get_messages(),
         progress,
+        last_usage=metrics,
     )
     return TurnResult(agent, context, answer, verifications, metrics, progress, notice)
 

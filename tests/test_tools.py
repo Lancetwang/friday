@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from agent_core import Agent, RunContext, reset_current_context, set_current_context, tool
 
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
-from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_turn
+from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
 from friday.config import DEFAULT_MODEL_CONFIG, load_model_config
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
@@ -523,6 +523,14 @@ class ResetTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (user_dir / "AGENTS.md").write_text("# Friday Global Rules\n\n- keep this rule\n", encoding="utf-8")
+            (user_dir / "SOUL.md").write_text(
+                "# Friday Soul\n\nYou are Friday, a personal CLI agent for one user on this machine.\n\n"
+                "Work like a practical senior developer:\n\n- Be direct and useful.\n"
+                "- Use tools when the answer depends on local files, command output, or memory.\n"
+                "- Treat the current working directory as the active workspace.\n"
+                "- Keep responses concise unless the user asks for depth.\n",
+                encoding="utf-8",
+            )
 
             ensure_user_home(home)
 
@@ -530,6 +538,7 @@ class ResetTests(unittest.TestCase):
             self.assertIn("<!-- Add stable user preferences", text)
             self.assertNotIn("Preferred language, style", text)
             self.assertIn("keep this rule", (user_dir / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertEqual((user_dir / "SOUL.md").read_text(encoding="utf-8"), prompt_template("SOUL.md"))
 
     def test_init_creates_only_project_agents_md(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -645,9 +654,12 @@ class PromptTests(unittest.TestCase):
     def test_runtime_prompt_defines_completion_and_web_research_stops(self) -> None:
         prompt = prompt_template("RUNTIME.md")
 
-        self.assertIn("Do not stop at a plan", prompt)
+        self.assertIn("Resolve the user's current request end to end", prompt)
+        self.assertIn("smallest useful next step", prompt)
         self.assertIn("Search again only when", prompt)
-        self.assertIn("cite only retrieved sources", prompt)
+        self.assertIn("Cite retrieved sources", prompt)
+        self.assertNotIn("Available tools are", prompt)
+        self.assertNotIn("## Context", prompt)
 
     def test_goal_and_repair_prompts_repeat_the_original_objective(self) -> None:
         goal = "build and verify report.md"
@@ -957,7 +969,8 @@ class CompactTests(unittest.TestCase):
                 return object(), RunContext()
 
             with patch("friday.app.build_friday", side_effect=fake_build):
-                agent, new_context, summary = compact_friday(fake_agent, context, stream=False)
+                with patch("friday.app.save_session_state") as save_state:
+                    agent, new_context, summary = compact_friday(fake_agent, context, stream=False)
 
             # Single in-band pass: one chat carrying both the memory step and the schema.
             self.assertEqual(len(fake_agent.prompts), 1)
@@ -969,12 +982,24 @@ class CompactTests(unittest.TestCase):
             self.assertIn("## Session Summary", new_context.messages[0]["content"])
             self.assertEqual(new_context.messages[1]["content"], "user-2")
             self.assertNotIn("user-1", [message["content"] for message in new_context.messages])
+            save_state.assert_called_once()
+
             self.assertEqual(new_context.messages[-2]["role"], "tool")
             self.assertEqual(new_context.messages[-2]["content"], "full tool result")
             self.assertEqual(new_context.messages[-1]["content"], "final assistant-11")
             self.assertEqual(new_context.messages[-3]["tool_calls"][0]["id"], "call-1")
             self.assertFalse((root / ".friday" / "STATE.md").exists())
             self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])
+
+    def test_session_state_update_does_not_add_a_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_turn(root, "hello", "hi", session_id="session-1", messages=[])
+            save_session_state(root, "session-1", [{"role": "assistant", "content": "summary"}], {"status": "working"})
+
+            saved = json.loads((root / ".friday" / "sessions" / "session-1.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["turns"], 1)
+            self.assertEqual(saved["messages"][0]["content"], "summary")
 
 
 class VerificationTests(unittest.TestCase):
@@ -1323,7 +1348,7 @@ class ResumeTests(unittest.TestCase):
                 {"role": "assistant", "content": "hello"},
             ]
 
-            save_turn(root, "hi", "hello", [], "s1", snapshot)
+            save_turn(root, "hi", "hello", [], "s1", snapshot, last_usage={"input_tokens": 42, "output_tokens": 3})
             home = root / "home"
             with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
                 _agent, resumed, count = resume_friday(root, stream=False)
@@ -1331,6 +1356,7 @@ class ResumeTests(unittest.TestCase):
             messages = resumed.get_messages()
             non_system = [m for m in messages if m.get("role") != "system"]
             self.assertEqual(count, 1)
+            self.assertEqual(resumed.metadata["friday.last_usage"]["input_tokens"], 42)
             self.assertEqual(non_system, [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
             self.assertEqual(messages[0]["role"], "system")
             self.assertNotIn("stale prefix", "".join(str(m.get("content", "")) for m in messages if m.get("role") == "system"))

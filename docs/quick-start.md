@@ -47,28 +47,37 @@ CLI and TUI use the same turn, context, memory, verification, approval, session,
 
 Run a verified goal loop:
 
-```text
-/goal fix the failing test and verify it passes
+```powershell
+friday goal "fix the failing test and verify it passes"
 ```
+
+Inside chat or the TUI, use `/goal fix the failing test and verify it passes`.
 
 Resume a previous session:
 
-```text
-/resume
+```powershell
+friday resume --list
+friday resume --session <id>
 ```
+
+Inside chat or the TUI, use `/resume` and select a session.
 
 Inspect or compact context:
 
-```text
-/context
-/compact
+```powershell
+friday context
+friday compact
 ```
+
+Inside chat or the TUI, use `/context` and `/compact`.
 
 Approve or reject a pending dangerous Bash command:
 
-```text
-/approve
-/reject
+```powershell
+friday approve
+friday reject
 ```
+
+Inside chat or the TUI, use `/approve` and `/reject`.
 
 Project state is stored in `<workspace>/.friday/`. Global configuration, user profile, memory, rules, and user skills are stored in `~/.friday/`.

@@ -16,6 +16,14 @@ from friday import tui_node
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_help_exposes_tui_session_commands(self) -> None:
+        output = StringIO()
+        with patch.object(sys, "stdout", output), self.assertRaises(SystemExit):
+            cli.main(["--help"])
+
+        for command in ("memory", "context", "progress", "compact", "goal", "resume", "approve", "reject", "reset"):
+            self.assertIn(command, output.getvalue())
+
     def test_bare_friday_starts_tui(self) -> None:
         with patch("friday.cli.build_friday") as build_friday:
             with patch("friday.cli.run_tui") as run_tui:
@@ -113,6 +121,26 @@ class CliTests(unittest.TestCase):
                     cli.main(["--no-stream", "ask", "--stdin"])
 
         ask.assert_called_once_with(agent, context, "long request\nwith context", False)
+
+    def test_top_level_goal_uses_the_shared_goal_turn(self) -> None:
+        agent = object()
+        context = RunContext()
+        with patch("friday.cli.build_friday", return_value=(agent, context)):
+            with patch("friday.cli._goal") as goal:
+                cli.main(["--no-stream", "goal", "finish", "the", "task"])
+
+        goal.assert_called_once_with(agent, context, "finish the task", False)
+
+    def test_top_level_compact_targets_a_saved_session(self) -> None:
+        agent = object()
+        context = RunContext(metadata={"session_id": "session-1"})
+        with patch("friday.cli.resume_friday", return_value=(agent, context, 3)) as resume:
+            with patch("friday.cli.compact_friday", return_value=(agent, context, "summary")) as compact:
+                with patch("builtins.print"):
+                    cli.main(["--no-stream", "compact", "--session", "session-1"])
+
+        resume.assert_called_once_with(stream=False, resume_id="session-1")
+        compact.assert_called_once_with(agent, context, stream=False)
 
     def test_skill_list_json_does_not_build_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, compact_friday, ensure_user_home, init_project, reset_friday, resume_friday
+from friday.app import build_friday, build_instructions, compact_friday, ensure_user_home, init_project, reset_friday, resume_choices, resume_friday
 from friday.context import context_report
 from friday.progress import current_progress, finish_progress, progress_line
 from friday.skills import discover_skills
@@ -41,11 +41,22 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("tui", help="Start a simple terminal UI.")
     sub.add_parser("memory", help="Print effective instruction context.")
-    sub.add_parser("context", help="Print current context usage.")
-    sub.add_parser("progress", help="Print progress for the latest Friday session.")
-    sub.add_parser("resume", help="Resume recent Friday session context.")
-    sub.add_parser("approve", help="Approve one pending dangerous shell command.")
-    sub.add_parser("reject", help="Reject one pending dangerous shell command.")
+    context = sub.add_parser("context", help="Print context usage for a saved session.")
+    context.add_argument("--session", help="Inspect a specific session id.")
+    progress = sub.add_parser("progress", help="Print progress for a saved Friday session.")
+    progress.add_argument("--session", help="Inspect a specific session id.")
+    compact = sub.add_parser("compact", help="Compact a saved Friday session.")
+    compact.add_argument("--session", help="Compact a specific session id.")
+    goal = sub.add_parser("goal", help="Run a verified goal to completion or a clear stop condition.")
+    goal.add_argument("--stdin", action="store_true", help="Read the goal from standard input.")
+    goal.add_argument("text", nargs="*")
+    resume = sub.add_parser("resume", help="Resume saved Friday session context.")
+    resume.add_argument("--list", action="store_true", help="List recent resumable sessions.")
+    resume.add_argument("--session", help="Resume a specific session id.")
+    approve = sub.add_parser("approve", help="Approve one pending dangerous shell command.")
+    approve.add_argument("--session", help="Continue a specific session after approval.")
+    reject = sub.add_parser("reject", help="Reject one pending dangerous shell command.")
+    reject.add_argument("--session", help="Mark a specific session blocked after rejection.")
     reset = sub.add_parser("reset", help="Clear Friday memory and session state.")
     reset.add_argument("-y", "--yes", action="store_true", help="Skip reset confirmation.")
 
@@ -77,21 +88,66 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "context":
-        agent, context = build_friday(stream=stream)
+        _agent, context, count = resume_friday(stream=False, resume_id=args.session)
+        print(f"Context for {'session ' + str(context.metadata.get('session_id')) if count else 'a new session'} ({count} saved turns)")
         print(_context_report(context))
         return
 
     if command == "progress":
-        _agent, context, _count = resume_friday(stream=False)
+        _agent, context, _count = resume_friday(stream=False, resume_id=args.session)
         print(progress_line(current_progress(context)))
         return
 
+    if command == "compact":
+        agent, context, count = resume_friday(stream=stream, resume_id=args.session)
+        if not count:
+            print("No saved session to compact.")
+            return
+        _agent, context, summary = compact_friday(agent, context, stream=stream)
+        print(f"Compacted session {context.metadata.get('session_id')} ({count} turns).")
+        print(summary)
+        return
+
     if command == "approve":
-        print(json_dump(approve_pending()))
+        result = approve_pending()
+        if not result.get("approved"):
+            print(result.get("message") or "Approval was not executed.")
+            return
+        print(_approval_status(result))
+        agent, context, count = resume_friday(stream=stream, resume_id=args.session)
+        if count:
+            progress = current_progress(context)
+            if progress.get("mode") == "goal":
+                _goal(
+                    agent,
+                    context,
+                    str(progress.get("objective") or "Continue the approved goal."),
+                    stream,
+                    approval_result=result,
+                    user_label="/approve",
+                )
+            else:
+                _ask(
+                    agent,
+                    context,
+                    _approval_followup_prompt(),
+                    stream,
+                    approval_result=result,
+                    user_label="/approve",
+                )
+        elif args.session:
+            print(f"Session not found: {args.session}. The command was executed, but no AI continuation ran.")
         return
 
     if command == "reject":
-        print(json_dump(approve_pending(reject=True)))
+        result = approve_pending(reject=True)
+        if not result.get("rejected"):
+            print(result.get("message") or "No pending approval.")
+            return
+        print(f"Rejected: {result.get('command') or 'pending command'}")
+        _agent, context, count = resume_friday(stream=False, resume_id=args.session)
+        if count:
+            finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
         return
 
     if command == "reset":
@@ -103,18 +159,26 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "resume":
-        agent, context, count = resume_friday(stream=stream)
-        print(f"resumed {count} turns")
+        if args.list:
+            _print_resume_choices()
+            return
+        agent, context, count = resume_friday(stream=stream, resume_id=args.session)
+        if args.session and not count:
+            print(f"Session not found: {args.session}")
+            return
+        print(f"Resumed {count} turns." if count else "No saved session; starting a new chat.")
         print(f"[progress] {progress_line(current_progress(context))}")
         command = "chat"
     else:
         agent, context = build_friday(stream=stream)
 
     if command == "ask":
-        text = sys.stdin.read() if args.stdin else " ".join(args.text)
-        if not text.strip():
-            parser.error("ask requires text or --stdin")
+        text = _request_text(args, parser, "ask")
         _ask(agent, context, text, stream)
+        return
+
+    if command == "goal":
+        _goal(agent, context, _request_text(args, parser, "goal"), stream)
         return
 
     if command == "chat":
@@ -250,7 +314,7 @@ def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_
     return result.agent, result.context, result.answer
 
 
-def _goal(agent, context, text: str, stream: bool):
+def _goal(agent, context, text: str, stream: bool, *, approval_result=None, user_label: str | None = None):
     result = run_turn(
         agent,
         context,
@@ -260,6 +324,8 @@ def _goal(agent, context, text: str, stream: bool):
         on_delta=_print_delta if stream else None,
         on_progress=_print_progress,
         on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
+        approval_result=approval_result,
+        user_label=user_label,
     )
     if stream:
         print()
@@ -292,6 +358,33 @@ def _context_report(context) -> str:
 
 def _approval_followup_prompt() -> str:
     return "The approved command has executed. Report the result to the user and continue only if another action is needed."
+
+
+def _approval_status(result: dict) -> str:
+    approval = result.get("approval") if isinstance(result.get("approval"), dict) else {}
+    execution = result.get("result") if isinstance(result.get("result"), dict) else {}
+    command = approval.get("command") or "pending command"
+    status = "timed out" if execution.get("timed_out") else f"exit {execution.get('exit_code', 'unknown')}"
+    output = str(execution.get("output") or "").strip()
+    return f"Approved and executed ({status}): {command}" + (f"\n{output}" if output else "")
+
+
+def _request_text(args, parser: argparse.ArgumentParser, command: str) -> str:
+    text = sys.stdin.read() if args.stdin else " ".join(args.text)
+    if not text.strip():
+        parser.error(f"{command} requires text or --stdin")
+    return text
+
+
+def _print_resume_choices() -> None:
+    choices = resume_choices()
+    if not choices:
+        print("No recent sessions.")
+        return
+    print("SESSION\tUPDATED\tSTATUS\tTURNS\tOBJECTIVE")
+    for item in choices:
+        objective = item.get("objective") or item.get("user") or item.get("assistant") or "-"
+        print(f"{item['id']}\t{item['time']}\t{item['status'] or '-'}\t{item['turns']}\t{objective}")
 
 
 if __name__ == "__main__":

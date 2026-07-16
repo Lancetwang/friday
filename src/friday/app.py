@@ -31,6 +31,10 @@ PROJECT_INSTRUCTIONS_LIMIT = 12000
 RECENT_CONVERSATION_LIMIT = 10
 # Replace shipped placeholders only when the user's file is still byte-for-byte equivalent.
 LEGACY_PROMPT_DEFAULT_HASHES = {
+    "SOUL.md": {
+        "51f83d12d3abf88d79a2525bd7f452ff00f5e0cc45d3ef1c75c1002a033049e4",
+        "208186ffdd6f46450f9ce8583e131271408b3ffeb405912f50c31b083c978591",
+    },
     "AGENTS.md": {
         "08c4491f352700d7eb7fc987cbda46e85442e947bdecb07df444f132875ca280",
         "80737c0191f8c9b795c6b6f000f7bcf7ab7b53a3a0d03dd46ba6d8fee456ef3a",
@@ -176,6 +180,8 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     )
     restore_progress(new_context, progress)
     append_progress_checkpoint(new_context)
+    if session_id:
+        save_session_state(workspace, session_id, new_context.get_messages(), current_progress(new_context))
     return new_agent, new_context, summary
 
 
@@ -207,6 +213,8 @@ def resume_friday(workspace: Path | None = None, *, stream: bool = True, resume_
         body = _conversation_body(saved)
         _replace_context_messages(context, [dict(message) for message in context.get_messages()] + body)
     restore_progress(context, session.get("progress"))
+    if isinstance(session.get("last_usage"), dict):
+        context.metadata["friday.last_usage"] = dict(session["last_usage"])
     append_progress_checkpoint(context)
     return agent, context, int(session.get("turns", 0) or 0)
 
@@ -335,6 +343,7 @@ def save_turn(
     session_id: str | None = None,
     messages: list[dict[str, Any]] | None = None,
     progress: dict[str, Any] | None = None,
+    last_usage: dict[str, Any] | None = None,
 ) -> Path:
     """Persist one snapshot per session, overwritten in place (atomic).
 
@@ -357,6 +366,7 @@ def save_turn(
         "assistant": _preview(assistant, 220),
         "messages": messages or [],
         "progress": progress if isinstance(progress, dict) else existing.get("progress", {}),
+        "last_usage": last_usage if isinstance(last_usage, dict) else existing.get("last_usage", {}),
     }
     _write_session(path, snapshot)
     return path
@@ -380,6 +390,20 @@ def save_progress(workspace: Path, session_id: str, progress: dict[str, Any]) ->
         "progress": progress,
     }
     _write_session(path, snapshot)
+    return path
+
+
+def save_session_state(workspace: Path, session_id: str, messages: list[dict[str, Any]], progress: dict[str, Any]) -> Path | None:
+    path = workspace / ".friday" / "sessions" / f"{session_id}.json"
+    existing = _read_session(path)
+    if not existing:
+        return None
+    existing.update(
+        updated=datetime.now().isoformat(timespec="seconds"),
+        messages=messages,
+        progress=progress,
+    )
+    _write_session(path, existing)
     return path
 
 
