@@ -9,7 +9,15 @@ Friday discovers skills from:
 ~/.friday/FridaySkills/<skill>/SKILL.md
 ```
 
-The startup prompt contains only these directory locations. Call `Skill` to dynamically list each available skill's `name`, `description`, and `SKILL.md` path. After selecting one, use Bash to read its `SKILL.md`, referenced files, or scripts as needed.
+The startup prompt contains only one routing instruction. Run `friday skill list --json` through Bash to list each available skill's `name`, `description`, `scope`, and `SKILL.md` path. After selecting one, use Bash to read its `SKILL.md`, referenced files, or scripts as needed.
+
+For human-readable output:
+
+```powershell
+friday skill list
+```
+
+Project skills take precedence over same-named user skills. Friday also provisions a user-level `friday-cli` skill that explains how to inspect Friday's own commands and pipelines.
 
 A minimal skill:
 
@@ -37,11 +45,13 @@ Use when the user asks Friday to review code changes.
 - Do not rewrite code unless the user asks.
 ```
 
-The frontmatter is returned by the dynamic `Skill` listing:
+The frontmatter routing fields are returned by `friday skill list --json`:
 
 - `name`: stable skill id shown to the agent.
 - `description`: short routing text used before the full skill is loaded.
+- `scope`: `project` or `user`.
+- `path`: absolute path to the selected entry `SKILL.md`.
 
-The Markdown body is progressive disclosure. It is not included in the startup prompt or listing; Friday reads it with Bash only after choosing the skill. Supporting references, templates, and scripts remain in the skill directory and are accessed only when the selected `SKILL.md` calls for them.
+The Markdown body is progressive disclosure. It is not included in the startup prompt or listing; Friday reads it with Bash only after choosing the skill. Other Markdown files, references, templates, and scripts remain in the skill directory and are accessed only when the selected `SKILL.md` calls for them.
 
 Keep skills focused. A skill should teach one repeatable workflow, not become a second system prompt.

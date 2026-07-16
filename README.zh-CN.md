@@ -25,7 +25,7 @@ uv tool install -e . --force --reinstall
 - Harness 优先的上下文设计：稳定规则放在前面，用户与项目状态放在后面，适配 Prefix Caching。
 - Agent 只负责路由：文件、嵌套规则、Skill 正文和记忆读取都按需进入上下文。
 - 分层规则：全局 `~/.friday/AGENTS.md`，以及项目根目录和嵌套目录中的 `AGENTS.md`。
-- 渐进式 Skill：启动提示词只保存 Skill 目录；`Skill` 动态返回结构化元数据，Bash 只读取被选中的 `SKILL.md` 和引用资源。
+- 渐进式 Skill：启动提示词只保留一条 CLI 路由；`friday skill list --json` 动态返回结构化元数据和路径，Bash 只读取被选中的 `SKILL.md` 和引用资源。
 - 分层记忆：用户画像、全局记忆和项目记忆保存长期事实，当前进度作为显式 Session 快照独立恢复。
 - 可见进度：复杂任务维护一个目标、结构化计划、状态、下一步和验证结果，但不会为不同任务切换对话上下文。
 - 多级上下文压缩：先探测无损工具结果简化的收益，收益不足时再生成结构化摘要并原样保留最近十个完整 Turn。
@@ -54,8 +54,8 @@ flowchart TD
     Prefix["Prefix Caching<br/>稳定规则位于动态状态之前"] --> AgentLoop
     Context["Context Engineering<br/>预算 -> 工具压缩 -> 对话压缩"] --> AgentLoop
     Memory["Memory Management<br/>长期文件 + 可恢复会话状态"] --> AgentLoop
-    Skills["Progressive Skills<br/>目录 -> 元数据 -> 选中资源"] --> AgentLoop
-    Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Skill / Plan / Memory"] --> AgentLoop
+    Skills["Progressive Skills<br/>CLI 索引 -> 选中资源"] --> AgentLoop
+    Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan / Memory"] --> AgentLoop
 ```
 
 ## Harness
@@ -68,14 +68,14 @@ Friday 按以下顺序组装模型 Prefix：
 4. `~/.friday/AGENTS.md` 中的全局规则。
 5. `~/.friday/USER.md` 用户画像。
 6. 全局 `~/.friday/MEMORY.md`。
-7. Skill 目录和按需路由规则。
+7. 一行 Skill 发现与按需路由规则。
 8. 项目根目录与嵌套项目规则。
 9. 实时环境信息。
 10. 项目 `.friday/MEMORY.md`。
 
 静态系统 Prompt 由内置 Markdown 文件提供，不再硬编码为 Python 长字符串。代码控制的稳定 Prefix 位于最前面，只在升级时变化；用户信息位于中间，工作区相关状态位于尾部。这样可以尽量复用 Provider Cache，同时保证路径和项目状态不会过期。
 
-Friday 首次启动会补齐 `~/.friday/` 下缺少的默认文件。`friday init` 只负责创建项目 `AGENTS.md`，记忆、权限、Skill、Session 和 Trace 都按需创建。
+Friday 首次启动会补齐 `~/.friday/` 下缺少的默认文件和内置 `friday-cli` Skill。`friday init` 只负责创建项目 `AGENTS.md`，项目记忆、权限、Skill、Session 和 Trace 都按需创建。
 
 ## 记忆
 

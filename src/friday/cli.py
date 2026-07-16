@@ -6,9 +6,10 @@ import os
 import sys
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, compact_friday, init_project, reset_friday, resume_friday
+from friday.app import build_friday, build_instructions, compact_friday, ensure_user_home, init_project, reset_friday, resume_friday
 from friday.context import context_report
 from friday.progress import current_progress, finish_progress, progress_line
+from friday.skills import discover_skills
 from friday.tui_node import run_tui
 from friday.tools import approve_pending, build_tools
 from friday.turn import run_turn
@@ -27,6 +28,11 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("init", help="Create the project's AGENTS.md.")
+
+    skill = sub.add_parser("skill", help="Inspect reusable Friday skills.")
+    skill_sub = skill.add_subparsers(dest="skill_command", required=True)
+    skill_list = skill_sub.add_parser("list", help="List skill metadata and SKILL.md paths.")
+    skill_list.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
     ask = sub.add_parser("ask", help="Ask once.")
     ask.add_argument("--stdin", action="store_true", help="Read the request from standard input.")
@@ -53,6 +59,17 @@ def main(argv: list[str] | None = None) -> None:
         print("created:" if created else "nothing to create")
         for path in created:
             print(path)
+        return
+
+    if command == "skill":
+        ensure_user_home(Path.home())
+        skills = discover_skills(Path.cwd(), Path.home() / ".friday")
+        if args.json:
+            print(json_dump({"skills": skills}))
+        else:
+            print("NAME\tSCOPE\tDESCRIPTION\tPATH")
+            for item in skills:
+                print(f"{item['name']}\t{item['scope']}\t{item['description']}\t{item['path']}")
         return
 
     if command == "memory":

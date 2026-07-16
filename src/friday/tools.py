@@ -206,11 +206,6 @@ def build_tools(workspace: Path, friday_dir: Path):
     ) -> dict:
         return _jina_fetch(url, max_chars)
 
-    @tool(description="List available skills with their names, descriptions, and SKILL.md paths.", name="Skill")
-    def skill() -> dict:
-        skills = _discover_skills(workspace, user_dir)
-        return {"skills": [{"name": key, "description": item["description"], "path": str(item["path"])} for key, item in skills.items()]}
-
     @tool(description="Create or update the visible plan for the current non-trivial session goal.", name="UpdatePlan")
     def update_session_plan(
         plan: Annotated[list[dict], "Full plan. Each item has step and status=pending|in_progress|completed|blocked."],
@@ -267,7 +262,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         _write_text(path, updated)
         return {"target": target, "path": str(path), "chars": len(updated)}
 
-    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, web_search, web_fetch, skill, update_session_plan, memory]
+    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, web_search, web_fetch, update_session_plan, memory]
 
 
 def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> dict:
@@ -302,17 +297,6 @@ def pending_approval(workspace: Path | None = None) -> dict:
 
 def default_permissions() -> dict:
     return {"version": 1, "bash": {"allow": [], "deny": [], "require_approval": []}}
-
-
-def skill_catalog(workspace: Path) -> str:
-    return "\n".join(
-        [
-            "Available skills live under:",
-            f"- {workspace.resolve() / '.friday' / 'FridaySkills'}",
-            f"- {Path.home() / '.friday' / 'FridaySkills'}",
-            "Use Skill to list them, then use Bash to read only the relevant SKILL.md and referenced resources.",
-        ]
-    )
 
 
 def _web_search(query: str, max_results: int, search_depth: str, topic: str, include_answer: bool, time_range: str) -> dict:
@@ -704,45 +688,6 @@ def _read_limited(path: Path, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + f"\n\n[truncated: read {path} directly for the rest]"
-
-
-def _discover_skills(workspace: Path, user_dir: Path) -> dict[str, dict[str, str | Path]]:
-    roots = [
-        workspace / ".friday" / "FridaySkills",
-        user_dir / "FridaySkills",
-    ]
-    found: dict[str, dict[str, str | Path]] = {}
-    for root in roots:
-        if not root.exists():
-            continue
-        for skill_file in sorted(root.glob("*/SKILL.md")):
-            name, description = _skill_meta(skill_file)
-            key = name.strip().lower() or skill_file.parent.name.lower()
-            if key not in found:
-                found[key] = {"description": description, "path": skill_file}
-    return found
-
-
-def _skill_meta(path: Path) -> tuple[str, str]:
-    text = path.read_text(encoding="utf-8")
-    name = path.parent.name
-    description = ""
-    if text.startswith("---\n"):
-        end = text.find("\n---", 4)
-        if end != -1:
-            for line in text[4:end].splitlines():
-                key, sep, value = line.partition(":")
-                if sep and key.strip() == "name":
-                    name = value.strip().strip("\"'")
-                elif sep and key.strip() == "description":
-                    description = value.strip().strip("\"'")
-    if not description:
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith(("#", "---")):
-                description = stripped
-                break
-    return name, description or "No description."
 
 
 def _memory_target(target: str, user_dir: Path, friday_dir: Path) -> tuple[Path, int]:

@@ -36,7 +36,7 @@ def context_ratio(context: RunContext, tools: list[Any] | None = None) -> float:
 
 def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
     sections = _sections(_system_text(context))
-    skill = sections.get("Skill Catalog", "")
+    skill = sections.get("Skills", "")
     tool_schema = _tool_schema_text(tools)
     ordinary = "\n".join(
         str(message.get("content", ""))
@@ -50,7 +50,7 @@ def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
     )
     rows = [
         ("system prompt", _system_text(context)),
-        ("skill catalog", skill),
+        ("skill routing", skill),
         ("tool schemas", tool_schema),
         ("messages", ordinary),
         ("tool results", tool_results),

@@ -24,7 +24,8 @@ from friday.prompts import (
     prompt_template,
 )
 from friday.progress import append_progress_checkpoint, current_progress, is_progress_checkpoint, restore_progress
-from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions, skill_catalog
+from friday.skills import ensure_default_skill, skill_routing
+from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions
 
 PROJECT_INSTRUCTIONS_LIMIT = 12000
 RECENT_CONVERSATION_LIMIT = 10
@@ -138,7 +139,7 @@ def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | 
         ("User Profile", _embedded_markdown(_read_optional(user_dir / "USER.md") or _read_optional(user_dir / "user.md"))),
         ("Global Memory", _embedded_markdown(_read_optional(user_dir / "MEMORY.md"))),
         # Workspace-specific tail: varies per project, kept after the global prefix.
-        ("Skill Catalog", skill_catalog(workspace)),
+        ("Skills", skill_routing()),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
         ("Environment", _embedded_markdown(environment(workspace, config))),
         ("Project Memory", _embedded_markdown(_read_optional(friday_dir / "MEMORY.md"))),
@@ -282,6 +283,9 @@ def ensure_user_home(home: Path | None = None) -> list[Path]:
     if not skills_dir.exists():
         skills_dir.mkdir(parents=True, exist_ok=True)
         created.append(skills_dir)
+    default_skill = ensure_default_skill(user_dir)
+    if default_skill is not None:
+        created.append(default_skill)
     return created
 
 

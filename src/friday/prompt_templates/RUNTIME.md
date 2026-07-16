@@ -1,6 +1,6 @@
 # Runtime
 
-Available tools are Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, Skill, UpdatePlan, and Memory.
+Available tools are Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, UpdatePlan, and Memory.
 
 ## Task Completion
 

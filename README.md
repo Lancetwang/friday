@@ -25,7 +25,7 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Harness-first context: stable runtime rules lead the prompt; user and project state are layered later for prefix caching.
 - Agent-as-router: files, nested rules, skill bodies, and memory reads enter context only when needed.
 - Layered rules: global `~/.friday/AGENTS.md` plus root and nested project `AGENTS.md` files.
-- Progressive skills: the prompt keeps only skill locations; `Skill` lists structured metadata dynamically, then Bash reads only the selected `SKILL.md` and referenced resources.
+- Progressive skills: the prompt keeps one CLI routing hint; `friday skill list --json` returns structured metadata and paths, then Bash reads only the selected `SKILL.md` and referenced resources.
 - Layered memory: user profile, global memory, and project memory store durable facts; current progress remains an explicit resumable session snapshot.
 - Visible progress: non-trivial work keeps one objective, structured plan, status, next action, and verifier state without splitting the conversation into task contexts.
 - Multi-stage context compression: Friday first probes lossless tool-result simplification, then falls back to a structured summary plus the latest ten complete turns when the gain is insufficient.
@@ -54,8 +54,8 @@ flowchart TD
     Prefix["Prefix caching<br/>stable rules before volatile state"] --> AgentLoop
     Context["Context engineering<br/>budget -> tool compact -> conversation compact"] --> AgentLoop
     Memory["Memory management<br/>durable files + resumable session state"] --> AgentLoop
-    Skills["Progressive skills<br/>locations -> metadata -> selected files"] --> AgentLoop
-    Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Skill / Plan / Memory"] --> AgentLoop
+    Skills["Progressive skills<br/>CLI catalog -> selected files"] --> AgentLoop
+    Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan / Memory"] --> AgentLoop
 ```
 
 ## Harness
@@ -68,14 +68,14 @@ Friday assembles the model prefix in this order:
 4. Global rules from `~/.friday/AGENTS.md`.
 5. `~/.friday/USER.md` profile.
 6. Global `~/.friday/MEMORY.md`.
-7. Skill locations and on-demand routing guidance.
+7. One-line Skill discovery and on-demand routing guidance.
 8. Root and nested project instructions.
 9. Live environment details.
 10. Project `.friday/MEMORY.md`.
 
 Static system prompts are bundled Markdown files rather than Python string literals. This code-owned prefix stays first and changes only on upgrade. User layers follow it, while workspace-specific state stays near the tail. This preserves the largest useful provider-cache prefix without letting live paths or project state go stale.
 
-Friday provisions missing global defaults under `~/.friday/`. `friday init` is intentionally project-scoped and creates only `AGENTS.md`; memory, permissions, skills, sessions, and traces are created lazily.
+Friday provisions missing global defaults and the bundled `friday-cli` skill under `~/.friday/`. `friday init` is intentionally project-scoped and creates only `AGENTS.md`; project memory, permissions, skills, sessions, and traces are created lazily.
 
 ## Memory
 

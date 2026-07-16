@@ -18,7 +18,8 @@ from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
-from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
+from friday.skills import discover_skills, skill_routing
+from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval
 from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt
 
 
@@ -411,23 +412,46 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(len(first["context"]), 1)
             self.assertNotIn("context", second)
 
-    def test_skill_tool_dynamically_lists_skill_metadata(self) -> None:
+    def test_skill_discovery_lists_only_entry_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            user_dir = root / "home" / ".friday"
             skill_dir = root / ".friday" / "FridaySkills" / "review"
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text(
                 "---\nname: review\ndescription: Review code changes.\n---\n\nFull review workflow.",
                 encoding="utf-8",
             )
+            (skill_dir / "notes.md").write_text("private reference", encoding="utf-8")
+            (skill_dir / "scripts").mkdir()
+            (skill_dir / "scripts" / "check.py").write_text("print('ok')", encoding="utf-8")
+            user_skill = user_dir / "FridaySkills" / "review" / "SKILL.md"
+            user_skill.parent.mkdir(parents=True)
+            user_skill.write_text(
+                "---\nname: review\ndescription: User-level review.\n---\n",
+                encoding="utf-8",
+            )
 
-            listed = tools["Skill"]()
+            listed = discover_skills(root, user_dir)
 
-            self.assertEqual(listed["skills"][0]["name"], "review")
-            self.assertEqual(listed["skills"][0]["description"], "Review code changes.")
-            self.assertEqual(Path(listed["skills"][0]["path"]), skill_dir / "SKILL.md")
-            self.assertNotIn("Review code changes.", skill_catalog(root))
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(listed[0]["name"], "review")
+            self.assertEqual(listed[0]["description"], "Review code changes.")
+            self.assertEqual(listed[0]["scope"], "project")
+            self.assertEqual(Path(listed[0]["path"]), skill_dir / "SKILL.md")
+            self.assertNotIn("private reference", str(listed))
+            self.assertEqual(skill_routing().count("\n"), 0)
+
+    def test_default_skill_does_not_overwrite_user_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            ensure_user_home(home)
+            skill = home / ".friday" / "FridaySkills" / "friday-cli" / "SKILL.md"
+            skill.write_text("custom instructions", encoding="utf-8")
+
+            ensure_user_home(home)
+
+            self.assertEqual(skill.read_text(encoding="utf-8"), "custom instructions")
 
 
 @patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
@@ -533,6 +557,7 @@ class ResetTests(unittest.TestCase):
                 self.assertTrue((user_dir / name).exists(), name)
             self.assertTrue((user_dir / "config.json").exists())
             self.assertTrue((user_dir / "FridaySkills").is_dir())
+            self.assertTrue((user_dir / "FridaySkills" / "friday-cli" / "SKILL.md").exists())
 
     def test_model_config_merges_global_and_project_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -824,7 +849,7 @@ class CompactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             context = RunContext()
-            context.add_message("system", "## Runtime\nrules\n\n## Skill Catalog\n- test: skill")
+            context.add_message("system", "## Runtime\nrules\n\n## Skills\nfriday skill list --json")
             context.add_message("user", "hello")
             context.metadata["friday.last_usage"] = {"input_tokens": 123, "output_tokens": 7}
             context.metadata["friday.model_config"] = {"context_window": 353000}
@@ -833,7 +858,7 @@ class CompactTests(unittest.TestCase):
             report = context_report(context, tools)
 
             self.assertIn("system prompt", report)
-            self.assertIn("skill catalog", report)
+            self.assertIn("skill routing", report)
             self.assertIn("tool schemas", report)
             self.assertIn("messages", report)
             self.assertIn("input 123 / output 7 / total 130", report)

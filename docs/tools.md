@@ -10,7 +10,6 @@ Friday keeps the tool surface small:
 - `Grep`: search file contents by regex.
 - `WebSearch`: search the live web through a provider fallback chain when current external information is needed.
 - `WebFetch`: fetch a known URL as clean Markdown through Jina Reader.
-- `Skill`: dynamically list reusable workflows with their names, descriptions, and `SKILL.md` paths; Bash reads or runs the selected skill.
 - `UpdatePlan`: maintain the visible objective and step status for non-trivial work in the current session.
 - `Memory`: read or update user, global, or project memory.
 
@@ -21,6 +20,8 @@ Dangerous Bash commands create `.friday/pending_approval.json`. Run `/approve` t
 `WebSearch` uses Tavily first when `TAVILY_API_KEY` is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Set `ANYSEARCH_API_KEY` for higher AnySearch limits; anonymous fallback remains available. Keys can be placed in the process environment, the workspace `.env`, or `~/.friday/.env`.
 `WebFetch` works without a key through Jina Reader; set `JINA_API_KEY` for higher rate limits.
 They are Friday application tools, not part of `agent-core-runtime`.
+
+Skill discovery is deliberately not a model tool. Friday runs `friday skill list --json` through Bash, then reads only the selected `SKILL.md` and resources it references.
 
 ## Web research contract
 

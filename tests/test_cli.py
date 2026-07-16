@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
+import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
@@ -111,6 +113,27 @@ class CliTests(unittest.TestCase):
                     cli.main(["--no-stream", "ask", "--stdin"])
 
         ask.assert_called_once_with(agent, context, "long request\nwith context", False)
+
+    def test_skill_list_json_does_not_build_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            skill_dir = root / ".friday" / "FridaySkills" / "review"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: review\ndescription: Review code changes.\n---\n",
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with patch("friday.cli.Path.cwd", return_value=root), patch("friday.cli.Path.home", return_value=home):
+                with patch.object(sys, "stdout", output), patch("friday.cli.build_friday") as build_friday:
+                    cli.main(["skill", "list", "--json"])
+
+            data = json.loads(output.getvalue())
+            review = next(item for item in data["skills"] if item["name"] == "review")
+            self.assertEqual(review["scope"], "project")
+            self.assertEqual(Path(review["path"]), skill_dir / "SKILL.md")
+            build_friday.assert_not_called()
 
 
 if __name__ == "__main__":

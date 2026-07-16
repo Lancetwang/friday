@@ -5,6 +5,8 @@ Top-level commands:
 ```powershell
 friday
 friday init
+friday skill list
+friday skill list --json
 friday ask "..."
 friday chat
 friday tui

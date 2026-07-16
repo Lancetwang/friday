@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+DEFAULT_FRIDAY_SKILL = Path(__file__).parent / "default_skills" / "friday-cli" / "SKILL.md"
+
+
+def discover_skills(workspace: Path, user_dir: Path) -> list[dict[str, str]]:
+    found: dict[str, dict[str, str]] = {}
+    roots = [
+        ("project", workspace.resolve() / ".friday" / "FridaySkills"),
+        ("user", user_dir.resolve() / "FridaySkills"),
+    ]
+    for scope, root in roots:
+        if not root.exists():
+            continue
+        for skill_file in sorted(root.glob("*/SKILL.md")):
+            try:
+                name, description = _skill_metadata(skill_file)
+            except (OSError, UnicodeError):
+                continue
+            key = name.strip().lower() or skill_file.parent.name.lower()
+            found.setdefault(
+                key,
+                {
+                    "name": name,
+                    "description": description,
+                    "scope": scope,
+                    "path": str(skill_file.resolve()),
+                },
+            )
+    return sorted(found.values(), key=lambda item: item["name"].lower())
+
+
+def ensure_default_skill(user_dir: Path) -> Path | None:
+    path = user_dir / "FridaySkills" / "friday-cli" / "SKILL.md"
+    if path.exists():
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(DEFAULT_FRIDAY_SKILL.read_text(encoding="utf-8"), encoding="utf-8")
+    return path
+
+
+def skill_routing() -> str:
+    return "Run `friday skill list --json`, then read only the selected `SKILL.md` and resources it references."
+
+
+def _skill_metadata(path: Path) -> tuple[str, str]:
+    text = path.read_text(encoding="utf-8")
+    name = path.parent.name
+    description = ""
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            key, sep, value = line.partition(":")
+            if sep and key.strip() == "name":
+                name = value.strip().strip("\"'")
+            elif sep and key.strip() == "description":
+                description = value.strip().strip("\"'")
+    if not description:
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith(("#", "---")):
+                description = stripped
+                break
+    return name, description or "No description."
