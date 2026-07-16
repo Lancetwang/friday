@@ -63,9 +63,9 @@ flowchart TD
 Friday assembles the model prefix in this order:
 
 1. `SOUL.md`: identity and operating style.
-2. Runtime instructions: task completion, web research, memory, project-rule discovery, permissions, compact, and verification.
-3. Tool guidance.
-4. Global `~/.friday/AGENTS.md` rules.
+2. Bundled `RUNTIME.md`: task completion, web research, memory, project-rule discovery, permissions, compact, and verification.
+3. Bundled `TOOL_GUIDANCE.md`.
+4. Global rules from `~/.friday/AGENTS.md`.
 5. `~/.friday/USER.md` profile.
 6. Global `~/.friday/MEMORY.md`.
 7. Skill locations and on-demand routing guidance.
@@ -73,7 +73,7 @@ Friday assembles the model prefix in this order:
 9. Live environment details.
 10. Project `.friday/MEMORY.md`.
 
-The code-owned prefix stays first and changes only on upgrade. User layers follow it, while workspace-specific state stays near the tail. This preserves the largest useful provider-cache prefix without letting live paths or project state go stale.
+Static system prompts are bundled Markdown files rather than Python string literals. This code-owned prefix stays first and changes only on upgrade. User layers follow it, while workspace-specific state stays near the tail. This preserves the largest useful provider-cache prefix without letting live paths or project state go stale.
 
 Friday provisions missing global defaults under `~/.friday/`. `friday init` is intentionally project-scoped and creates only `AGENTS.md`; memory, permissions, skills, sessions, and traces are created lazily.
 

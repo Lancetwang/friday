@@ -9,7 +9,6 @@ import tempfile
 import tomllib
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, distribution
-from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +21,7 @@ from friday.prompts import (
     COMPACT_PROMPT,
     default_project_instructions,
     environment,
-    runtime_notes,
-    tool_guidance,
+    prompt_template,
 )
 from friday.progress import append_progress_checkpoint, current_progress, is_progress_checkpoint, restore_progress
 from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions, skill_catalog
@@ -33,6 +31,8 @@ RECENT_CONVERSATION_LIMIT = 10
 # Replace shipped placeholders only when the user's file is still byte-for-byte equivalent.
 LEGACY_PROMPT_DEFAULT_HASHES = {
     "AGENTS.md": {
+        "08c4491f352700d7eb7fc987cbda46e85442e947bdecb07df444f132875ca280",
+        "80737c0191f8c9b795c6b6f000f7bcf7ab7b53a3a0d03dd46ba6d8fee456ef3a",
         "54ec6cc42c104c49ede0ef74780db5df2aedf9f2b37a33916b87e2fa59ac94d2",
         "8e1df4cd31007379deb05e847db4f0c0d02f86ec3710269f5cf3a0f578c7cf86",
     },
@@ -130,17 +130,17 @@ def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | 
     parts = [
         # Global, code-owned prefix: identical across every workspace and only
         # changes on upgrade, so it stays at the front for provider prefix caching.
-        ("Soul", _embedded_markdown(_read_optional(user_dir / "SOUL.md") or _read_optional(user_dir / "soul.md") or _read_resource("SOUL.md"))),
-        ("Runtime", runtime_notes()),
-        ("Tool Guidance", tool_guidance()),
+        ("Soul", _embedded_markdown(_read_optional(user_dir / "SOUL.md") or _read_optional(user_dir / "soul.md") or prompt_template("SOUL.md"))),
+        ("Runtime", _embedded_markdown(prompt_template("RUNTIME.md"))),
+        ("Tool Guidance", _embedded_markdown(prompt_template("TOOL_GUIDANCE.md"))),
         # Global, user-editable layers: rules, profile, and cross-project memory.
-        ("Global Rules", _embedded_markdown(_read_optional(user_dir / "AGENTS.md") or _read_resource("AGENTS.md"))),
+        ("Global Rules", _embedded_markdown(_read_optional(user_dir / "AGENTS.md") or prompt_template("AGENTS.md"))),
         ("User Profile", _embedded_markdown(_read_optional(user_dir / "USER.md") or _read_optional(user_dir / "user.md"))),
         ("Global Memory", _embedded_markdown(_read_optional(user_dir / "MEMORY.md"))),
         # Workspace-specific tail: varies per project, kept after the global prefix.
         ("Skill Catalog", skill_catalog(workspace)),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
-        ("Environment", environment(workspace, config)),
+        ("Environment", _embedded_markdown(environment(workspace, config))),
         ("Project Memory", _embedded_markdown(_read_optional(friday_dir / "MEMORY.md"))),
     ]
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
@@ -267,11 +267,11 @@ def ensure_user_home(home: Path | None = None) -> list[Path]:
     for name, fingerprints in LEGACY_PROMPT_DEFAULT_HASHES.items():
         path = user_dir / name
         if path.exists() and _text_fingerprint(path.read_text(encoding="utf-8")) in fingerprints:
-            path.write_text(_read_resource(name), encoding="utf-8")
+            path.write_text(prompt_template(name), encoding="utf-8")
     for path, content in {
-        user_dir / "SOUL.md": _read_resource("SOUL.md"),
-        user_dir / "AGENTS.md": _read_resource("AGENTS.md"),
-        user_dir / "USER.md": _read_resource("USER.md"),
+        user_dir / "SOUL.md": prompt_template("SOUL.md"),
+        user_dir / "AGENTS.md": prompt_template("AGENTS.md"),
+        user_dir / "USER.md": prompt_template("USER.md"),
         user_dir / "MEMORY.md": "# User Memory\n",
         user_dir / "config.json": default_config_text(),
     }.items():
@@ -417,10 +417,6 @@ def _resume_session(workspace: Path, resume_id: str | None) -> dict[str, Any] | 
 def _preview(text: str, limit: int = 80) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[:limit - 3] + "..."
-
-
-def _read_resource(name: str) -> str:
-    return (files("friday.prompt_templates") / name).read_text(encoding="utf-8")
 
 
 def _read_optional(path: Path) -> str:

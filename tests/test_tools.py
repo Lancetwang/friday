@@ -16,7 +16,7 @@ from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_frida
 from friday.config import DEFAULT_MODEL_CONFIG, load_model_config
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
-from friday.prompts import goal_attempt_prompt, retry_prompt, runtime_notes
+from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval, skill_catalog
 from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt
@@ -611,14 +611,14 @@ class PromptTests(unittest.TestCase):
             self.assertLess(text.index("## Soul"), text.index("## Runtime"))
             self.assertLess(text.index("## Runtime"), text.index("## Tool Guidance"))
             self.assertLess(text.index("## Tool Guidance"), text.index("## Global Rules"))
-            self.assertLess(text.index("## Global Rules"), text.index("## Project Instructions"))
-            self.assertLess(text.index("## Project Instructions"), text.index("## Environment"))
+            self.assertLess(text.index("## Global Rules"), text.index("\n## Project Instructions\n"))
+            self.assertLess(text.index("\n## Project Instructions\n"), text.index("## Environment"))
             self.assertIn("## Project Memory", text)
-            self.assertNotIn("## Short-Term State", text)
+            self.assertNotIn("\n## Short-Term State\n", text)
             self.assertIn("project rules", text)
 
     def test_runtime_prompt_defines_completion_and_web_research_stops(self) -> None:
-        prompt = runtime_notes()
+        prompt = prompt_template("RUNTIME.md")
 
         self.assertIn("Do not stop at a plan", prompt)
         self.assertIn("Search again only when", prompt)
@@ -668,9 +668,28 @@ class PromptTests(unittest.TestCase):
             self.assertNotIn("## User Profile", text)
             self.assertNotIn("## Global Memory", text)
             self.assertNotIn("# Friday Soul", text)
-            self.assertIn("## Project Instructions", text)
+            self.assertNotIn("\n# Runtime\n", text)
+            self.assertNotIn("\n# Environment\n", text)
+            self.assertIn("\n## Project Instructions\n", text)
             self.assertIn("#### Commands", text)
             self.assertNotIn("\n# Project Instructions\n", text)
+
+    def test_user_profile_enters_prefix_on_context_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            ensure_user_home(home)
+
+            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+                before = build_instructions(root, root / ".friday")
+                tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+                tools["Memory"]("add", "user", "Preferred language is Chinese.")
+                after = build_instructions(root, root / ".friday")
+
+            self.assertNotIn("## User Profile", before)
+            self.assertIn("## User Profile", after)
+            self.assertIn("Preferred language is Chinese.", after)
 
     def test_build_friday_does_not_persist_or_inject_short_term_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -679,7 +698,7 @@ class PromptTests(unittest.TestCase):
                 _agent, context = build_friday(root, stream=False)
 
             self.assertFalse((root / ".friday" / "STATE.md").exists())
-            self.assertNotIn("Short-Term State", "".join(str(m.get("content", "")) for m in context.get_messages()))
+            self.assertNotIn("\n## Short-Term State\n", "".join(str(m.get("content", "")) for m in context.get_messages()))
 
     def test_build_friday_loads_project_env_without_overriding_shell(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

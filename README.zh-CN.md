@@ -63,9 +63,9 @@ flowchart TD
 Friday 按以下顺序组装模型 Prefix：
 
 1. `SOUL.md`：身份和工作风格。
-2. Runtime 指令：任务完成、联网检索、记忆、项目规则发现、权限、压缩和验证。
-3. 工具使用指导。
-4. 全局 `~/.friday/AGENTS.md`。
+2. 内置 `RUNTIME.md`：任务完成、联网检索、记忆、项目规则发现、权限、压缩和验证。
+3. 内置 `TOOL_GUIDANCE.md`。
+4. `~/.friday/AGENTS.md` 中的全局规则。
 5. `~/.friday/USER.md` 用户画像。
 6. 全局 `~/.friday/MEMORY.md`。
 7. Skill 目录和按需路由规则。
@@ -73,7 +73,7 @@ Friday 按以下顺序组装模型 Prefix：
 9. 实时环境信息。
 10. 项目 `.friday/MEMORY.md`。
 
-代码控制的稳定 Prefix 位于最前面，只在升级时变化。用户信息位于中间，工作区相关状态位于尾部。这样可以尽量复用 Provider Cache，同时保证路径和项目状态不会过期。
+静态系统 Prompt 由内置 Markdown 文件提供，不再硬编码为 Python 长字符串。代码控制的稳定 Prefix 位于最前面，只在升级时变化；用户信息位于中间，工作区相关状态位于尾部。这样可以尽量复用 Provider Cache，同时保证路径和项目状态不会过期。
 
 Friday 首次启动会补齐 `~/.friday/` 下缺少的默认文件。`friday init` 只负责创建项目 `AGENTS.md`，记忆、权限、Skill、Session 和 Trace 都按需创建。
 
