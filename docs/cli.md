@@ -5,8 +5,18 @@ Top-level commands:
 ```powershell
 friday
 friday init
+friday help
+friday prompt
 friday skill list
 friday skill list --json
+friday skill help
+friday memory help
+friday memory status
+friday memory list [user|global|project|episode|all] [--json]
+friday memory search <query> [--scope <scope>] [--json]
+friday memory add --scope <scope> <text>
+friday memory update <id> <text>
+friday memory remove <id>
 friday ask "..."
 friday goal "..."
 friday chat
@@ -17,7 +27,6 @@ friday resume --list
 friday resume --session <id>
 friday approve
 friday reject
-friday memory
 friday context
 friday progress
 friday reset
@@ -32,7 +41,8 @@ Slash commands in chat/TUI:
 
 ```text
 /help
-/memory
+/prompt
+/memory [help|status|list|search|add|update|remove]
 /context
 /progress
 /compact

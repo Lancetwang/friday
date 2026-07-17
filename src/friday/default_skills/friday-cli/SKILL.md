@@ -11,5 +11,7 @@ Use Friday's CLI for Friday-specific inspection instead of reconstructing its be
 - Run `friday <command> --help` before using an unfamiliar command.
 - Run `friday skill list --json` to discover available skills and their `SKILL.md` paths.
 - After selecting a skill, read only its `SKILL.md` and the scripts, references, or templates it names.
+- Run `friday memory help` before managing persistent memory. Use `user` for stable profile facts, `global` for cross-project facts, `project` for lasting workspace facts, and `episode` for dated personal context.
+- Use `friday memory list|search --json` for structured inspection and `friday memory add|update|remove` for changes. Current task state belongs to `UpdatePlan`, not memory.
 
-Do not edit Friday configuration, memory, rules, or permissions unless the user explicitly asks.
+Memory may store explicit durable user facts and lasting project facts; never infer a profile from one-off behavior. Do not edit Friday configuration, rules, or permissions unless the user explicitly asks.

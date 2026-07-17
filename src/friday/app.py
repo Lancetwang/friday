@@ -153,7 +153,7 @@ def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | 
 
 def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on_delta: Any = None) -> tuple[Agent, RunContext, str]:
     # One in-band pass: inserted into the current conversation so it reuses the cached
-    # prefix. Within this single turn the agent saves durable facts with the Memory tool
+    # prefix. Within this single turn the agent saves durable facts through Friday's CLI
     # (so compaction never forgets them), then its final message is the structured summary.
     recent_messages = _recent_turn_messages(context)
     session_id = str(context.metadata.get("session_id") or "")

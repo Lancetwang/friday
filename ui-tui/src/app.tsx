@@ -25,7 +25,8 @@ const HELP_TEXT = `# Friday commands
 | Command | What it does |
 | --- | --- |
 | \`/help\` | Show this command reference. |
-| \`/memory\` | Print the effective prompt, including user, project, and memory context. |
+| \`/prompt\` | Print the effective prompt. |
+| \`/memory [help]\` | Inspect or manage persistent memory. |
 | \`/context\` | Print current context usage. |
 | \`/progress\` | Show the current objective and plan. |
 | \`/compact\` | Summarize the live conversation into a fresh context. |
@@ -278,8 +279,12 @@ function runCommand(
     app.exit()
   } else if (command.startsWith('/help')) {
     setMessages(items => [...items, { role: 'system', text: HELP_TEXT }])
-  } else if (command.startsWith('/memory')) {
+  } else if (command.startsWith('/prompt')) {
     void gateway.request<{ text: string }>('prompt.get').then(result =>
+      setMessages(items => [...items, { role: 'system', text: result.text }])
+    )
+  } else if (command.startsWith('/memory')) {
+    void gateway.request<{ text: string }>('memory.command', { command: text.slice('/memory'.length).trim() }).then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
     )
   } else if (command.startsWith('/context')) {

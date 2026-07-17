@@ -8,6 +8,16 @@ from pathlib import Path
 
 from friday.app import build_friday, build_instructions, compact_friday, ensure_user_home, init_project, reset_friday, resume_choices, resume_friday
 from friday.context import context_report
+from friday.memory import (
+    add_memory,
+    format_memory_result,
+    list_memories,
+    memory_status,
+    remove_memory,
+    run_memory_command,
+    search_memories,
+    update_memory,
+)
 from friday.progress import current_progress, finish_progress, progress_line
 from friday.skills import discover_skills
 from friday.tui_node import run_tui
@@ -17,6 +27,7 @@ from friday.turn import run_turn
 
 def main(argv: list[str] | None = None) -> None:
     _configure_stdio()
+    argv = _help_alias(list(sys.argv[1:] if argv is None else argv))
 
     parser = argparse.ArgumentParser(prog="friday", description="Friday personal CLI agent.")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output.")
@@ -29,7 +40,7 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("init", help="Create the project's AGENTS.md.")
 
-    skill = sub.add_parser("skill", help="Inspect reusable Friday skills.")
+    skill = sub.add_parser("skill", help="Inspect reusable Friday skills.", description="Inspect reusable Friday skills.")
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)
     skill_list = skill_sub.add_parser("list", help="List skill metadata and SKILL.md paths.")
     skill_list.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
@@ -40,7 +51,32 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("tui", help="Start a simple terminal UI.")
-    sub.add_parser("memory", help="Print effective instruction context.")
+    sub.add_parser("prompt", help="Print the effective instruction context.")
+    memory = sub.add_parser("memory", help="Inspect and manage Friday memory.", description="Inspect and manage Friday memory.")
+    memory_sub = memory.add_subparsers(dest="memory_command")
+    memory_status_parser = memory_sub.add_parser("status", help="Show memory counts, sizes, and paths.")
+    memory_status_parser.add_argument("--json", action="store_true")
+    memory_list = memory_sub.add_parser("list", help="List memory entries.")
+    memory_list.add_argument("scope", nargs="?", choices=["all", "user", "global", "project", "episode"], default="all")
+    memory_list.add_argument("--json", action="store_true")
+    memory_search = memory_sub.add_parser("search", help="Search Markdown memory.")
+    memory_search.add_argument("query", nargs="+")
+    memory_search.add_argument("--scope", choices=["all", "user", "global", "project", "episode"], default="all")
+    memory_search.add_argument("--max-results", type=int, default=5)
+    memory_search.add_argument("--json", action="store_true")
+    memory_add = memory_sub.add_parser("add", help="Add one memory entry.")
+    memory_add.add_argument("--scope", choices=["user", "global", "project", "episode"], required=True)
+    memory_add.add_argument("--stdin", action="store_true")
+    memory_add.add_argument("text", nargs="*")
+    memory_add.add_argument("--json", action="store_true")
+    memory_update = memory_sub.add_parser("update", help="Replace one memory entry by id.")
+    memory_update.add_argument("id")
+    memory_update.add_argument("--stdin", action="store_true")
+    memory_update.add_argument("text", nargs="*")
+    memory_update.add_argument("--json", action="store_true")
+    memory_remove = memory_sub.add_parser("remove", help="Remove one memory entry by id.")
+    memory_remove.add_argument("id")
+    memory_remove.add_argument("--json", action="store_true")
     context = sub.add_parser("context", help="Print context usage for a saved session.")
     context.add_argument("--session", help="Inspect a specific session id.")
     progress = sub.add_parser("progress", help="Print progress for a saved Friday session.")
@@ -83,8 +119,12 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"{item['name']}\t{item['scope']}\t{item['description']}\t{item['path']}")
         return
 
-    if command == "memory":
+    if command == "prompt":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
+        return
+
+    if command == "memory":
+        _memory_cli(args, parser)
         return
 
     if command == "context":
@@ -208,6 +248,14 @@ def _configure_stdio() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _help_alias(argv: list[str]) -> list[str]:
+    if argv == ["help"]:
+        return ["--help"]
+    if len(argv) == 2 and argv[1] == "help" and argv[0] in {"skill", "memory"}:
+        return [argv[0], "--help"]
+    return argv
+
+
 def _configure_permissions(args) -> None:
     mode = args.permission_mode or "manual"
     if args.dangerously_skip_permissions or args.permission_allow:
@@ -220,11 +268,15 @@ def _configure_permissions(args) -> None:
 
 
 def _slash(text: str, stream: bool, agent, context):
-    command = text[1:].strip().lower()
+    raw_command = text[1:].strip()
+    command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /memory, /context, /progress, /compact, /goal <text>, /resume, /approve, /reject, /reset, /exit")
-    elif command == "memory":
+        print("/help, /prompt, /memory [help], /context, /progress, /compact, /goal <text>, /resume, /approve, /reject, /reset, /exit")
+    elif command == "prompt":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
+    elif command.startswith("memory"):
+        result = run_memory_command(raw_command[len("memory") :].strip(), Path.cwd().resolve())
+        print(format_memory_result(result))
     elif command == "context":
         print(_context_report(context))
     elif command == "progress":
@@ -349,6 +401,34 @@ def _print_progress(progress: dict) -> None:
 
 def json_dump(value) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _memory_cli(args, parser: argparse.ArgumentParser) -> None:
+    root = Path.cwd().resolve()
+    action = args.memory_command or "status"
+    if action == "status":
+        result = memory_status(root)
+    elif action == "list":
+        result = {"memories": list_memories(root, scope=args.scope)}
+    elif action == "search":
+        result = {"memories": search_memories(root, " ".join(args.query), scope=args.scope, max_results=args.max_results)}
+    elif action == "add":
+        result = add_memory(root, args.scope, _memory_text(args, parser))
+    elif action == "update":
+        result = update_memory(root, args.id, _memory_text(args, parser))
+    elif action == "remove":
+        result = remove_memory(root, args.id)
+    else:
+        parser.error(f"unknown memory command: {action}")
+        return
+    print(json_dump(result) if getattr(args, "json", False) else format_memory_result(result))
+
+
+def _memory_text(args, parser: argparse.ArgumentParser) -> str:
+    text = sys.stdin.read() if args.stdin else " ".join(args.text)
+    if not text.strip():
+        parser.error("memory content is required as text or --stdin")
+    return text
 
 
 def _context_report(context) -> str:

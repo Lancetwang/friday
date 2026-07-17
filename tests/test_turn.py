@@ -51,6 +51,25 @@ class TurnTests(unittest.TestCase):
 
         self.assertIs(result.context.on_event, handler)
 
+    def test_run_turn_injects_recalled_memory_and_captures_user_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = RunContext(metadata={"workspace": tmp, "session_id": "s1"})
+            agent = type("Agent", (), {"instructions": "test"})()
+
+            def chat(*args, **kwargs):
+                memory_messages = [message for message in context.get_messages() if message.get("friday_memory_recall")]
+                self.assertEqual(memory_messages[0]["content"], "## Relevant Memory\n- prior preference")
+                return "done", []
+
+            with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
+                with patch("friday.turn.relevant_memory", return_value="## Relevant Memory\n- prior preference"):
+                    with patch("friday.turn.capture_user_memory") as capture:
+                        with patch("friday.turn.build_tools", return_value=[]), patch("friday.turn.verified_chat", side_effect=chat):
+                            with patch("friday.turn.write_trace"), patch("friday.turn.save_turn"):
+                                run_turn(agent, context, "以后请用中文", stream=False)
+
+            capture.assert_called_once_with(Path(tmp), "以后请用中文", session_id="s1")
+
 
 if __name__ == "__main__":
     unittest.main()

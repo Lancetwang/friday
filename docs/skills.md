@@ -17,7 +17,16 @@ For human-readable output:
 friday skill list
 ```
 
-Project skills take precedence over same-named user skills. Friday also provisions a user-level `friday-cli` skill that explains how to inspect Friday's own commands and pipelines.
+Project skills take precedence over same-named user skills. Friday also provisions a user-level `friday-cli` skill that explains how to inspect Friday's own commands and deterministic pipelines, including `friday skill ...` and `friday memory ...`.
+
+Friday's own commands use the same progressive help structure:
+
+```powershell
+friday help
+friday skill help
+friday memory help
+friday memory search --help
+```
 
 A minimal skill:
 

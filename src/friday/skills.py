@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 DEFAULT_FRIDAY_SKILL = Path(__file__).parent / "default_skills" / "friday-cli" / "SKILL.md"
+LEGACY_DEFAULT_SKILL_HASHES = {
+    "2bb93f4e5e10b92552705a4ec17098b5ffe259d29a066cc632cf8da42d522caf",
+    "e8066193c1802e58b069cc3f8db619d5e735765dce3a27113026f3f9c4e9b232",
+}
 
 
 def discover_skills(workspace: Path, user_dir: Path) -> list[dict[str, str]]:
@@ -35,6 +40,11 @@ def discover_skills(workspace: Path, user_dir: Path) -> list[dict[str, str]]:
 def ensure_default_skill(user_dir: Path) -> Path | None:
     path = user_dir / "FridaySkills" / "friday-cli" / "SKILL.md"
     if path.exists():
+        current = path.read_text(encoding="utf-8")
+        fingerprint = hashlib.sha256(current.replace("\r\n", "\n").strip().encode("utf-8")).hexdigest()
+        if fingerprint in LEGACY_DEFAULT_SKILL_HASHES:
+            path.write_text(DEFAULT_FRIDAY_SKILL.read_text(encoding="utf-8"), encoding="utf-8")
+            return path
         return None
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(DEFAULT_FRIDAY_SKILL.read_text(encoding="utf-8"), encoding="utf-8")

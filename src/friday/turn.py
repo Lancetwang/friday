@@ -12,6 +12,7 @@ from friday.agent_flow import begin_guarded_run
 from friday.app import prepare_context_for_chat, save_turn
 from friday.context import token_estimate
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
+from friday.memory import capture_user_memory, relevant_memory
 from friday.progress import append_progress_checkpoint, begin_progress, finish_progress
 from friday.tools import build_tools
 from friday.trace import begin_live_trace, finish_live_trace, write_live_event, write_trace
@@ -63,8 +64,17 @@ def run_turn(
     append_progress_checkpoint(context)
     if on_progress:
         on_progress(progress)
-    prompt_messages = [dict(message) for message in context.get_messages()]
     workspace = Path(context.metadata["workspace"])
+    recalled = relevant_memory(workspace, text)
+    if recalled:
+        context.add_message("system", recalled, friday_memory_recall=True)
+    if user_label is None:
+        capture_user_memory(
+            workspace,
+            text,
+            session_id=str(context.metadata.get("session_id") or ""),
+        )
+    prompt_messages = [dict(message) for message in context.get_messages()]
     user = user_label or (f"/goal {text}" if goal else text)
     mode = "approve" if user_label == "/approve" else "goal" if goal else "chat"
     live_path, turn_id = begin_live_trace(

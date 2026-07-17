@@ -71,6 +71,18 @@ friday compact
 
 Inside chat or the TUI, use `/context` and `/compact`.
 
+Inspect skills or memory progressively:
+
+```powershell
+friday help
+friday skill help
+friday skill list --json
+friday memory help
+friday memory status
+```
+
+Inside chat or the TUI, use `/memory help`, `/memory list`, and `/memory search <query>`. Use `/prompt` to print the effective prompt.
+
 Approve or reject a pending dangerous Bash command:
 
 ```powershell

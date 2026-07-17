@@ -23,10 +23,10 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Workspace-aware startup: the directory where `friday` is launched becomes the active workspace.
 - Layered model configuration: non-secret provider and token budgets live in global JSON with optional project overrides; credentials remain in `.env`.
 - Harness-first context: stable runtime rules lead the prompt; user and project state are layered later for prefix caching.
-- Agent-as-router: files, nested rules, skill bodies, and memory reads enter context only when needed.
+- Agent-as-router: files, nested rules, skill bodies, and episodic memories enter context only when needed.
 - Layered rules: global `~/.friday/AGENTS.md` plus root and nested project `AGENTS.md` files.
 - Progressive skills: the prompt keeps one CLI routing hint; `friday skill list --json` returns structured metadata and paths, then Bash reads only the selected `SKILL.md` and referenced resources.
-- Layered memory: user profile, global memory, and project memory store durable facts; current progress remains an explicit resumable session snapshot.
+- Layered memory: bounded profile and fact files stay in the prefix, dated Markdown episodes are captured and recalled on demand, and current progress remains a separate resumable session snapshot.
 - Visible progress: non-trivial work keeps one objective, structured plan, status, next action, and verifier state without splitting the conversation into task contexts.
 - Multi-stage context compression: Friday first probes lossless tool-result simplification, then falls back to a structured summary plus the latest ten complete turns when the gain is insufficient.
 - Completion-first turns: ordinary action requests continue through implementation and validation instead of stopping at a plan or partial result.
@@ -53,9 +53,9 @@ flowchart TD
 
     Prefix["Prefix caching<br/>stable rules before volatile state"] --> AgentLoop
     Context["Context engineering<br/>budget -> tool compact -> conversation compact"] --> AgentLoop
-    Memory["Memory management<br/>durable files + resumable session state"] --> AgentLoop
+    Memory["Memory management<br/>hot facts + recalled episodes + task progress"] --> AgentLoop
     Skills["Progressive skills<br/>CLI catalog -> selected files"] --> AgentLoop
-    Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan / Memory"] --> AgentLoop
+    Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan"] --> AgentLoop
 ```
 
 ## Harness
@@ -84,10 +84,12 @@ Friday separates facts, rules, and task state:
 - `USER.md`: stable user profile and preferences.
 - `~/.friday/MEMORY.md`: durable cross-project facts.
 - `<workspace>/.friday/MEMORY.md`: durable project facts and decisions.
+- `~/.friday/memory/YYYY-MM-DD.md`: dated personal context and explicit preference evidence, searched only when relevant.
 - `AGENTS.md`: operating rules, not memory.
-- Live messages and session snapshots: current task state, not long-term memory.
+- `friday.progress`: the only current task objective, plan, status, and next action.
+- Session snapshots and traces: resumable context and evidence, not another task-state store.
 
-The `Memory` tool can read, add, replace, or remove scoped entries. Before conversation compact, Friday asks the agent to save only durable facts, then emits a structured in-session summary for task continuity. Compact summaries and temporary progress never become long-term memory automatically.
+The harness captures explicit preference and correction signals as original user text, promotes only high-confidence profile facts into `USER.md`, rejects credential-like content, searches dated Markdown with deterministic English terms and Chinese character pairs, and injects at most three relevant episodes near the conversation tail. Hot memory stays frozen for a session and refreshes on start, resume, or compact. Memory management is exposed through `friday memory ...` and Bash rather than another model tool; the bundled `friday-cli` skill documents the commands progressively. Before conversation compact, Friday still asks the agent to save only durable facts. Compact summaries and temporary progress never become long-term memory.
 
 ## Context Management
 

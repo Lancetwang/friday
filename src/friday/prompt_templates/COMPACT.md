@@ -1,6 +1,6 @@
 The conversation is being compacted. Do two steps in order, in this one turn, then stop.
 
-1) Durable memory first, so compaction never drops what matters. Review the conversation for durable, declarative facts worth keeping across sessions: stable user preferences, environment details, conventions, and lasting project decisions. Save each with the Memory tool. Write facts, not instructions. Do not save task progress, command output, failed attempts, or anything stale within a week. If nothing qualifies, save nothing.
+1) Durable memory first, so compaction never drops what matters. Review the conversation for durable, declarative facts worth keeping across sessions: stable user preferences, environment details, conventions, and lasting project decisions. Save each through Bash with `friday memory add --scope user|global|project <text>`; run `friday memory help` if needed. Write facts, not instructions. Do not save task progress, command output, failed attempts, or anything stale within a week. If nothing qualifies, save nothing.
 
 2) Then send your final message as the short-term session state only, using this exact Markdown structure:
 ## Current Goal

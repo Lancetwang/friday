@@ -24,6 +24,13 @@ class CliTests(unittest.TestCase):
         for command in ("memory", "context", "progress", "compact", "goal", "resume", "approve", "reject", "reset"):
             self.assertIn(command, output.getvalue())
 
+    def test_progressive_help_aliases_work(self) -> None:
+        for argv, expected in ((["help"], "Friday personal CLI agent"), (["skill", "help"], "Inspect reusable Friday skills"), (["memory", "help"], "Inspect and manage Friday memory")):
+            output = StringIO()
+            with patch.object(sys, "stdout", output), self.assertRaises(SystemExit):
+                cli.main(argv)
+            self.assertIn(expected, output.getvalue())
+
     def test_bare_friday_starts_tui(self) -> None:
         with patch("friday.cli.build_friday") as build_friday:
             with patch("friday.cli.run_tui") as run_tui:
@@ -161,6 +168,21 @@ class CliTests(unittest.TestCase):
             review = next(item for item in data["skills"] if item["name"] == "review")
             self.assertEqual(review["scope"], "project")
             self.assertEqual(Path(review["path"]), skill_dir / "SKILL.md")
+            build_friday.assert_not_called()
+
+    def test_memory_cli_manages_markdown_without_building_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            output = StringIO()
+            with patch("friday.cli.Path.cwd", return_value=root), patch("friday.memory.Path.home", return_value=home):
+                with patch.object(sys, "stdout", output), patch("friday.cli.build_friday") as build_friday:
+                    cli.main(["memory", "add", "--scope", "user", "Preferred language is Chinese.", "--json"])
+
+            saved = json.loads(output.getvalue())
+            self.assertEqual(saved["scope"], "user")
+            self.assertIn("Preferred language is Chinese.", (home / ".friday" / "USER.md").read_text(encoding="utf-8"))
             build_friday.assert_not_called()
 
 

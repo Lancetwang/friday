@@ -11,7 +11,6 @@ Friday keeps the tool surface small:
 - `WebSearch`: search the live web through a provider fallback chain when current external information is needed.
 - `WebFetch`: fetch a known URL as clean Markdown through Jina Reader.
 - `UpdatePlan`: maintain the visible objective and step status for non-trivial work in the current session.
-- `Memory`: read or update user, global, or project memory.
 
 `Bash` runs PowerShell on Windows and `bash -lc` elsewhere. A timeout terminates the whole spawned process tree so grandchildren cannot keep Friday blocked by inherited output pipes.
 
@@ -21,7 +20,7 @@ Dangerous Bash commands create `.friday/pending_approval.json`. Run `/approve` t
 `WebFetch` works without a key through Jina Reader; set `JINA_API_KEY` for higher rate limits.
 They are Friday application tools, not part of `agent-core-runtime`.
 
-Skill discovery is deliberately not a model tool. Friday runs `friday skill list --json` through Bash, then reads only the selected `SKILL.md` and resources it references.
+Skill discovery and memory management are deliberately not model tools. Friday uses Bash with `friday skill list --json` or `friday memory ...`; the harness performs automatic memory capture and recall in code.
 
 ## Web research contract
 

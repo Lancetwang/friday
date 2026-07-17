@@ -11,6 +11,7 @@ from agent_core import Agent, AgentEvent, RunContext
 from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday
 from friday.config import load_model_config
 from friday.context import context_report
+from friday.memory import format_memory_result, run_memory_command
 from friday.progress import current_progress, finish_progress
 from friday.tools import approve_pending, build_tools, pending_approval
 from friday.turn import run_turn
@@ -55,6 +56,9 @@ class Gateway:
                 self.ok(rid, self.chat(str(params.get("text") or ""), goal=True))
             elif method == "prompt.get":
                 self.ok(rid, {"text": build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")})
+            elif method == "memory.command":
+                result = run_memory_command(str(params.get("command") or ""), Path.cwd().resolve())
+                self.ok(rid, {"text": format_memory_result(result)})
             elif method == "context.get":
                 agent, context = self.ensure_agent()
                 self.ok(rid, {"text": context_report(context, build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))})

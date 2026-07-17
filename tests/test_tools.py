@@ -16,6 +16,7 @@ from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_frida
 from friday.config import DEFAULT_MODEL_CONFIG, load_model_config
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
+from friday.memory import add_memory, list_memories, remove_memory, update_memory
 from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.skills import discover_skills, skill_routing
@@ -381,20 +382,21 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(result["content"], "# Title\n\ncontent")
             self.assertFalse(result["truncated"])
 
-    def test_memory_tool_updates_scoped_files(self) -> None:
+    def test_memory_is_managed_outside_the_model_toolset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            home = root / "home"
 
-            tools["Memory"]("add", "project", "Friday should be concise.")
-            memory = tools["Memory"]("read", "project")
-            self.assertIn("Friday should be concise.", memory["content"])
+            self.assertNotIn("Memory", tools)
+            added = add_memory(root, "project", "Friday should be concise.", home=home)
+            self.assertEqual(list_memories(root, scope="project", home=home)[0]["content"], "Friday should be concise.")
 
-            tools["Memory"]("replace", "project", "Friday should stay concise.", "Friday should be concise.")
-            self.assertIn("Friday should stay concise.", tools["Memory"]("read", "project")["content"])
+            update_memory(root, added["id"], "Friday should stay concise.", home=home)
+            self.assertEqual(list_memories(root, scope="project", home=home)[0]["content"], "Friday should stay concise.")
 
-            tools["Memory"]("remove", "project", "Friday should stay concise.")
-            self.assertNotIn("Friday should stay concise.", tools["Memory"]("read", "project")["content"])
+            remove_memory(root, added["id"], home=home)
+            self.assertEqual(list_memories(root, scope="project", home=home), [])
 
     def test_nested_instruction_context_is_loaded_once_for_touched_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -720,13 +722,13 @@ class PromptTests(unittest.TestCase):
 
             with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
                 before = build_instructions(root, root / ".friday")
-                tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
-                tools["Memory"]("add", "user", "Preferred language is Chinese.")
+                add_memory(root, "user", "Preferred language is Chinese.", home=home)
                 after = build_instructions(root, root / ".friday")
 
             self.assertNotIn("## User Profile", before)
             self.assertIn("## User Profile", after)
             self.assertIn("Preferred language is Chinese.", after)
+            self.assertNotIn("friday-memory", after)
 
     def test_build_friday_does_not_persist_or_inject_short_term_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -951,8 +953,7 @@ class CompactTests(unittest.TestCase):
             friday_dir = root / ".friday"
             friday_dir.mkdir()
             (friday_dir / "MEMORY.md").write_text("# Project Memory\n", encoding="utf-8")
-            tools = {tool.name: tool for tool in build_tools(root, friday_dir)}
-            old_context = tools["Memory"]("read", "project")
+            old_context = (friday_dir / "MEMORY.md").read_text(encoding="utf-8")
 
             context = RunContext(metadata={"workspace": str(root), "session_id": "session-1"})
             for index in range(12):
@@ -974,7 +975,7 @@ class CompactTests(unittest.TestCase):
 
             # Single in-band pass: one chat carrying both the memory step and the schema.
             self.assertEqual(len(fake_agent.prompts), 1)
-            self.assertIn("Memory tool", fake_agent.prompts[0])
+            self.assertIn("friday memory add", fake_agent.prompts[0])
             self.assertIn("## Current Goal", fake_agent.prompts[0])
             self.assertNotIn("## Recent Conversations", fake_agent.prompts[0])
             self.assertEqual(summary, "Continue with the memory harness work.")
@@ -989,7 +990,7 @@ class CompactTests(unittest.TestCase):
             self.assertEqual(new_context.messages[-1]["content"], "final assistant-11")
             self.assertEqual(new_context.messages[-3]["tool_calls"][0]["id"], "call-1")
             self.assertFalse((root / ".friday" / "STATE.md").exists())
-            self.assertEqual(old_context["content"], tools["Memory"]("read", "project")["content"])
+            self.assertEqual(old_context, (friday_dir / "MEMORY.md").read_text(encoding="utf-8"))
 
     def test_session_state_update_does_not_add_a_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

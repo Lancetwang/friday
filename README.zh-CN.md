@@ -23,10 +23,10 @@ uv tool install -e . --force --reinstall
 - 工作区感知：从哪个目录启动 `friday`，哪个目录就是当前工作区。
 - 分层模型配置：供应商、模型和 Token 预算写入全局 JSON，并可由项目覆盖；密钥继续留在 `.env`。
 - Harness 优先的上下文设计：稳定规则放在前面，用户与项目状态放在后面，适配 Prefix Caching。
-- Agent 只负责路由：文件、嵌套规则、Skill 正文和记忆读取都按需进入上下文。
+- Agent 只负责路由：文件、嵌套规则、Skill 正文和情景记忆都按需进入上下文。
 - 分层规则：全局 `~/.friday/AGENTS.md`，以及项目根目录和嵌套目录中的 `AGENTS.md`。
 - 渐进式 Skill：启动提示词只保留一条 CLI 路由；`friday skill list --json` 动态返回结构化元数据和路径，Bash 只读取被选中的 `SKILL.md` 和引用资源。
-- 分层记忆：用户画像、全局记忆和项目记忆保存长期事实，当前进度作为显式 Session 快照独立恢复。
+- 分层记忆：用户画像和长期事实常驻 Prefix，按日期保存的 Markdown 情景记忆按需召回，当前进度作为独立 Session 快照恢复。
 - 可见进度：复杂任务维护一个目标、结构化计划、状态、下一步和验证结果，但不会为不同任务切换对话上下文。
 - 多级上下文压缩：先探测无损工具结果简化的收益，收益不足时再生成结构化摘要并原样保留最近十个完整 Turn。
 - 完成优先：普通执行请求也会继续完成实现与验证，不停在计划、进度或部分结果。
@@ -53,9 +53,9 @@ flowchart TD
 
     Prefix["Prefix Caching<br/>稳定规则位于动态状态之前"] --> AgentLoop
     Context["Context Engineering<br/>预算 -> 工具压缩 -> 对话压缩"] --> AgentLoop
-    Memory["Memory Management<br/>长期文件 + 可恢复会话状态"] --> AgentLoop
+    Memory["Memory Management<br/>常驻事实 + 情景召回 + 任务进度"] --> AgentLoop
     Skills["Progressive Skills<br/>CLI 索引 -> 选中资源"] --> AgentLoop
-    Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan / Memory"] --> AgentLoop
+    Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan"] --> AgentLoop
 ```
 
 ## Harness
@@ -84,10 +84,12 @@ Friday 将事实、规则与任务状态分开：
 - `USER.md`：稳定的用户画像与偏好。
 - `~/.friday/MEMORY.md`：跨项目长期事实。
 - `<workspace>/.friday/MEMORY.md`：项目长期事实和决策。
+- `~/.friday/memory/YYYY-MM-DD.md`：按日期保存的个人背景和明确偏好原话，仅在相关时召回。
 - `AGENTS.md`：行为规则，不属于记忆。
-- 实时消息与 Session：当前任务状态，不属于长期记忆。
+- `friday.progress`：当前目标、计划、状态与下一步的唯一来源。
+- Session 与 Trace：可恢复上下文和观测证据，不是另一套任务状态。
 
-`Memory` 工具支持按作用域读取、添加、替换和删除。在对话压缩前，Friday 会先要求 Agent 保存真正值得长期保留的事实，再生成结构化的会话摘要。压缩摘要和临时任务进度不会自动污染长期记忆。
+Harness 会按代码规则捕获明确偏好和纠正信号，只把高置信用户画像自动晋升到 `USER.md`，拒绝凭证类内容，并通过中英文词项匹配按需注入最多三条相关情景记忆。记忆管理通过 `friday memory ...` 和 Bash 渐进披露，不再占用一个模型工具；内置 `friday-cli` Skill 负责说明具体命令。在对话压缩前，Friday 仍会要求 Agent 只保存真正值得长期保留的事实，压缩摘要和临时任务进度不会污染长期记忆。
 
 ## 上下文管理
 

@@ -18,8 +18,6 @@ from agent_core import get_current_context, tool
 
 from friday.progress import update_plan
 
-USER_LIMIT = 1500
-MEMORY_LIMIT = 2500
 CONTEXT_FILE_LIMIT = 8000
 APPROVAL_FILE = "pending_approval.json"
 PERMISSIONS_FILE = "permissions.json"
@@ -224,45 +222,7 @@ def build_tools(workspace: Path, friday_dir: Path):
             next_action=next_action,
         )
 
-    @tool(description="Read or update Friday memory files.", name="Memory")
-    def memory(
-        action: Annotated[Literal["read", "add", "replace", "remove"], "Memory action to perform."],
-        target: Annotated[Literal["user", "global", "project"], "user=USER.md, global=global MEMORY.md, project=workspace MEMORY.md."],
-        content: Annotated[str, "New note text, replacement text, or exact text to remove."] = "",
-        old_text: Annotated[str, "Exact text to replace when action is replace."] = "",
-    ) -> dict:
-        path, limit = _memory_target(target, user_dir, friday_dir)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        current = path.read_text(encoding="utf-8") if path.exists() else _memory_header(target)
-
-        if action == "read":
-            return {"target": target, "path": str(path), "content": current, "chars": len(current)}
-
-        if not content.strip():
-            raise ValueError("content is required.")
-        if action == "add":
-            updated = current.rstrip() + f"\n- {content.strip()}\n"
-        elif action == "replace":
-            if not old_text:
-                raise ValueError("old_text is required for replace.")
-            count = current.count(old_text)
-            if count != 1:
-                raise ValueError(f"Expected exactly one match, found {count}.")
-            updated = current.replace(old_text, content, 1)
-        elif action == "remove":
-            count = current.count(content)
-            if count != 1:
-                raise ValueError(f"Expected exactly one match, found {count}.")
-            updated = current.replace(content, "", 1)
-        else:
-            raise ValueError(f"Unknown memory action: {action}")
-
-        if len(updated) > limit:
-            raise ValueError(f"{target} memory would exceed {limit} characters; replace or remove old entries first.")
-        _write_text(path, updated)
-        return {"target": target, "path": str(path), "chars": len(updated)}
-
-    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, web_search, web_fetch, update_session_plan, memory]
+    return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, web_search, web_fetch, update_session_plan]
 
 
 def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> dict:
@@ -688,21 +648,3 @@ def _read_limited(path: Path, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + f"\n\n[truncated: read {path} directly for the rest]"
-
-
-def _memory_target(target: str, user_dir: Path, friday_dir: Path) -> tuple[Path, int]:
-    if target == "user":
-        return user_dir / "USER.md", USER_LIMIT
-    if target == "global":
-        return user_dir / "MEMORY.md", MEMORY_LIMIT
-    if target == "project":
-        return friday_dir / "MEMORY.md", MEMORY_LIMIT
-    raise ValueError(f"Unknown memory target: {target}")
-
-
-def _memory_header(target: str) -> str:
-    if target == "user":
-        return "# User Profile\n"
-    if target == "global":
-        return "# User Memory\n"
-    return "# Project Memory\n"

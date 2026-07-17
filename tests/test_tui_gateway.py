@@ -41,6 +41,15 @@ class TuiGatewayTests(unittest.TestCase):
 
         event.assert_called_once_with("progress.update", progress)
 
+    def test_gateway_routes_memory_commands_without_building_an_agent(self) -> None:
+        gateway = Gateway()
+        with patch("friday.tui_gateway.run_memory_command", return_value={"counts": {scope: 0 for scope in ("user", "global", "project", "episode")}, "chars": {scope: 0 for scope in ("user", "global", "project", "episode")}}):
+            with patch.object(gateway, "ok") as ok, patch.object(gateway, "ensure_agent") as ensure_agent:
+                gateway.handle({"id": "1", "method": "memory.command", "params": {"command": "status"}})
+
+        ensure_agent.assert_not_called()
+        self.assertIn("Memory status", ok.call_args.args[1]["text"])
+
     def test_session_info_does_not_require_llm_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"LLM_API_KEY": "", "OPENAI_API_KEY": "", "DEEPSEEK_API_KEY": ""}, clear=False):
