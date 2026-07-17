@@ -26,7 +26,9 @@ friday resume
 friday resume --list
 friday resume --session <id>
 friday approve
+friday approve --for-session
 friday reject
+friday reject --message "use another approach"
 friday context
 friday progress
 friday reset
@@ -49,7 +51,9 @@ Slash commands in chat/TUI:
 /goal <task>
 /resume
 /approve
+/approve session
 /reject
+/reject use another approach
 /reset
 /exit
 ```

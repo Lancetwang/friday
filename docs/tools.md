@@ -14,7 +14,7 @@ Friday keeps the tool surface small:
 
 `Bash` runs PowerShell on Windows and `bash -lc` elsewhere. A timeout terminates the whole spawned process tree so grandchildren cannot keep Friday blocked by inherited output pipes.
 
-Dangerous Bash commands create `.friday/pending_approval.json`. Run `/approve` to execute the pending command or `/reject` to discard it.
+Dangerous Bash commands create `.friday/pending_approval.json` and suspend the Agent Loop before another model call. The TUI offers four decisions: approve once, approve without asking again in the active session, reject, or reject and tell Friday how to continue. Explicit deny rules still apply when the active session has been allowed.
 
 `WebSearch` uses Tavily first when `TAVILY_API_KEY` is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Set `ANYSEARCH_API_KEY` for higher AnySearch limits; anonymous fallback remains available. Keys can be placed in the process environment, the workspace `.env`, or `~/.friday/.env`.
 `WebFetch` works without a key through Jina Reader; set `JINA_API_KEY` for higher rate limits.

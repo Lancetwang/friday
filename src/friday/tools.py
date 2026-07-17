@@ -14,13 +14,14 @@ import urllib.request
 from pathlib import Path
 from typing import Annotated, Literal
 
-from agent_core import get_current_context, tool
+from agent_core import RunContext, get_current_context, tool
 
 from friday.progress import update_plan
 
 CONTEXT_FILE_LIMIT = 8000
 APPROVAL_FILE = "pending_approval.json"
 PERMISSIONS_FILE = "permissions.json"
+SESSION_PERMISSIONS_ALLOWED = "friday.permissions_allowed"
 INSTRUCTION_FILE_NAMES = (
     "AGENTS.md",
     ".friday/AGENTS.md",
@@ -130,7 +131,7 @@ def build_tools(workspace: Path, friday_dir: Path):
             return {"blocked": True, "message": f"Command denied by {PERMISSIONS_FILE}: {reason}"}
         if decision == "approval":
             approval = _write_approval(friday_dir, command, timeout_seconds, max_chars, reason)
-            return {**approval, "approval_required": True, "message": "Command blocked. Run /approve to execute it or /reject to discard it."}
+            return {**approval, "approval_required": True, "message": "Execution paused for human approval."}
         return _run_shell(workspace, command, timeout_seconds, max_chars)
 
     @tool(description="Find files and directories by glob pattern inside the current workspace.", name="Glob")
@@ -253,6 +254,10 @@ def pending_approval(workspace: Path | None = None) -> dict:
     except json.JSONDecodeError:
         return {"pending": False, "message": "Invalid pending approval."}
     return {"pending": True, **approval}
+
+
+def allow_permissions_for_session(context: RunContext) -> None:
+    context.metadata[SESSION_PERMISSIONS_ALLOWED] = True
 
 
 def default_permissions() -> dict:
@@ -520,6 +525,9 @@ def _permission_decision(friday_dir: Path, command: str) -> tuple[str, str]:
     allow = [*list(bash.get("allow", []) if isinstance(bash.get("allow", []), list) else []), *_env_bash_rules("FRIDAY_ALLOWED_TOOLS")]
     if _matches_any(command, deny):
         return "deny", "matched deny rule"
+    context = get_current_context()
+    if context is not None and context.metadata.get(SESSION_PERMISSIONS_ALLOWED):
+        return "allow", "approved for the current session"
     if _matches_any(command, allow):
         return "allow", "matched allow rule"
     if _matches_any(command, bash.get("require_approval", [])):

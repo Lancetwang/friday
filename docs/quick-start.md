@@ -87,9 +87,11 @@ Approve or reject a pending dangerous Bash command:
 
 ```powershell
 friday approve
+friday approve --for-session
 friday reject
+friday reject --message "use another approach"
 ```
 
-Inside chat or the TUI, use `/approve` and `/reject`.
+Inside CLI chat, use `/approve`, `/approve session`, `/reject`, or `/reject <guidance>`. The TUI presents the same decisions as a vertical picker and accepts guidance inline.
 
 Project state is stored in `<workspace>/.friday/`. Global configuration, user profile, memory, rules, and user skills are stored in `~/.friday/`.

@@ -72,7 +72,7 @@ def finish_progress(context: RunContext, loop_status: str, verifications: list[d
         state["steps"] = [{**step, "status": "completed"} for step in state.get("steps", [])]
     elif loop_status == "needs_approval":
         state["status"] = "waiting"
-        state["next_action"] = "Approve or reject the pending command."
+        state["next_action"] = "Choose whether to approve, allow for this session, reject, or provide guidance."
     else:
         state["status"] = "blocked"
         state["next_action"] = str(last.get("next_check") or last.get("feedback") or loop_status).strip()

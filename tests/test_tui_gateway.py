@@ -65,11 +65,11 @@ class TuiGatewayTests(unittest.TestCase):
 
     def test_gateway_continues_pending_goal_after_approval(self) -> None:
         gateway = Gateway()
-        gateway.pending_after_approval = {"text": "delete file", "goal": True}
+        gateway.suspended_turn = {"text": "delete file", "goal": True}
         calls = []
 
-        def chat(text, *, goal=False, approval_result=None, save_user=None):
-            calls.append((text, goal, approval_result, save_user))
+        def chat(text, *, goal=False, approval_result=None, user_label=None, continuation=False):
+            calls.append((text, goal, approval_result, user_label, continuation))
             return {"text": "continued"}
 
         with patch("friday.tui_gateway.approve_pending", return_value={"approved": True}):
@@ -77,16 +77,16 @@ class TuiGatewayTests(unittest.TestCase):
                 with patch.object(gateway, "write"):
                     gateway.handle({"id": "1", "method": "approval.approve"})
 
-        self.assertEqual(calls, [("delete file", True, {"approved": True}, "/approve")])
-        self.assertIsNone(gateway.pending_after_approval)
+        self.assertEqual(calls, [("delete file", True, {"approved": True}, "/approve", True)])
+        self.assertIsNone(gateway.suspended_turn)
 
     def test_gateway_continues_normal_chat_after_approval(self) -> None:
         gateway = Gateway()
-        gateway.pending_after_approval = {"text": "delete file", "goal": False}
+        gateway.suspended_turn = {"text": "delete file", "goal": False}
         calls = []
 
-        def chat(text, *, goal=False, approval_result=None, save_user=None):
-            calls.append((text, goal, approval_result, save_user))
+        def chat(text, *, goal=False, approval_result=None, user_label=None, continuation=False):
+            calls.append((text, goal, approval_result, user_label, continuation))
             return {"text": "deleted"}
 
         result = {
@@ -102,7 +102,43 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertFalse(calls[0][1])
         self.assertEqual(calls[0][2], result)
         self.assertEqual(calls[0][3], "/approve")
-        self.assertIsNone(gateway.pending_after_approval)
+        self.assertTrue(calls[0][4])
+        self.assertIsNone(gateway.suspended_turn)
+
+    def test_gateway_can_allow_permissions_for_active_session(self) -> None:
+        gateway = Gateway()
+        gateway.suspended_turn = {"text": "delete file", "goal": False}
+        context = object()
+
+        with patch("friday.tui_gateway.approve_pending", return_value={"approved": True}):
+            with patch.object(gateway, "ensure_agent", return_value=(object(), context)):
+                with patch("friday.tui_gateway.allow_permissions_for_session") as allow:
+                    with patch.object(gateway, "chat", return_value={"text": "continued"}):
+                        with patch.object(gateway, "write"):
+                            gateway.handle({"id": "1", "method": "approval.approve", "params": {"session": True}})
+
+        allow.assert_called_once_with(context)
+
+    def test_gateway_rejects_command_and_continues_with_human_guidance(self) -> None:
+        gateway = Gateway()
+        gateway.suspended_turn = {"text": "delete file", "goal": True}
+        calls = []
+
+        def chat(text, **kwargs):
+            calls.append((text, kwargs))
+            return {"text": "used another approach"}
+
+        with patch("friday.tui_gateway.approve_pending", return_value={"approved": False, "rejected": True, "command": "rm file"}):
+            with patch.object(gateway, "chat", side_effect=chat):
+                with patch.object(gateway, "write"):
+                    gateway.handle({"id": "1", "method": "approval.instruct", "params": {"text": "keep the file and edit it instead"}})
+
+        self.assertIn("delete file", calls[0][0])
+        self.assertIn("keep the file", calls[0][0])
+        self.assertTrue(calls[0][1]["goal"])
+        self.assertTrue(calls[0][1]["continuation"])
+        self.assertEqual(calls[0][1]["user_label"], "keep the file and edit it instead")
+        self.assertIsNone(gateway.suspended_turn)
 
 
 if __name__ == "__main__":

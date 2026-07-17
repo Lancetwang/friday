@@ -62,6 +62,12 @@ def _guard_after_tools(payload: Any):
     if context is None:
         return "chat", state
 
+    approval = _approval_required(context)
+    if approval:
+        context.emit("approval.pending", category="tool", action="suspend", data=approval)
+        state["answer"] = ""
+        return "suspend", state
+
     reason = _no_progress(context) or _token_budget(context)
     if reason:
         context.metadata[GUARD_STOP_REASON] = reason
@@ -69,6 +75,22 @@ def _guard_after_tools(payload: Any):
         context.add_message("system", _finalize_message(reason))
         state["chat_kwargs"] = {**dict(state.get("chat_kwargs", {}) or {}), "tool_choice": "none"}
     return "chat", state
+
+
+def _approval_required(context: RunContext) -> dict[str, Any] | None:
+    guard = context.metadata.setdefault(GUARD_STATE, {"event_index": 0, "seen": {}})
+    start = int(guard.get("event_index", 0))
+    for event in reversed(context.events[start:]):
+        if event.type != "tool.result":
+            continue
+        content = event.data.get("content")
+        try:
+            value = json.loads(content) if isinstance(content, str) else content
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value.get("approval_required"):
+            return value
+    return None
 
 
 def _no_progress(context: RunContext) -> str | None:

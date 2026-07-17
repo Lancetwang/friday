@@ -65,6 +65,15 @@ class CliTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["PYTHONIOENCODING"], "utf-8")
         self.assertEqual(kwargs["env"]["PYTHONUTF8"], "1")
 
+    def test_tui_local_source_wins_over_stale_dist(self) -> None:
+        with patch("friday.tui_node.Path.exists", return_value=True):
+            with patch("friday.tui_node.shutil.which", side_effect=lambda name: f"{name}.cmd"):
+                with patch("friday.tui_node.subprocess.call", return_value=0) as call:
+                    with self.assertRaises(SystemExit):
+                        tui_node.run_tui()
+
+        self.assertEqual(call.call_args.args[0], ["npm.cmd", "--silent", "start"])
+
     def test_tui_configures_windows_console_utf8(self) -> None:
         class Kernel32:
             def __init__(self) -> None:
@@ -101,6 +110,7 @@ class CliTests(unittest.TestCase):
             False,
             approval_result={"approved": True, "result": {"exit_code": 0}},
             user_label="/approve",
+            continuation=True,
         )
 
     def test_permission_flags_configure_environment(self) -> None:

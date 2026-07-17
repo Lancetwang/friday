@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+from datetime import date
 from importlib.resources import files
 from pathlib import Path
 
@@ -24,6 +25,7 @@ def environment(workspace: Path, config: ModelConfig) -> str:
     mode = os.getenv("FRIDAY_PERMISSION_MODE", "manual").strip() or "manual"
     return prompt_template("ENVIRONMENT.md").format(
         workspace=workspace,
+        current_date=date.today().isoformat(),
         system=system,
         release=platform.release(),
         shell=shell,

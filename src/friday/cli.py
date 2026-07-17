@@ -21,7 +21,7 @@ from friday.memory import (
 from friday.progress import current_progress, finish_progress, progress_line
 from friday.skills import discover_skills
 from friday.tui_node import run_tui
-from friday.tools import approve_pending, build_tools
+from friday.tools import allow_permissions_for_session, approve_pending, build_tools
 from friday.turn import run_turn
 
 
@@ -91,8 +91,10 @@ def main(argv: list[str] | None = None) -> None:
     resume.add_argument("--session", help="Resume a specific session id.")
     approve = sub.add_parser("approve", help="Approve one pending dangerous shell command.")
     approve.add_argument("--session", help="Continue a specific session after approval.")
+    approve.add_argument("--for-session", action="store_true", help="Do not ask again during the active session.")
     reject = sub.add_parser("reject", help="Reject one pending dangerous shell command.")
     reject.add_argument("--session", help="Mark a specific session blocked after rejection.")
+    reject.add_argument("--message", help="Reject and tell Friday how to continue.")
     reset = sub.add_parser("reset", help="Clear Friday memory and session state.")
     reset.add_argument("-y", "--yes", action="store_true", help="Skip reset confirmation.")
 
@@ -156,6 +158,8 @@ def main(argv: list[str] | None = None) -> None:
         print(_approval_status(result))
         agent, context, count = resume_friday(stream=stream, resume_id=args.session)
         if count:
+            if args.for_session:
+                allow_permissions_for_session(context)
             progress = current_progress(context)
             if progress.get("mode") == "goal":
                 _goal(
@@ -165,6 +169,7 @@ def main(argv: list[str] | None = None) -> None:
                     stream,
                     approval_result=result,
                     user_label="/approve",
+                    continuation=True,
                 )
             else:
                 _ask(
@@ -174,6 +179,7 @@ def main(argv: list[str] | None = None) -> None:
                     stream,
                     approval_result=result,
                     user_label="/approve",
+                    continuation=True,
                 )
         elif args.session:
             print(f"Session not found: {args.session}. The command was executed, but no AI continuation ran.")
@@ -185,9 +191,12 @@ def main(argv: list[str] | None = None) -> None:
             print(result.get("message") or "No pending approval.")
             return
         print(f"Rejected: {result.get('command') or 'pending command'}")
-        _agent, context, count = resume_friday(stream=False, resume_id=args.session)
+        _agent, context, count = resume_friday(stream=stream if args.message else False, resume_id=args.session)
         if count:
-            finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
+            if args.message:
+                _continue_with_guidance(_agent, context, args.message, result, stream)
+            else:
+                finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
         return
 
     if command == "reset":
@@ -271,7 +280,7 @@ def _slash(text: str, stream: bool, agent, context):
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /prompt, /memory [help], /context, /progress, /compact, /goal <text>, /resume, /approve, /reject, /reset, /exit")
+        print("/help, /prompt, /memory [help], /context, /progress, /compact, /goal <text>, /resume, /approve [session], /reject [guidance], /reset, /exit")
     elif command == "prompt":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
     elif command.startswith("memory"):
@@ -295,10 +304,12 @@ def _slash(text: str, stream: bool, agent, context):
             print("usage: /goal describe the goal")
         else:
             agent, context, _ = _goal(agent, context, goal, stream)
-    elif command == "approve":
+    elif command in {"approve", "approve session"}:
         result = approve_pending()
         print(json_dump(result))
         if result.get("approved"):
+            if command == "approve session":
+                allow_permissions_for_session(context)
             agent, context, _ = _ask(
                 agent,
                 context,
@@ -306,13 +317,18 @@ def _slash(text: str, stream: bool, agent, context):
                 stream,
                 approval_result=result,
                 user_label="/approve",
+                continuation=True,
             )
-    elif command == "reject":
+    elif command.startswith("reject"):
+        instruction = raw_command[len("reject") :].strip()
         result = approve_pending(reject=True)
         print(json_dump(result))
         if result.get("rejected"):
-            progress = finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
-            _print_progress(progress)
+            if instruction:
+                agent, context, _ = _continue_with_guidance(agent, context, instruction, result, stream)
+            else:
+                progress = finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
+                _print_progress(progress)
     elif command == "reset":
         if _reset(False):
             agent, context = build_friday(stream=stream)
@@ -343,7 +359,7 @@ def _reset(yes: bool) -> bool:
     return True
 
 
-def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_label: str | None = None):
+def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_label: str | None = None, continuation: bool = False):
     result = run_turn(
         agent,
         context,
@@ -354,6 +370,7 @@ def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_
         on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
         approval_result=approval_result,
         user_label=user_label,
+        continuation=continuation,
     )
     if stream:
         print()
@@ -366,7 +383,7 @@ def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_
     return result.agent, result.context, result.answer
 
 
-def _goal(agent, context, text: str, stream: bool, *, approval_result=None, user_label: str | None = None):
+def _goal(agent, context, text: str, stream: bool, *, approval_result=None, user_label: str | None = None, continuation: bool = False):
     result = run_turn(
         agent,
         context,
@@ -378,6 +395,7 @@ def _goal(agent, context, text: str, stream: bool, *, approval_result=None, user
         on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
         approval_result=approval_result,
         user_label=user_label,
+        continuation=continuation,
     )
     if stream:
         print()
@@ -447,6 +465,32 @@ def _approval_status(result: dict) -> str:
     status = "timed out" if execution.get("timed_out") else f"exit {execution.get('exit_code', 'unknown')}"
     output = str(execution.get("output") or "").strip()
     return f"Approved and executed ({status}): {command}" + (f"\n{output}" if output else "")
+
+
+def _continue_with_guidance(agent, context, instruction: str, result: dict, stream: bool):
+    progress = current_progress(context)
+    approval_result = {**result, "instruction": instruction}
+    if progress.get("mode") == "goal":
+        objective = str(progress.get("objective") or "Continue the goal.")
+        prompt = f"{objective}\n\nHuman guidance after declining the pending command: {instruction}"
+        return _goal(
+            agent,
+            context,
+            prompt,
+            stream,
+            approval_result=approval_result,
+            user_label=instruction,
+            continuation=True,
+        )
+    return _ask(
+        agent,
+        context,
+        instruction,
+        stream,
+        approval_result=approval_result,
+        user_label=instruction,
+        continuation=True,
+    )
 
 
 def _request_text(args, parser: argparse.ArgumentParser, command: str) -> str:

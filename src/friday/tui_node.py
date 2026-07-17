@@ -21,10 +21,10 @@ def run_tui() -> None:
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
 
-    if entry.exists():
-        raise SystemExit(subprocess.call([_exe("node"), str(entry)], cwd=root, env=env))
     if (ui / "node_modules").exists():
         raise SystemExit(subprocess.call([_exe("npm"), "--silent", "start"], cwd=ui, env=env))
+    if entry.exists():
+        raise SystemExit(subprocess.call([_exe("node"), str(entry)], cwd=root, env=env))
 
     print("Friday TS TUI needs Node deps first:")
     print("  cd ui-tui")

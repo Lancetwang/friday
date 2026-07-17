@@ -19,6 +19,14 @@ const theme: Theme = {
 }
 
 const primary = '#1D4ED8'
+const APPROVAL_OPTIONS = [
+  { id: 'once', label: 'Approve once' },
+  { id: 'session', label: 'Approve for this session' },
+  { id: 'reject', label: 'Reject' },
+  { id: 'instruct', label: 'Tell Friday what to do' }
+] as const
+
+type ApprovalDecision = typeof APPROVAL_OPTIONS[number]['id']
 
 const HELP_TEXT = `# Friday commands
 
@@ -32,8 +40,8 @@ const HELP_TEXT = `# Friday commands
 | \`/compact\` | Summarize the live conversation into a fresh context. |
 | \`/goal <text>\` | Loop until the verifier passes, blocks, needs approval, or is cancelled. |
 | \`/resume\` | Resume recent Friday session context. |
-| \`/approve\` | Run the pending dangerous shell command. |
-| \`/reject\` | Reject the pending dangerous shell command. |
+| \`/approve\` | Open the pending approval choices. |
+| \`/reject\` | Open the pending approval choices with Reject selected. |
 | \`/reset\` | Clear Friday project state and global Friday user state. |
 | \`/exit\` | Close the TUI. \`/quit\` works too. |
 `
@@ -41,7 +49,6 @@ const HELP_TEXT = `# Friday commands
 export function App({ gateway }: { gateway: GatewayClient }) {
   const app = useApp()
   const activeTurn = useRef<string | null>(null)
-  const activeGoal = useRef<string | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [toolsExpanded, setToolsExpanded] = useState(false)
@@ -64,9 +71,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'message.delta') {
         setStreaming(text => text + event.payload.text)
       } else if (event.type === 'message.complete') {
-        setMessages(items => [...items, { metrics: event.payload.metrics, role: 'assistant', text: event.payload.text }])
+        if (event.payload.text) {
+          setMessages(items => [...items, { metrics: event.payload.metrics, role: 'assistant', text: event.payload.text }])
+        }
         activeTurn.current = null
-        activeGoal.current = null
         setProgress(event.payload.progress ?? null)
         setStreaming('')
         setBusy(false)
@@ -79,7 +87,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setMessages(items => updateToolRun(items, activeTurn.current, event.payload.name, { content: event.payload.content, endMs, error: event.payload.error }))
         const approval = approvalFromContent(event.payload.content)
         if (approval) {
-          setApprovalPicker(current => current ?? { approval, index: 0 })
+          setApprovalPicker(current => current ?? { approval, index: approvalIndex('once'), instruction: '' })
         }
         setActivity(event.payload.error ? `tool ${event.payload.name} failed` : '')
       } else if (event.type === 'verification.start') {
@@ -114,20 +122,12 @@ export function App({ gateway }: { gateway: GatewayClient }) {
 
   useInput((char, key) => {
     if (approvalPicker) {
-      if (key.leftArrow || key.upArrow || char === 'h' || char === 'k') {
+      if (key.upArrow) {
         setApprovalPicker(picker => picker && { ...picker, index: Math.max(0, picker.index - 1) })
-      } else if (key.rightArrow || key.downArrow || char === 'l' || char === 'j') {
-        setApprovalPicker(picker => picker && { ...picker, index: Math.min(1, picker.index + 1) })
+      } else if (key.downArrow) {
+        setApprovalPicker(picker => picker && { ...picker, index: Math.min(APPROVAL_OPTIONS.length - 1, picker.index + 1) })
       } else if (key.return) {
-        const reject = approvalPicker.index === 1
-        setApprovalPicker(null)
-        setBusy(true)
-        void gateway.request(reject ? 'approval.reject' : 'approval.approve').then(result =>
-          handleApprovalResult(result, reject)
-        ).catch(error => {
-          setBusy(false)
-          setMessages(items => [...items, { role: 'system', text: error.message }])
-        })
+        submitApproval(approvalPicker)
       } else if (key.escape) {
         setApprovalPicker(null)
       }
@@ -188,11 +188,9 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       setStreaming('')
       const turnId = `turn-${Date.now()}`
       activeTurn.current = turnId
-      activeGoal.current = goal
       setMessages(items => [...items, { role: 'user', text: `/goal ${goal}`, turnId }])
       void gateway.request('goal.run', { text: goal }).catch(error => {
         activeTurn.current = null
-        activeGoal.current = null
         setBusy(false)
         setStreaming('')
         setMessages(items => [...items, { role: 'system', text: error.message }])
@@ -210,7 +208,6 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     setMessages(items => [...items, { role: 'user', text, turnId }])
     void gateway.request('chat.send', { text }).catch(error => {
       activeTurn.current = null
-      activeGoal.current = null
       setBusy(false)
       setStreaming('')
       setMessages(items => [...items, { role: 'system', text: error.message }])
@@ -225,17 +222,47 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} streaming /> : null}
       </Box>
       {resumePicker ? <ResumePickerView picker={resumePicker} /> : null}
-      {approvalPicker ? <ApprovalPickerView picker={approvalPicker} /> : null}
+      {approvalPicker ? (
+        <ApprovalPickerView
+          onInstructionChange={instruction => setApprovalPicker(picker => picker && { ...picker, instruction })}
+          picker={approvalPicker}
+        />
+      ) : null}
       <Composer busy={busy || Boolean(resumePicker) || Boolean(approvalPicker)} input={input} onChange={setInput} onSubmit={submit} />
     </Box>
   )
 
   function handleApprovalResult(result: unknown, rejected: boolean) {
-    if (!rejected && isContinuedApproval(result)) {
+    if (isContinuedApproval(result)) {
       return
     }
     setBusy(false)
-    setMessages(items => [...items, { role: 'system', text: `${rejected ? 'Approval rejected' : 'Approval result'}:\n\n${JSON.stringify(result, null, 2)}` }])
+    setMessages(items => [...items, { role: 'system', text: rejected ? 'Command rejected.' : 'Command approved.' }])
+  }
+
+  function submitApproval(picker: ApprovalPicker) {
+    const instruction = picker.instruction.trim()
+    const decision = APPROVAL_OPTIONS[picker.index]?.id
+    if (!decision || (decision === 'instruct' && !instruction)) {
+      return
+    }
+    const rejected = decision === 'reject' || decision === 'instruct'
+    const method = decision === 'reject' ? 'approval.reject' : decision === 'instruct' ? 'approval.instruct' : 'approval.approve'
+    const params = decision === 'session' ? { session: true } : decision === 'instruct' ? { text: instruction } : undefined
+    if (decision === 'instruct') {
+      const turnId = `turn-${Date.now()}`
+      activeTurn.current = turnId
+      setMessages(items => [...items, { role: 'user', text: instruction, turnId }])
+    }
+    setApprovalPicker(null)
+    setBusy(true)
+    void gateway.request(method, params).then(result =>
+      handleApprovalResult(result, rejected)
+    ).catch(error => {
+      activeTurn.current = null
+      setBusy(false)
+      setMessages(items => [...items, { role: 'system', text: error.message }])
+    })
   }
 }
 
@@ -309,9 +336,9 @@ function runCommand(
       }
     })
   } else if (command.startsWith('/approve')) {
-    openApprovalPicker(gateway, setApprovalPicker, setMessages, 0)
+    openApprovalPicker(gateway, setApprovalPicker, setMessages, 'once')
   } else if (command.startsWith('/reject')) {
-    openApprovalPicker(gateway, setApprovalPicker, setMessages, 1)
+    openApprovalPicker(gateway, setApprovalPicker, setMessages, 'reject')
   } else if (command.startsWith('/reset')) {
     void gateway.request('session.reset').then(() => {
       setProgress(null)
@@ -361,6 +388,7 @@ type Approval = {
 type ApprovalPicker = {
   approval: Approval
   index: number
+  instruction: string
 }
 
 type ToolRun = {
@@ -550,17 +578,28 @@ function ResumePickerView({ picker }: { picker: ResumePicker }) {
   )
 }
 
-function ApprovalPickerView({ picker }: { picker: ApprovalPicker }) {
-  const approve = picker.index === 0
+function ApprovalPickerView({ onInstructionChange, picker }: { onInstructionChange: (value: string) => void; picker: ApprovalPicker }) {
+  const decision = APPROVAL_OPTIONS[picker.index]?.id
   return (
     <Box borderColor={theme.warn} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
-      <Text color={theme.warn}>Approve command - Left/Right or Up/Down, Enter</Text>
+      <Text color={theme.warn}>Approval required - Up/Down, Enter</Text>
       <Text color={theme.text}>{shortText(picker.approval.command || 'unknown command', 160)}</Text>
       {picker.approval.reason ? <Text color={theme.dim}>reason: {picker.approval.reason}</Text> : null}
-      <Box marginTop={1}>
-        <Text color={approve ? theme.ok : theme.dim}>{approve ? '> ' : '  '}Approve</Text>
-        <Text color={theme.dim}>   </Text>
-        <Text color={!approve ? theme.error : theme.dim}>{!approve ? '> ' : '  '}Reject</Text>
+      <Box flexDirection="column" marginTop={1}>
+        {APPROVAL_OPTIONS.map((option, index) => {
+          const selected = index === picker.index
+          const color = option.id === 'reject' ? theme.error : selected ? theme.ok : theme.dim
+          return <Text color={color} key={option.id}>{selected ? '[x]' : '[ ]'} {option.label}</Text>
+        })}
+        <Box>
+          <Text color={decision === 'instruct' ? theme.accent : theme.dim}>    &gt; </Text>
+          <TextInput
+            focus={decision === 'instruct'}
+            onChange={onInstructionChange}
+            placeholder="Use another approach..."
+            value={picker.instruction}
+          />
+        </Box>
       </Box>
     </Box>
   )
@@ -616,11 +655,11 @@ function openApprovalPicker(
   gateway: GatewayClient,
   setApprovalPicker: React.Dispatch<React.SetStateAction<ApprovalPicker | null>>,
   setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>,
-  index: number
+  decision: ApprovalDecision
 ) {
   void gateway.request<Approval>('approval.pending').then(approval => {
     if (approval.pending) {
-      setApprovalPicker({ approval, index })
+      setApprovalPicker({ approval, index: approvalIndex(decision), instruction: '' })
     } else {
       setMessages(items => [...items, { role: 'system', text: approval.message || 'No pending approval.' }])
     }
@@ -634,6 +673,10 @@ function shortText(value: string, max: number) {
 
 function formatSeconds(seconds: number) {
   return `${Math.max(0, seconds).toFixed(1)}s`
+}
+
+function approvalIndex(decision: ApprovalDecision) {
+  return APPROVAL_OPTIONS.findIndex(option => option.id === decision)
 }
 
 function formatProgress(progress: ProgressState) {

@@ -42,6 +42,7 @@ def run_turn(
     on_context_notice: Callable[[str], None] | None = None,
     approval_result: dict[str, Any] | None = None,
     user_label: str | None = None,
+    continuation: bool = False,
 ) -> TurnResult:
     event_handler = context.on_event
     usage_start = context.usage.snapshot()
@@ -59,7 +60,7 @@ def run_turn(
         context,
         text,
         mode="goal" if goal else "normal",
-        continuation=user_label == "/approve",
+        continuation=continuation,
     )
     append_progress_checkpoint(context)
     if on_progress:

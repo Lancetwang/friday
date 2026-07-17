@@ -13,7 +13,7 @@ from friday.config import load_model_config
 from friday.context import context_report
 from friday.memory import format_memory_result, run_memory_command
 from friday.progress import current_progress, finish_progress
-from friday.tools import approve_pending, build_tools, pending_approval
+from friday.tools import allow_permissions_for_session, approve_pending, build_tools, pending_approval
 from friday.turn import run_turn
 
 _real_stdout = sys.stdout
@@ -41,7 +41,7 @@ class Gateway:
     def __init__(self) -> None:
         self.agent: Agent | None = None
         self.context: RunContext | None = None
-        self.pending_after_approval: dict[str, Any] | None = None
+        self.suspended_turn: dict[str, Any] | None = None
 
     def handle(self, msg: dict[str, Any]) -> None:
         rid = msg.get("id")
@@ -69,7 +69,7 @@ class Gateway:
                 removed = reset_friday(include_user=True)
                 self.agent = None
                 self.context = None
-                self.pending_after_approval = None
+                self.suspended_turn = None
                 self.ok(rid, {"removed": [str(path) for path in removed], "info": self.session_info()})
             elif method == "session.compact":
                 agent, context = self.ensure_agent()
@@ -79,7 +79,7 @@ class Gateway:
             elif method == "session.resume":
                 self.agent, self.context, count = resume_friday(stream=True, resume_id=params.get("id"))
                 self.context.on_event = self.on_agent_event
-                self.pending_after_approval = None
+                self.suspended_turn = None
                 self.ok(rid, {"count": count, "progress": current_progress(self.context)})
             elif method == "session.resume_choices":
                 self.ok(rid, {"choices": resume_choices()})
@@ -87,21 +87,47 @@ class Gateway:
                 self.ok(rid, pending_approval())
             elif method == "approval.approve":
                 result = approve_pending()
-                continuation = self.pending_after_approval if result.get("approved") else None
-                self.pending_after_approval = None
-                if continuation:
-                    prompt = str(continuation["text"]) if continuation.get("goal") else _approval_followup_prompt(result)
+                suspended = self.suspended_turn if result.get("approved") else None
+                self.suspended_turn = None
+                if result.get("approved") and params.get("session"):
+                    _agent, context = self.ensure_agent()
+                    allow_permissions_for_session(context)
+                if suspended:
+                    prompt = str(suspended["text"]) if suspended.get("goal") else _approval_followup_prompt()
                     continued = self.chat(
                         prompt,
-                        goal=bool(continuation.get("goal")),
+                        goal=bool(suspended.get("goal")),
                         approval_result=result,
-                        save_user="/approve",
+                        user_label="/approve",
+                        continuation=True,
                     )
                     self.ok(rid, {"approval": result, "approved": True, "continued": True, "message": continued})
                 else:
                     self.ok(rid, result)
+            elif method == "approval.instruct":
+                instruction = str(params.get("text") or "").strip()
+                if not instruction:
+                    raise ValueError("Tell Friday what to do before continuing.")
+                suspended = self.suspended_turn
+                self.suspended_turn = None
+                result = approve_pending(reject=True)
+                if suspended and result.get("rejected"):
+                    goal = bool(suspended.get("goal"))
+                    prompt = instruction
+                    if goal:
+                        prompt = f"{suspended['text']}\n\nHuman guidance after declining the pending command: {instruction}"
+                    continued = self.chat(
+                        prompt,
+                        goal=goal,
+                        approval_result={**result, "instruction": instruction},
+                        user_label=instruction,
+                        continuation=True,
+                    )
+                    self.ok(rid, {"approval": result, "continued": True, "message": continued})
+                else:
+                    self.ok(rid, result)
             elif method == "approval.reject":
-                self.pending_after_approval = None
+                self.suspended_turn = None
                 result = approve_pending(reject=True)
                 if self.context is not None and result.get("rejected"):
                     finish_progress(self.context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
@@ -126,7 +152,8 @@ class Gateway:
         *,
         goal: bool = False,
         approval_result: dict[str, Any] | None = None,
-        save_user: str | None = None,
+        user_label: str | None = None,
+        continuation: bool = False,
     ) -> dict[str, Any]:
         agent, context = self.ensure_agent()
         self.event("message.start", {"text": text})
@@ -139,12 +166,13 @@ class Gateway:
             on_verify=lambda verification: self.event("verification.complete", verification_status(verification)),
             on_context_notice=lambda notice: self.event("gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"}),
             approval_result=approval_result,
-            user_label=save_user,
+            user_label=user_label,
+            continuation=continuation,
         )
         self.agent, self.context = result.agent, result.context
         if self.context.events:
             pending = pending_approval(Path(self.context.metadata["workspace"]))
-            self.pending_after_approval = {"text": text, "goal": goal} if pending.get("pending") else None
+            self.suspended_turn = {"text": text, "goal": goal} if pending.get("pending") else None
         self.event("message.complete", {"text": result.answer, "metrics": result.metrics, "progress": result.progress})
         return {"text": result.answer}
 
@@ -195,7 +223,7 @@ class Gateway:
             _real_stdout.flush()
 
 
-def _approval_followup_prompt(result: dict[str, Any]) -> str:
+def _approval_followup_prompt() -> str:
     return (
         "The user approved the pending command and it has now executed. "
         "Use the approval result in the system context to continue or briefly report the final state to the user. "

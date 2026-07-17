@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -20,7 +21,7 @@ from friday.memory import add_memory, list_memories, remove_memory, update_memor
 from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.skills import discover_skills, skill_routing
-from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, approve_pending, build_tools, pending_approval
+from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, _permission_decision, allow_permissions_for_session, approve_pending, build_tools, pending_approval
 from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt
 
 
@@ -158,6 +159,27 @@ class ToolTests(unittest.TestCase):
             self.assertTrue(denied["blocked"])
             self.assertEqual(edit["exit_code"], 0)
             self.assertTrue(delete["approval_required"])
+
+    def test_session_approval_skips_prompts_but_preserves_deny_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            friday_dir = Path(tmp) / ".friday"
+            friday_dir.mkdir()
+            (friday_dir / PERMISSIONS_FILE).write_text(
+                '{"version":1,"bash":{"allow":[],"deny":["Remove-Item protected.txt"],"require_approval":[]}}',
+                encoding="utf-8",
+            )
+            context = RunContext()
+            allow_permissions_for_session(context)
+            token = set_current_context(context)
+            try:
+                with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "manual"}, clear=False):
+                    allowed = _permission_decision(friday_dir, "Remove-Item ordinary.txt")
+                    denied = _permission_decision(friday_dir, "Remove-Item protected.txt")
+            finally:
+                reset_current_context(token)
+
+            self.assertEqual(allowed[0], "allow")
+            self.assertEqual(denied[0], "deny")
 
     def test_temporary_allowed_and_disallowed_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -652,6 +674,7 @@ class PromptTests(unittest.TestCase):
             self.assertIn("## Project Memory", text)
             self.assertNotIn("\n## Short-Term State\n", text)
             self.assertIn("project rules", text)
+            self.assertIn(f"- Current date: {date.today().isoformat()}", text)
 
     def test_runtime_prompt_defines_completion_and_web_research_stops(self) -> None:
         prompt = prompt_template("RUNTIME.md")
@@ -1004,6 +1027,37 @@ class CompactTests(unittest.TestCase):
 
 
 class VerificationTests(unittest.TestCase):
+    def test_inner_loop_suspends_immediately_when_tool_needs_approval(self) -> None:
+        class ApprovalModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_message(self, _messages, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    raise AssertionError("model was called after approval became pending")
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "pending", "type": "function", "function": {"name": "dangerous", "arguments": "{}"}}],
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                }
+
+        @tool(description="Request approval.")
+        def dangerous() -> dict:
+            return {"approval_required": True, "command": "Remove-Item note.txt"}
+
+        model = ApprovalModel()
+        agent = Agent(flow=build_guarded_flow(model, [dangerous], chat_kwargs={"stream": False}))
+        context = agent.new_context()
+        begin_guarded_run(context, context.usage.snapshot())
+
+        answer = agent.chat("delete it", context=context, max_steps=10)
+
+        self.assertEqual(answer, "")
+        self.assertEqual(model.calls, 1)
+        self.assertTrue(any(event.type == "approval.pending" for event in context.events))
+
     def test_inner_loop_repeated_tool_cycle_forces_final_answer(self) -> None:
         class RepeatingModel:
             def __init__(self) -> None:

@@ -1,6 +1,7 @@
 # Environment
 
 - Workspace: {workspace}
+- Current date: {current_date}
 - OS: {system} {release}
 - Shell: {shell} (the Bash tool runs {shell} here; prefer {shell} syntax)
 - Friday home: {friday_home}
