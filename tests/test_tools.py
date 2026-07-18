@@ -50,6 +50,7 @@ class ToolTests(unittest.TestCase):
             read = tools["Read"]("note.txt", start_line=2, line_count=2)
             self.assertEqual(read["content"], "2: two\n3: three")
             self.assertEqual(read["end_line"], 3)
+            self.assertNotIn("full_output_path", read)
 
             result = tools["Edit"]("note.txt", "TWO\nTHREE", start_line=2, end_line=3)
             self.assertEqual(result["mode"], "line_range")
@@ -63,6 +64,23 @@ class ToolTests(unittest.TestCase):
 
             tools["Edit"]("note.txt", "", start_line=1, end_line=5)
             self.assertEqual((root / "note.txt").read_text(encoding="utf-8"), "")
+
+    def test_read_saves_full_selected_output_only_when_over_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            tools["Write"]("long.txt", "\n".join(f"line-{index}-" + "x" * 40 for index in range(20)))
+
+            result = tools["Read"]("long.txt", line_count=20, max_chars=240)
+
+            artifact = root / result["full_output_path"]
+            self.assertTrue(result["output_truncated"])
+            self.assertLessEqual(len(result["content"]), 240)
+            self.assertIn("1: line-0", result["content"])
+            self.assertIn("20: line-19", result["content"])
+            self.assertIn("1: line-0", artifact.read_text(encoding="utf-8"))
+            self.assertIn("20: line-19", artifact.read_text(encoding="utf-8"))
+            self.assertIn(result["full_output_path"], result["content"])
 
     def test_run_shell_returns_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -81,6 +99,20 @@ class ToolTests(unittest.TestCase):
             result = tools["Bash"]("Write-Output '你好'" if os.name == "nt" else "printf '你好'")
 
             self.assertIn("你好", result["output"])
+
+    def test_run_shell_saves_full_output_only_when_over_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            result = tools["Bash"]('python -c "print(\'HEAD\' + \'x\' * 2000 + \'TAIL\')"', max_chars=200)
+
+            artifact = root / result["full_output_path"]
+            self.assertTrue(result["truncated"])
+            self.assertLessEqual(len(result["output"]), 200)
+            self.assertIn("HEAD", result["output"])
+            self.assertIn("TAIL", result["output"])
+            self.assertIn("HEAD" + "x" * 2000 + "TAIL", artifact.read_text(encoding="utf-8"))
 
     def test_run_shell_timeout_kills_the_process_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -403,6 +435,34 @@ class ToolTests(unittest.TestCase):
             self.assertIn("https://r.jina.ai/https://example.com/a%20b%23section", seen["url"])
             self.assertEqual(result["content"], "# Title\n\ncontent")
             self.assertFalse(result["truncated"])
+            self.assertNotIn("full_output_path", result)
+
+    def test_web_fetch_saves_full_markdown_only_when_over_limit(self) -> None:
+        content = "# Head\n\n" + "x" * 2000 + "\n\nTail"
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self) -> bytes:
+                return content.encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+
+            with patch("friday.tools.urllib.request.urlopen", return_value=FakeResponse()):
+                result = tools["WebFetch"]("https://example.com", max_chars=200)
+
+            artifact = root / result["full_output_path"]
+            self.assertTrue(result["truncated"])
+            self.assertLessEqual(len(result["content"]), 200)
+            self.assertIn("# Head", result["content"])
+            self.assertIn("Tail", result["content"])
+            self.assertEqual(artifact.read_text(encoding="utf-8"), content)
 
     def test_memory_is_managed_outside_the_model_toolset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -924,6 +984,28 @@ class CompactTests(unittest.TestCase):
         self.assertIn(output, simplified)
         self.assertIn('"extra": {"kept":true}', simplified)
         self.assertLess(len(simplified), len(original))
+
+    def test_tool_result_compaction_drops_recoverable_artifact_preview(self) -> None:
+        context = RunContext()
+        preview = "start\n" + "x" * 2000 + "\nend"
+        context.add_message(
+            "tool",
+            json.dumps({
+                "exit_code": 0,
+                "output": preview,
+                "full_output_path": ".friday/tool-results/bash-abc.txt",
+            }),
+            tool_call_id="call-1",
+        )
+
+        count = compact_tool_results(context)
+
+        self.assertEqual(count, 1)
+        simplified = context.messages[-1]["content"]
+        self.assertIn("full output preserved", simplified)
+        self.assertIn(".friday/tool-results/bash-abc.txt", simplified)
+        self.assertIn('"preview_removed":true', simplified)
+        self.assertNotIn("x" * 100, simplified)
 
     def test_prepare_context_compacts_tools_when_probe_is_worthwhile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -14,6 +14,8 @@ Friday keeps the tool surface small:
 
 `Bash` runs PowerShell on Windows and `bash -lc` elsewhere. A timeout terminates the whole spawned process tree so grandchildren cannot keep Friday blocked by inherited output pipes.
 
+`Read`, `Bash`, and `WebFetch` return their normal inline content while it fits the requested limit. On overflow, Friday returns a bounded head-and-tail preview and stores the complete text under `.friday/tool-results/`; the preview names the relative path and tells the agent to inspect it with `Read` or `Grep`. Context compaction may later remove the inline preview, but keeps the artifact path, source metadata, and execution status.
+
 Dangerous Bash commands create `.friday/pending_approval.json` and suspend the Agent Loop before another model call. The TUI offers four decisions: approve once, approve without asking again in the active session, reject, or reject and tell Friday how to continue. Explicit deny rules still apply when the active session has been allowed.
 
 `WebSearch` uses Tavily first when `TAVILY_API_KEY` is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Set `ANYSEARCH_API_KEY` for higher AnySearch limits; anonymous fallback remains available. Keys can be placed in the process environment, the workspace `.env`, or `~/.friday/.env`.

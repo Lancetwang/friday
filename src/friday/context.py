@@ -156,6 +156,15 @@ def _simplify_tool_result(content: str) -> str:
     if not isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
+    if isinstance(value.get("full_output_path"), str):
+        compacted = {key: item for key, item in value.items() if key not in {"content", "output"}}
+        compacted["preview_removed"] = True
+        return "[tool result compacted; full output preserved]\n" + json.dumps(
+            compacted,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
     lines = ["[tool result simplified; all fields preserved]"]
     for key, item in value.items():
         label = json.dumps(str(key), ensure_ascii=False)

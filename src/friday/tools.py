@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -58,24 +59,21 @@ def build_tools(workspace: Path, friday_dir: Path):
         text = file_path.read_text(encoding="utf-8")
         lines = text.splitlines()
         start = max(1, start_line)
-        limit = max(1, line_count)
-        out: list[str] = []
-        size = 0
-        for number, line in enumerate(lines[start - 1 : start - 1 + limit], start=start):
-            rendered = f"{number}: {line}"
-            if out and size + len(rendered) + 1 > max_chars:
-                break
-            out.append(rendered)
-            size += len(rendered) + 1
-        end = start + len(out) - 1 if out else start - 1
-        return with_context({
+        selected = lines[start - 1 : start - 1 + max(1, line_count)]
+        content = "\n".join(f"{number}: {line}" for number, line in enumerate(selected, start=start))
+        preview, artifact = _bounded_tool_output(workspace, "read", content, max_chars, ".txt")
+        end = start + len(selected) - 1 if selected else start - 1
+        result = {
             "path": str(file_path),
             "total_lines": len(lines),
             "start_line": start,
             "end_line": end,
             "truncated": end < len(lines),
-            "content": "\n".join(out),
-        }, [file_path])
+            "content": preview,
+        }
+        if artifact:
+            result.update({"output_truncated": True, **artifact})
+        return with_context(result, [file_path])
 
     @tool(description="Create or overwrite a UTF-8 text file inside the current workspace.", name="Write")
     def write_file(
@@ -203,7 +201,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         url: Annotated[str, "HTTP or HTTPS URL to fetch."],
         max_chars: Annotated[int, "Maximum characters to return."] = 8000,
     ) -> dict:
-        return _jina_fetch(url, max_chars)
+        return _jina_fetch(workspace, url, max_chars)
 
     @tool(description="Create or update the visible plan for the current non-trivial session goal.", name="UpdatePlan")
     def update_session_plan(
@@ -397,7 +395,7 @@ def _anysearch_results(text: str) -> list[dict]:
     return results
 
 
-def _jina_fetch(url: str, max_chars: int) -> dict:
+def _jina_fetch(workspace: Path, url: str, max_chars: int) -> dict:
     target = url.strip()
     if urllib.parse.urlsplit(target).scheme not in {"http", "https"}:
         return {"error": "WebFetch URL must start with http:// or https://."}
@@ -413,8 +411,15 @@ def _jina_fetch(url: str, max_chars: int) -> dict:
         return {"error": f"Jina HTTP {error.code}", "detail": error.read().decode("utf-8", errors="replace")[:1000]}
     except (urllib.error.URLError, TimeoutError) as error:
         return {"error": f"Jina fetch failed: {error}"}
-    limit = min(50000, max(1000, int(max_chars)))
-    return {"url": target, "content": _clip(content, limit), "chars": len(content), "truncated": len(content) > limit}
+    limit = min(50000, max(1, int(max_chars)))
+    preview, artifact = _bounded_tool_output(workspace, "webfetch", content, limit, ".md")
+    return {
+        "url": target,
+        "content": preview,
+        "chars": len(content),
+        "truncated": bool(artifact),
+        **artifact,
+    }
 
 
 def _jina_headers() -> dict[str, str]:
@@ -429,6 +434,34 @@ def _clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _bounded_tool_output(
+    workspace: Path,
+    kind: str,
+    content: str,
+    max_chars: int,
+    suffix: str,
+) -> tuple[str, dict[str, str]]:
+    limit = max(1, int(max_chars))
+    if len(content) <= limit:
+        return content, {}
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    path = workspace / ".friday" / "tool-results" / f"{kind}-{digest[:16]}{suffix}"
+    if not path.exists():
+        _write_text(path, content)
+    relative_path = path.relative_to(workspace).as_posix()
+    return _head_tail_preview(content, limit, relative_path), {"full_output_path": relative_path}
+
+
+def _head_tail_preview(content: str, limit: int, full_output_path: str) -> str:
+    marker = f"\n\n[Truncated; full output: {full_output_path}. Inspect with Read/Grep.]\n\n"
+    if limit <= len(marker) + 2:
+        return content[:limit]
+    room = limit - len(marker)
+    head = (room + 1) // 2
+    tail = room - head
+    return content[:head] + marker + content[-tail:]
 
 
 def _join_lines(lines: list[str], trailing_newline: bool) -> str:
@@ -471,8 +504,24 @@ def _run_shell(workspace: Path, command: str, timeout_seconds: int = 60, max_cha
         except subprocess.TimeoutExpired:
             process.kill()
             output = _timeout_output(error)
-        return {"exit_code": None, "timed_out": True, "output": (output or "")[-max_chars:]}
-    return {"exit_code": process.returncode, "timed_out": False, "output": (output or "")[-max_chars:]}
+        return _shell_result(workspace, output, max_chars, exit_code=None, timed_out=True)
+    return _shell_result(workspace, output, max_chars, exit_code=process.returncode, timed_out=False)
+
+
+def _shell_result(
+    workspace: Path,
+    output: str | None,
+    max_chars: int,
+    *,
+    exit_code: int | None,
+    timed_out: bool,
+) -> dict:
+    content = output or ""
+    preview, artifact = _bounded_tool_output(workspace, "bash", content, max_chars, ".txt")
+    result = {"exit_code": exit_code, "timed_out": timed_out, "output": preview}
+    if artifact:
+        result.update({"chars": len(content), "truncated": True, **artifact})
+    return result
 
 
 def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
