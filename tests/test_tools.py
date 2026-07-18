@@ -985,6 +985,15 @@ class CompactTests(unittest.TestCase):
         self.assertIn('"extra": {"kept":true}', simplified)
         self.assertLess(len(simplified), len(original))
 
+    def test_tool_result_compaction_probes_short_results_when_they_shrink(self) -> None:
+        context = RunContext()
+        original = json.dumps({"output": "\n" * 350})
+        self.assertLess(len(original), 900)
+        context.add_message("tool", original, tool_call_id="call-1")
+
+        self.assertEqual(compact_tool_results(context), 1)
+        self.assertLess(len(context.messages[-1]["content"]), len(original))
+
     def test_tool_result_compaction_drops_recoverable_artifact_preview(self) -> None:
         context = RunContext()
         preview = "start\n" + "x" * 2000 + "\nend"

@@ -11,7 +11,6 @@ from friday.config import DEFAULT_MODEL_CONFIG
 DEFAULT_CONTEXT_WINDOW = DEFAULT_MODEL_CONFIG.context_window
 TOOL_COMPACT_AT = 0.85
 TOOL_COMPACT_GAIN = 0.25
-TOOL_RESULT_LIMIT = 900
 
 
 def context_window(context: RunContext | None = None) -> int:
@@ -140,8 +139,6 @@ def _tool_compaction_probe(context: RunContext) -> list[tuple[dict[str, Any], in
         if message.get("role") != "tool" or message.get("friday_compacted"):
             continue
         content = str(message.get("content", ""))
-        if len(content) <= TOOL_RESULT_LIMIT:
-            continue
         simplified = _simplify_tool_result(content)
         if len(simplified) < len(content):
             probe.append((message, len(content), len(simplified)))
