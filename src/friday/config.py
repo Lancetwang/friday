@@ -38,6 +38,24 @@ def build_model(config: ModelConfig) -> LLM:
     return LLM(api_key=api_key, base_url=config.base_url or None, model=config.model)
 
 
+def load_model_environment(workspace: Path, *, home: Path | None = None) -> None:
+    for path in (workspace.resolve() / ".env", (home or Path.home()) / ".friday" / ".env"):
+        if not path.exists():
+            continue
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().lstrip("\ufeff")
+            if not key or key in os.environ:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                value = value[1:-1]
+            os.environ[key] = value
+
+
 def default_config_text() -> str:
     return json.dumps(asdict(DEFAULT_MODEL_CONFIG), ensure_ascii=False, indent=2) + "\n"
 

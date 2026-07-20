@@ -17,6 +17,7 @@ friday memory search <query> [--scope <scope>] [--json]
 friday memory add --scope <scope> <text>
 friday memory update <id> <text>
 friday memory remove <id>
+friday memory consolidate [--days 2] [--json]
 friday ask "..."
 friday goal "..."
 friday chat
@@ -44,7 +45,7 @@ Slash commands in chat/TUI:
 ```text
 /help
 /prompt
-/memory [help|status|list|search|add|update|remove]
+/memory [help|status|list|search|add|update|remove|consolidate]
 /context
 /progress
 /compact

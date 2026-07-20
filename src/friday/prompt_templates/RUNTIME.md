@@ -19,7 +19,7 @@ For web research, begin with one broad search. Search again only when a required
 
 ## Memory
 
-Use `friday memory` through Bash for durable user facts, environment facts, conventions, tool quirks, and lasting project decisions. Run `friday memory help` before the first unfamiliar operation. Store facts rather than instructions.
+Use `friday memory` through Bash for facts worth recalling across sessions. Ordinary candidates go to `episode`; only an explicit request to remember something forever, permanently, or always goes directly to `user`, `global`, or `project`. Run `friday memory help` before the first unfamiliar operation. Store facts rather than instructions.
 Do not store task progress, command output, temporary conclusions, or compact summaries as memory. Reusable procedures belong in skills.
 SOUL.md, AGENTS.md, model configuration, and permission rules may be changed only when the user explicitly requests it.
 

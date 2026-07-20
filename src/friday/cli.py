@@ -10,6 +10,7 @@ from friday.app import build_friday, build_instructions, compact_friday, ensure_
 from friday.context import context_report
 from friday.memory import (
     add_memory,
+    consolidate_memory,
     format_memory_result,
     list_memories,
     memory_status,
@@ -77,6 +78,9 @@ def main(argv: list[str] | None = None) -> None:
     memory_remove = memory_sub.add_parser("remove", help="Remove one memory entry by id.")
     memory_remove.add_argument("id")
     memory_remove.add_argument("--json", action="store_true")
+    memory_consolidate = memory_sub.add_parser("consolidate", help="Merge and promote recent episodic notes with one LLM call.")
+    memory_consolidate.add_argument("--days", type=int, default=2)
+    memory_consolidate.add_argument("--json", action="store_true")
     context = sub.add_parser("context", help="Print context usage for a saved session.")
     context.add_argument("--session", help="Inspect a specific session id.")
     progress = sub.add_parser("progress", help="Print progress for a saved Friday session.")
@@ -436,6 +440,8 @@ def _memory_cli(args, parser: argparse.ArgumentParser) -> None:
         result = update_memory(root, args.id, _memory_text(args, parser))
     elif action == "remove":
         result = remove_memory(root, args.id)
+    elif action == "consolidate":
+        result = consolidate_memory(root, days=args.days)
     else:
         parser.error(f"unknown memory command: {action}")
         return

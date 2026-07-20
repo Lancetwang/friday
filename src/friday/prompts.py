@@ -16,6 +16,7 @@ def prompt_template(name: str) -> str:
 
 
 COMPACT_PROMPT = prompt_template("COMPACT.md").strip()
+MEMORY_CONSOLIDATE_PROMPT = prompt_template("MEMORY_CONSOLIDATE.md").strip()
 VERIFIER_NOTES = prompt_template("VERIFIER.md").strip()
 
 

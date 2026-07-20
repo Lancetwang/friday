@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shutil
 import tempfile
@@ -15,7 +14,7 @@ from typing import Any
 from agent_core import Agent, RunContext
 
 from friday.agent_flow import build_guarded_flow
-from friday.config import ModelConfig, build_model, default_config_text, load_model_config
+from friday.config import ModelConfig, build_model, default_config_text, load_model_config, load_model_environment
 from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
 from friday.prompts import (
     COMPACT_PROMPT,
@@ -47,9 +46,7 @@ LEGACY_PROMPT_DEFAULT_HASHES = {
 
 def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
-    root_env = root / ".env"
-    _load_env(root_env)
-    _load_env(Path.home() / ".friday" / ".env")
+    load_model_environment(root)
     ensure_user_home(Path.home())
     friday_dir = root / ".friday"
     config = load_model_config(root)
@@ -112,23 +109,6 @@ def _installed_core_url() -> str:
         return ""
 
 
-def _load_env(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip().lstrip("\ufeff")
-        if not key or key in os.environ:
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        os.environ[key] = value
-
-
 def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | None = None) -> str:
     user_dir = Path.home() / ".friday"
     config = config or load_model_config(workspace)
@@ -153,8 +133,8 @@ def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | 
 
 def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on_delta: Any = None) -> tuple[Agent, RunContext, str]:
     # One in-band pass: inserted into the current conversation so it reuses the cached
-    # prefix. Within this single turn the agent saves durable facts through Friday's CLI
-    # (so compaction never forgets them), then its final message is the structured summary.
+    # prefix. Within this single turn the agent saves memory candidates through Friday's
+    # CLI (so compaction never forgets them), then returns the structured summary.
     recent_messages = _recent_turn_messages(context)
     session_id = str(context.metadata.get("session_id") or "")
     progress = current_progress(context)

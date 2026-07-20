@@ -1089,7 +1089,7 @@ class CompactTests(unittest.TestCase):
 
             # Single in-band pass: one chat carrying both the memory step and the schema.
             self.assertEqual(len(fake_agent.prompts), 1)
-            self.assertIn("friday memory add", fake_agent.prompts[0])
+            self.assertIn("friday memory add --scope episode", fake_agent.prompts[0])
             self.assertIn("## Current Goal", fake_agent.prompts[0])
             self.assertNotIn("## Recent Conversations", fake_agent.prompts[0])
             self.assertEqual(summary, "Continue with the memory harness work.")

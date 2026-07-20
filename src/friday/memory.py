@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from friday.config import build_model, load_model_config, load_model_environment
+from friday.prompts import MEMORY_CONSOLIDATE_PROMPT
 
 USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
@@ -23,6 +26,14 @@ _CAPTURE_RE = re.compile(
     r"(?i:\bremember\b|from now on|\bi (?:prefer|like|dislike|usually|tend)\b|"
     r"my name is|don't do that again|do not do that again)"
 )
+_PERMANENT_RE = re.compile(
+    r"(?:永远|始终)(?:记住|记得|不要忘记)|永久(?:记住|保存)|"
+    r"(?i:\balways remember\b|\bremember (?:this|that|it|me) forever\b|\bnever forget\b)"
+)
+_PROJECT_RE = re.compile(
+    r"这个项目|当前项目|本项目|这个仓库|当前仓库|这个分支|"
+    r"(?i:\bthis (?:project|repository|repo|branch|workspace)\b|\bcurrent (?:project|repository|repo|branch|workspace)\b)"
+)
 _HOT_USER_RE = re.compile(
     r"我(?:更)?(?:喜欢|不喜欢|偏好|倾向|习惯)|我叫|我的名字是|记住我的|"
     r"(?:默认|请).{0,30}(?:中文|英文).{0,20}(?:回答|回复|交流)|"
@@ -30,9 +41,6 @@ _HOT_USER_RE = re.compile(
     r"(?i:\bi (?:prefer|like|dislike|usually|tend)\b|my name is|"
     r"\bi am (?:an? )?(?:developer|engineer|student|researcher|writer|designer)\b)"
 )
-_TRANSIENT_PROFILE_RE = re.compile(r"这个|这种|本次|当前|这次|(?i:\bthis\b|\bthat\b|current task|this time)")
-
-
 def memory_status(workspace: Path, *, home: Path | None = None) -> dict[str, Any]:
     root = workspace.resolve()
     records = list_memories(root, home=home)
@@ -73,6 +81,7 @@ def add_memory(
     source: str = "cli",
     session_id: str = "",
     now: datetime | None = None,
+    count: int = 1,
 ) -> dict[str, Any]:
     text = _clean_content(content)
     if scope not in MEMORY_SCOPES:
@@ -84,12 +93,14 @@ def add_memory(
     if _SECRET_RE.search(text):
         raise ValueError("Memory content appears to contain a secret or credential.")
 
+    timestamp = now or datetime.now()
     existing = list_memories(workspace, scope=scope, home=home)
     duplicate = next((item for item in existing if _normalize(item["content"]) == _normalize(text)), None)
     if duplicate:
+        if scope == "episode":
+            return _increment_episode(workspace.resolve(), duplicate["id"], max(1, count), timestamp, session_id, home)
         return {**duplicate, "duplicate": True}
 
-    timestamp = now or datetime.now()
     path, limit = _write_target(workspace.resolve(), scope, home, timestamp)
     record_id = hashlib.sha256(f"{scope}\0{text}".encode("utf-8")).hexdigest()[:12]
     metadata = {
@@ -99,6 +110,9 @@ def add_memory(
     }
     if session_id:
         metadata["session"] = session_id
+    if scope == "episode":
+        metadata["count"] = max(1, count)
+        metadata["workspaces"] = [str(workspace.resolve())]
     header = _header(scope, timestamp)
     current = path.read_text(encoding="utf-8") if path.exists() else header
     entry = f"- {text}\n<!-- friday-memory {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))} -->\n"
@@ -175,17 +189,23 @@ def capture_user_memory(
 ) -> dict[str, Any] | None:
     # ponytail: lexical capture stays intentionally conservative; add configurable
     # patterns only after real false-positive/false-negative traces justify them.
-    if not _CAPTURE_RE.search(text) or _SECRET_RE.search(text):
+    if _SECRET_RE.search(text):
+        return None
+    permanent_signal = _PERMANENT_RE.search(text)
+    if permanent_signal:
+        permanent = add_memory(
+            workspace,
+            _permanent_scope(text),
+            text,
+            home=home,
+            source="user",
+            session_id=session_id,
+        )
+        return {"episode": None, "promoted": [permanent]}
+    if not _CAPTURE_RE.search(text):
         return None
     episode = add_memory(workspace, "episode", text, home=home, source="user", session_id=session_id)
-    promoted = []
-    for fact in _hot_user_facts(text):
-        try:
-            promoted.append(add_memory(workspace, "user", fact, home=home, source="user", session_id=session_id))
-        except ValueError:
-            # The dated evidence remains available even if the bounded hot profile is full.
-            pass
-    return {"episode": episode, "promoted": promoted}
+    return {"episode": episode, "promoted": []}
 
 
 def relevant_memory(workspace: Path, query: str, *, home: Path | None = None) -> str:
@@ -207,6 +227,106 @@ def relevant_memory(workspace: Path, query: str, *, home: Path | None = None) ->
     return "\n".join(lines) if len(lines) > 3 else ""
 
 
+def consolidate_memory(
+    workspace: Path,
+    *,
+    days: int = 2,
+    home: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    if days < 1:
+        raise ValueError("days must be a positive integer.")
+    root = workspace.resolve()
+    timestamp = now or datetime.now()
+    episodes = _recent_episode_entries(root, days, home, timestamp.date())
+    if not episodes:
+        return {"reviewed": 0, "merged": 0, "promoted": 0, "remaining": 0}
+
+    operations = _review_memory(root, episodes, home)
+    candidate_ids = {record["id"] for record in episodes}
+    used: set[str] = set()
+    merged = promoted = 0
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        source_ids = [
+            str(record_id)
+            for record_id in operation.get("source_ids", [])
+            if str(record_id) in candidate_ids and str(record_id) not in used
+        ]
+        records = []
+        for record_id in dict.fromkeys(source_ids):
+            try:
+                record = _find_memory(root, record_id, home)
+            except ValueError:
+                continue
+            if record["scope"] == "episode":
+                records.append(record)
+        content = _clean_content(str(operation.get("content") or ""))
+        if not records or not content or len(content) > EPISODE_LIMIT or _SECRET_RE.search(content):
+            continue
+        total_count = sum(_record_count(record) for record in records)
+        action = str(operation.get("action") or "").lower()
+        if action == "promote":
+            scope = str(operation.get("scope") or "").lower()
+            if total_count < 2 or scope not in {"user", "global", "project"}:
+                continue
+            if scope == "project" and any(_record_workspaces(record) != {root} for record in records):
+                continue
+            try:
+                add_memory(root, scope, content, home=home, source="consolidation", now=timestamp)
+            except ValueError:
+                continue
+            _remove_records(records)
+            promoted += 1
+        elif action == "merge" and (len(records) > 1 or _normalize(content) != _normalize(records[0]["content"])):
+            _merge_episode_records(records, content, total_count, timestamp)
+            merged += 1
+        else:
+            continue
+        used.update(record["id"] for record in records)
+
+    remaining = len(_recent_episode_entries(root, days, home, timestamp.date()))
+    return {
+        "reviewed": len(episodes),
+        "merged": merged,
+        "promoted": promoted,
+        "remaining": remaining,
+    }
+
+
+def _review_memory(workspace: Path, episodes: list[dict[str, Any]], home: Path | None) -> list[dict[str, Any]]:
+    load_model_environment(workspace, home=home)
+    config = load_model_config(workspace, home=home)
+    permanent = [record for record in _all_entries(workspace, "all", home) if record["scope"] != "episode"]
+    payload = {
+        "workspace": str(workspace),
+        "episodes": [_public_record(record) for record in episodes],
+        "permanent_memory": [_public_record(record) for record in permanent],
+    }
+    response = build_model(config).chat_message(
+        [
+            {"role": "system", "content": MEMORY_CONSOLIDATE_PROMPT},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        temperature=0,
+        max_tokens=min(4000, config.max_output_tokens),
+        stream=False,
+    )
+    content = str(response.get("content") or "")
+    start, end = content.find("{"), content.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("Memory consolidation model returned invalid JSON.")
+    try:
+        value = json.loads(content[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise ValueError("Memory consolidation model returned invalid JSON.") from exc
+    operations = value.get("operations") if isinstance(value, dict) else None
+    if not isinstance(operations, list):
+        raise ValueError("Memory consolidation model did not return an operations list.")
+    return operations
+
+
 def memory_help() -> str:
     return """Memory commands:
   status                         Show memory counts, sizes, and files.
@@ -215,6 +335,7 @@ def memory_help() -> str:
   add <scope> <text>             Store one durable fact or episode.
   update <id> <text>             Replace an existing entry.
   remove <id>                    Forget an entry.
+  consolidate [--days N]         Merge and promote recent episodes with one LLM call.
 
 Use `friday memory <command> --help` for CLI flags. Current task progress is not memory."""
 
@@ -232,12 +353,21 @@ def format_memory_result(value: dict[str, Any] | str) -> str:
         if not memories:
             return "No matching memory."
         lines = ["# Memories", ""]
-        lines.extend(f"- `{item['id']}` [{item['scope']}] {item['content']}" for item in memories)
+        for item in memories:
+            count = f" x{item['count']}" if item.get("count", 1) > 1 else ""
+            lines.append(f"- `{item['id']}` [{item['scope']}]{count} {item['content']}")
         return "\n".join(lines)
+    if "reviewed" in value:
+        return (
+            f"Consolidated {value['reviewed']} episodic notes: "
+            f"{value['merged']} merged, {value['promoted']} promoted, {value['remaining']} remaining."
+        )
     if value.get("removed"):
         return f"Removed memory `{value['id']}`: {value['content']}"
     if value.get("id"):
-        suffix = " (already present)" if value.get("duplicate") else ""
+        suffix = ""
+        if value.get("duplicate"):
+            suffix = f" (count {value['count']})" if value.get("scope") == "episode" else " (already present)"
         return f"Saved memory `{value['id']}` [{value['scope']}]{suffix}: {value['content']}"
     return json.dumps(value, ensure_ascii=False, indent=2)
 
@@ -259,6 +389,14 @@ def run_memory_command(command: str, workspace: Path, *, home: Path | None = Non
         return update_memory(workspace, words[1], " ".join(words[2:]), home=home)
     if action == "remove" and len(words) == 2:
         return remove_memory(workspace, words[1], home=home)
+    if action == "consolidate":
+        days = 2
+        if "--days" in words:
+            index = words.index("--days")
+            if index + 1 >= len(words):
+                raise ValueError("--days requires a positive integer.")
+            days = int(words[index + 1])
+        return consolidate_memory(workspace, days=days, home=home)
     raise ValueError(memory_help())
 
 
@@ -323,6 +461,89 @@ def _find_memory(workspace: Path, record_id: str, home: Path | None) -> dict[str
     return matches[0]
 
 
+def _increment_episode(
+    workspace: Path,
+    record_id: str,
+    increment: int,
+    now: datetime,
+    session_id: str,
+    home: Path | None,
+) -> dict[str, Any]:
+    record = _find_memory(workspace, record_id, home)
+    metadata = dict(record["metadata"])
+    metadata["count"] = _record_count(record) + increment
+    metadata["last_seen"] = now.isoformat(timespec="seconds")
+    if session_id:
+        metadata["last_session"] = session_id
+    workspaces = _record_workspaces(record)
+    workspaces.add(workspace.resolve())
+    metadata["workspaces"] = sorted(str(path) for path in workspaces)
+    _replace_entry(record, [f"- {record['content']}", _metadata_line(metadata)])
+    return {**_public_record({**record, "metadata": metadata}), "duplicate": True}
+
+
+def _recent_episode_entries(workspace: Path, days: int, home: Path | None, today: date) -> list[dict[str, Any]]:
+    cutoff = today - timedelta(days=days - 1)
+    records = []
+    for record in _all_entries(workspace, "episode", home):
+        try:
+            observed = str(record["metadata"].get("last_seen") or record["metadata"].get("created") or Path(record["path"]).stem)
+            recorded = date.fromisoformat(observed[:10])
+        except (TypeError, ValueError):
+            continue
+        if recorded >= cutoff:
+            records.append(record)
+    return records
+
+
+def _merge_episode_records(records: list[dict[str, Any]], content: str, count: int, now: datetime) -> None:
+    primary, rest = records[0], records[1:]
+    workspaces = set().union(*(_record_workspaces(record) for record in records))
+    metadata = dict(primary["metadata"])
+    metadata.update(
+        id=hashlib.sha256(f"episode\0{content}".encode("utf-8")).hexdigest()[:12],
+        count=max(1, count),
+        consolidated=now.isoformat(timespec="seconds"),
+        workspaces=sorted(str(path) for path in workspaces),
+    )
+    _replace_entry(primary, [f"- {content}", _metadata_line(metadata)])
+    _remove_records(rest)
+
+
+def _remove_records(records: list[dict[str, Any]]) -> None:
+    by_path: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        by_path.setdefault(record["path"], []).append(record)
+    for grouped in by_path.values():
+        for record in sorted(grouped, key=lambda item: item["_line"], reverse=True):
+            _replace_entry(record, [])
+
+
+def _record_count(record: dict[str, Any]) -> int:
+    value = record.get("metadata", {}).get("count", 1)
+    return max(1, value) if isinstance(value, int) and not isinstance(value, bool) else 1
+
+
+def _record_workspaces(record: dict[str, Any]) -> set[Path]:
+    metadata = record.get("metadata", {})
+    values = metadata.get("workspaces")
+    if not isinstance(values, list):
+        values = [metadata.get("workspace")] if metadata.get("workspace") else []
+    return {Path(str(value)).resolve() for value in values if str(value).strip()}
+
+
+def _metadata_line(metadata: dict[str, Any]) -> str:
+    return f"<!-- friday-memory {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))} -->"
+
+
+def _permanent_scope(text: str) -> str:
+    if _PROJECT_RE.search(text):
+        return "project"
+    if _HOT_USER_RE.search(text):
+        return "user"
+    return "global"
+
+
 def _replace_entry(record: dict[str, Any], replacement: list[str]) -> None:
     path = Path(record["path"])
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -337,7 +558,8 @@ def _replace_entry(record: dict[str, Any], replacement: list[str]) -> None:
 
 def _public_record(record: dict[str, Any]) -> dict[str, Any]:
     result = {key: record[key] for key in ("id", "scope", "content", "path", "source")}
-    for key in ("created", "updated", "session"):
+    result["count"] = _record_count(record)
+    for key in ("created", "updated", "session", "last_seen", "last_session", "workspace", "workspaces"):
         if record["metadata"].get(key):
             result[key] = record["metadata"][key]
     return result
@@ -355,15 +577,6 @@ def _header(scope: str, now: datetime) -> str:
 
 def _clean_content(text: str) -> str:
     return " ".join(str(text).split()).strip()
-
-
-def _hot_user_facts(text: str) -> list[str]:
-    facts = []
-    for sentence in re.split(r"(?<=[。！？.!?])|[\r\n]+", text):
-        sentence = _clean_content(sentence)
-        if sentence and len(sentence) <= 300 and _HOT_USER_RE.search(sentence) and not _TRANSIENT_PROFILE_RE.search(sentence):
-            facts.append(sentence)
-    return facts
 
 
 def _normalize(text: str) -> str:

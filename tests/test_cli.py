@@ -195,6 +195,16 @@ class CliTests(unittest.TestCase):
             self.assertIn("Preferred language is Chinese.", (home / ".friday" / "USER.md").read_text(encoding="utf-8"))
             build_friday.assert_not_called()
 
+    def test_memory_cli_consolidates_recent_episodes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = {"reviewed": 2, "merged": 1, "promoted": 0, "remaining": 1}
+            with patch("friday.cli.Path.cwd", return_value=root), patch("friday.cli.consolidate_memory", return_value=result) as consolidate:
+                with patch.object(sys, "stdout", StringIO()):
+                    cli.main(["memory", "consolidate", "--days", "3", "--json"])
+
+            consolidate.assert_called_once_with(root.resolve(), days=3)
+
 
 if __name__ == "__main__":
     unittest.main()

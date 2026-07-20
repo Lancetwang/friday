@@ -7,6 +7,7 @@ DEFAULT_FRIDAY_SKILL = Path(__file__).parent / "default_skills" / "friday-cli" /
 LEGACY_DEFAULT_SKILL_HASHES = {
     "2bb93f4e5e10b92552705a4ec17098b5ffe259d29a066cc632cf8da42d522caf",
     "e8066193c1802e58b069cc3f8db619d5e735765dce3a27113026f3f9c4e9b232",
+    "a6f0bc0e86c3d578ff3db5d3958b34dd5eefddc55af8449bfb01a2556e176c95",
 }
 
 
