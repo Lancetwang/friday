@@ -59,6 +59,12 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
     config = ModelConfig(**config_data) if isinstance(config_data, dict) else None
     verifier, verifier_context = build_verifier(workspace, config)
     verifier_context.usage = context.usage
+    if context.on_observation is not None:
+        def observe(event: Any) -> None:
+            event.data["agent_role"] = "verifier"
+            context.on_observation(event)
+
+        verifier_context.on_observation = observe
     inherit_guarded_run(verifier_context, context)
     try:
         raw = verifier.chat(verification_prompt(goal, events), context=verifier_context, max_steps=VERIFIER_MAX_STEPS, stream=False)

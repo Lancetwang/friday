@@ -36,7 +36,7 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Goal mode: `/goal <task>` keeps the original objective pinned and requires verifier pass; it stops on blockage, insufficient evidence, repeated no-progress, approval, or Token Budget.
 - Program-enforced permissions: dangerous Bash commands are stopped before execution and require explicit approval.
 - Exact runtime accounting: provider usage is accumulated across main-agent and verifier calls, with marked estimates only when usage is unavailable.
-- Local observability: model and tool events are flushed incrementally so timeouts remain diagnosable; completed turns also record a compact JSONL summary with prompt shape, verification, timing, usage, and result.
+- Trace Workbench: every session records append-only model requests, responses, tool activity, compaction, verification, usage, and results; a behavior-level `YOU / FRI / TOOL` timeline and one-call DeepSeek analysis sit on top of the lossless trace.
 - Session resume: one atomic snapshot per session restores both the conversation and its current progress under a freshly rebuilt prefix.
 - Compatible runtime upgrades: Friday pins a tested agent-core source and checks the isolated tool environment before a turn starts.
 
@@ -75,7 +75,7 @@ Friday assembles the model prefix in this order:
 
 Static system prompts are bundled Markdown files rather than Python string literals. This code-owned prefix stays first and changes only on upgrade. User layers follow it, while workspace-specific state stays near the tail. This preserves the largest useful provider-cache prefix without letting live paths or project state go stale.
 
-Friday provisions missing global defaults and the bundled `friday-cli` skill under `~/.friday/`. `friday init` is intentionally project-scoped and creates only `AGENTS.md`; project memory, permissions, skills, sessions, and traces are created lazily.
+Friday provisions missing global defaults and the bundled `friday-cli` skill under `~/.friday/`. `friday init` is intentionally project-scoped and creates only `AGENTS.md`; project memory, permissions, skills, and sessions are created lazily, while raw traces live under `~/.friday/observability/`.
 
 ## Memory
 

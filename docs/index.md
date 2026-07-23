@@ -13,3 +13,4 @@ Start here:
 - [Memory](memory.md)
 - [Skills](skills.md)
 - [Verification](verification.md)
+- [Observability](observability.md)

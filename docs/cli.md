@@ -18,6 +18,9 @@ friday memory add --scope <scope> <text>
 friday memory update <id> <text>
 friday memory remove <id>
 friday memory consolidate [--days 2] [--json]
+friday trace list [--json]
+friday trace show <session-id> [--json]
+friday trace serve [--port 8765] [--no-open]
 friday ask "..."
 friday goal "..."
 friday chat
@@ -48,6 +51,7 @@ Slash commands in chat/TUI:
 /memory [help|status|list|search|add|update|remove|consolidate]
 /context
 /progress
+/trace
 /compact
 /goal <task>
 /resume

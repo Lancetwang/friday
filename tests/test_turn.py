@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_core import RunContext
+from agent_core import Agent, RunContext
 
+from friday.trace import expand_event, load_trace
 from friday.turn import run_turn
 
 
 class TurnTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.trace_tmp = tempfile.TemporaryDirectory()
+        self.trace_env = patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": self.trace_tmp.name})
+        self.trace_env.start()
+
+    def tearDown(self) -> None:
+        self.trace_env.stop()
+        self.trace_tmp.cleanup()
+
     def test_run_turn_aggregates_runtime_usage_and_persists_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             context = RunContext(metadata={"workspace": tmp, "session_id": "s1"})
@@ -34,6 +45,23 @@ class TurnTests(unittest.TestCase):
         self.assertFalse(result.metrics["estimated_tokens"])
         write_trace.assert_called_once()
         save_turn.assert_called_once()
+
+    def test_run_turn_records_actual_model_request(self) -> None:
+        class Model:
+            def chat_message(self, messages, **kwargs):
+                return {"role": "assistant", "content": "hello", "usage": {"prompt_tokens": 4, "completion_tokens": 1}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(model=Model(), instructions="prefix", stream=False)
+            context = agent.new_context()
+            context.metadata.update(workspace=tmp, session_id="observed")
+            with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
+                with patch("friday.turn.build_tools", return_value=[]), patch("friday.turn.capture_user_memory"), patch("friday.turn.relevant_memory", return_value=""):
+                    run_turn(agent, context, "hello", stream=False)
+
+        _, events = load_trace("observed")
+        request = expand_event("observed", next(event for event in events if event["type"] == "model.request"))
+        self.assertEqual(request["data"]["messages"][-1]["content"], "hello")
 
     def test_run_turn_keeps_event_handler_after_context_rebuild(self) -> None:
         old_context = RunContext(metadata={"workspace": str(Path.cwd())})

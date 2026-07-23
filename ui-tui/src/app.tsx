@@ -37,6 +37,7 @@ const HELP_TEXT = `# Friday commands
 | \`/memory [help]\` | Inspect or manage persistent memory. |
 | \`/context\` | Print current context usage. |
 | \`/progress\` | Show the current objective and plan. |
+| \`/trace\` | Open the local Trace Workbench. |
 | \`/compact\` | Summarize the live conversation into a fresh context. |
 | \`/goal <text>\` | Loop until the verifier passes, blocks, needs approval, or is cancelled. |
 | \`/resume\` | Resume recent Friday session context. |
@@ -323,6 +324,10 @@ function runCommand(
       setProgress(result.progress)
       setMessages(items => [...items, { role: 'system', text: formatProgress(result.progress) }])
     })
+  } else if (command.startsWith('/trace')) {
+    void gateway.request<{ url: string }>('trace.serve').then(result =>
+      setMessages(items => [...items, { role: 'system', text: `Trace Workbench: ${result.url}` }])
+    )
   } else if (command.startsWith('/compact')) {
     void gateway.request<{ text: string }>('session.compact').then(result =>
       setMessages(items => [...items, { role: 'system', text: `Compacted conversation:\n\n${result.text}` }])

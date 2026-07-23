@@ -5,11 +5,11 @@ requires-python = ">=3.12"
 [[package]]
 name = "agent-core-runtime"
 version = "0.1.0"
-source = { url = "https://github.com/Lancetwang/agent-core-runtime/archive/42e786b28df41eb6ced21ff01833de7d6eac887f.zip" }
+source = { url = "https://github.com/Lancetwang/agent-core-runtime/archive/cbec066c7013cb12b9ae5114b8b836f4934ce5f8.zip" }
 dependencies = [
     { name = "openai" },
 ]
-sdist = { hash = "sha256:06dec7cae73c1d574eaad0d7e6e0e1d12d3bfc569ce41e42b71453070b194f51" }
+sdist = { hash = "sha256:ce7c1b5c57739ce4fb94e95753cafccc499fa2aef8776e300883544c6407b41a" }
 
 [package.metadata]
 requires-dist = [{ name = "openai", specifier = ">=1.88.0" }]
@@ -74,7 +74,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-core-runtime", url = "https://github.com/Lancetwang/agent-core-runtime/archive/42e786b28df41eb6ced21ff01833de7d6eac887f.zip" },
+    { name = "agent-core-runtime", url = "https://github.com/Lancetwang/agent-core-runtime/archive/cbec066c7013cb12b9ae5114b8b836f4934ce5f8.zip" },
     { name = "rich", specifier = ">=13.7.0" },
 ]
 

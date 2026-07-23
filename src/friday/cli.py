@@ -23,6 +23,8 @@ from friday.progress import current_progress, finish_progress, progress_line
 from friday.skills import discover_skills
 from friday.tui_node import run_tui
 from friday.tools import allow_permissions_for_session, approve_pending, build_tools
+from friday.trace import behavior_events, list_traces, load_trace, trace_stats
+from friday.trace_web import serve_trace_ui, start_trace_server
 from friday.turn import run_turn
 
 
@@ -81,6 +83,16 @@ def main(argv: list[str] | None = None) -> None:
     memory_consolidate = memory_sub.add_parser("consolidate", help="Merge and promote recent episodic notes with one LLM call.")
     memory_consolidate.add_argument("--days", type=int, default=2)
     memory_consolidate.add_argument("--json", action="store_true")
+    trace = sub.add_parser("trace", help="Inspect recorded sessions or open the local Trace Workbench.")
+    trace_sub = trace.add_subparsers(dest="trace_command", required=True)
+    trace_list = trace_sub.add_parser("list", help="List recorded sessions.")
+    trace_list.add_argument("--json", action="store_true")
+    trace_show = trace_sub.add_parser("show", help="Print one session timeline.")
+    trace_show.add_argument("session")
+    trace_show.add_argument("--json", action="store_true")
+    trace_serve = trace_sub.add_parser("serve", help="Open the local Trace Workbench.")
+    trace_serve.add_argument("--port", type=int, default=8765)
+    trace_serve.add_argument("--no-open", action="store_true")
     context = sub.add_parser("context", help="Print context usage for a saved session.")
     context.add_argument("--session", help="Inspect a specific session id.")
     progress = sub.add_parser("progress", help="Print progress for a saved Friday session.")
@@ -131,6 +143,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "memory":
         _memory_cli(args, parser)
+        return
+
+    if command == "trace":
+        _trace_cli(args)
         return
 
     if command == "context":
@@ -264,7 +280,7 @@ def _configure_stdio() -> None:
 def _help_alias(argv: list[str]) -> list[str]:
     if argv == ["help"]:
         return ["--help"]
-    if len(argv) == 2 and argv[1] == "help" and argv[0] in {"skill", "memory"}:
+    if len(argv) == 2 and argv[1] == "help" and argv[0] in {"skill", "memory", "trace"}:
         return [argv[0], "--help"]
     return argv
 
@@ -284,7 +300,7 @@ def _slash(text: str, stream: bool, agent, context):
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /prompt, /memory [help], /context, /progress, /compact, /goal <text>, /resume, /approve [session], /reject [guidance], /reset, /exit")
+        print("/help, /prompt, /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /approve [session], /reject [guidance], /reset, /exit")
     elif command == "prompt":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
     elif command.startswith("memory"):
@@ -294,6 +310,9 @@ def _slash(text: str, stream: bool, agent, context):
         print(_context_report(context))
     elif command == "progress":
         print(progress_line(current_progress(context)))
+    elif command == "trace":
+        _server, url = start_trace_server()
+        print(f"Trace Workbench: {url}")
     elif command == "compact":
         agent, context, summary = compact_friday(agent, context, stream=stream)
         print("compacted conversation:")
@@ -446,6 +465,35 @@ def _memory_cli(args, parser: argparse.ArgumentParser) -> None:
         parser.error(f"unknown memory command: {action}")
         return
     print(json_dump(result) if getattr(args, "json", False) else format_memory_result(result))
+
+
+def _trace_cli(args) -> None:
+    if args.trace_command == "serve":
+        serve_trace_ui(port=args.port, open_browser=not args.no_open)
+        return
+    if args.trace_command == "list":
+        traces = list_traces()
+        if args.json:
+            print(json_dump({"sessions": traces}))
+            return
+        print("SESSION\tUPDATED\tSTATUS\tTURNS\tWORKSPACE")
+        for item in traces:
+            print(f"{item['session_id']}\t{item.get('updated_at', '')}\t{item.get('status', '')}\t{item.get('turns', 0)}\t{item.get('workspace', '')}")
+        return
+    manifest, events = load_trace(args.session)
+    behaviors = behavior_events(events)
+    if args.json:
+        print(json_dump({"manifest": manifest, "stats": trace_stats(events), "events": behaviors}))
+        return
+    print(json_dump({"manifest": manifest, "stats": trace_stats(events)}))
+    for behavior in behaviors:
+        event_ids = ",".join(str(seq) for seq in behavior["seqs"])
+        if behavior["kind"] == "tool":
+            detail = json_dump(behavior.get("arguments", {}))
+            result = str(behavior.get("result") or "")
+            print(f"[event:{event_ids}] TOOL {behavior['name']} {detail}" + (f" -> {result}" if result else ""))
+        else:
+            print(f"[event:{event_ids}] {behavior['label']} {behavior['text']}")
 
 
 def _memory_text(args, parser: argparse.ArgumentParser) -> str:

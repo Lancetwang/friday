@@ -36,7 +36,7 @@ uv tool install -e . --force --reinstall
 - Goal 模式：`/goal <任务>` 持续锚定原始目标并以 Verifier 通过为完成门槛，在阻塞、证据不足、重复无进展、等待审批或 Token Budget 耗尽时停止。
 - 程序级权限：危险 Bash 命令在执行前被拦截，需要用户明确批准。
 - 运行级 Token 统计：汇总主 Agent 和 Verifier 的模型调用；Provider 不返回 Usage 时才标记为估算。
-- 本地可观测性：模型与工具事件增量落盘，超时后仍可诊断；完整轮次另写精简 JSONL 摘要，记录 Prompt 结构、验证、耗时、Usage 和结果。
+- Trace Workbench：每个 Session 以只追加方式记录模型请求与响应、工具过程、压缩、验证、Usage 和结果；无损记录之上提供 `YOU / FRI / TOOL` 行为时间线和单次 DeepSeek 证据分析。
 - Session 恢复：每个会话保存一个原子快照，在最新 Prefix 下同时恢复完整对话和当前进度。
 - 兼容的 Runtime 升级：Friday 固定经过验证的 agent-core 源，并在每轮开始前检查隔离环境是否匹配。
 
@@ -75,7 +75,7 @@ Friday 按以下顺序组装模型 Prefix：
 
 静态系统 Prompt 由内置 Markdown 文件提供，不再硬编码为 Python 长字符串。代码控制的稳定 Prefix 位于最前面，只在升级时变化；用户信息位于中间，工作区相关状态位于尾部。这样可以尽量复用 Provider Cache，同时保证路径和项目状态不会过期。
 
-Friday 首次启动会补齐 `~/.friday/` 下缺少的默认文件和内置 `friday-cli` Skill。`friday init` 只负责创建项目 `AGENTS.md`，项目记忆、权限、Skill、Session 和 Trace 都按需创建。
+Friday 首次启动会补齐 `~/.friday/` 下缺少的默认文件和内置 `friday-cli` Skill。`friday init` 只负责创建项目 `AGENTS.md`，项目记忆、权限、Skill 和 Session 按需创建；原始 Trace 统一保存在 `~/.friday/observability/`。
 
 ## 记忆
 

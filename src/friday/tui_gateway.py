@@ -14,6 +14,7 @@ from friday.context import context_report
 from friday.memory import format_memory_result, run_memory_command
 from friday.progress import current_progress, finish_progress
 from friday.tools import allow_permissions_for_session, approve_pending, build_tools, pending_approval
+from friday.trace_web import start_trace_server
 from friday.turn import run_turn
 
 _real_stdout = sys.stdout
@@ -65,6 +66,9 @@ class Gateway:
             elif method == "progress.get":
                 _agent, context = self.ensure_agent()
                 self.ok(rid, {"progress": current_progress(context)})
+            elif method == "trace.serve":
+                _server, url = start_trace_server()
+                self.ok(rid, {"url": url})
             elif method == "session.reset":
                 removed = reset_friday(include_user=True)
                 self.agent = None

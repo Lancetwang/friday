@@ -9,7 +9,7 @@ Friday's memory system is file-based and owned by the harness. It separates stab
 - `<workspace>/.friday/MEMORY.md`: bounded project facts and lasting decisions.
 - `~/.friday/memory/YYYY-MM-DD.md`: dated episodic notes captured as original user text.
 - `<workspace>/.friday/sessions/*.json`: exact resumable conversation and progress snapshots.
-- `<workspace>/.friday/traces/*.jsonl`: observability evidence, not normal recall material.
+- `~/.friday/observability/sessions/`: append-only observability evidence, not normal recall material.
 
 `friday.progress` is the only live task-state store. It holds the current objective, plan, status, next action, and verifier result. Episodic notes record what happened; they never duplicate or update live progress.
 

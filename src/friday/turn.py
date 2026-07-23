@@ -15,7 +15,7 @@ from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.memory import capture_user_memory, relevant_memory
 from friday.progress import append_progress_checkpoint, begin_progress, finish_progress
 from friday.tools import build_tools
-from friday.trace import begin_live_trace, finish_live_trace, write_live_event, write_trace
+from friday.trace import begin_live_trace, finish_live_trace, record_context_transition, write_live_event, write_trace
 
 
 @dataclass
@@ -45,37 +45,9 @@ def run_turn(
     continuation: bool = False,
 ) -> TurnResult:
     event_handler = context.on_event
+    observation_handler = context.on_observation
     usage_start = context.usage.snapshot()
-    agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
-    if context.on_event is None:
-        context.on_event = event_handler
-    begin_guarded_run(context, usage_start)
-    if notice and on_context_notice:
-        on_context_notice(notice)
-    if approval_result is not None:
-        context.add_message("system", "## Approval Result\n" + json.dumps(approval_result, ensure_ascii=False, indent=2))
-
-    start_event = len(context.events)
-    progress = begin_progress(
-        context,
-        text,
-        mode="goal" if goal else "normal",
-        continuation=continuation,
-    )
-    append_progress_checkpoint(context)
-    if on_progress:
-        on_progress(progress)
     workspace = Path(context.metadata["workspace"])
-    recalled = relevant_memory(workspace, text)
-    if recalled:
-        context.add_message("system", recalled, friday_memory_recall=True)
-    if user_label is None:
-        capture_user_memory(
-            workspace,
-            text,
-            session_id=str(context.metadata.get("session_id") or ""),
-        )
-    prompt_messages = [dict(message) for message in context.get_messages()]
     user = user_label or (f"/goal {text}" if goal else text)
     mode = "approve" if user_label == "/approve" else "goal" if goal else "chat"
     live_path, turn_id = begin_live_trace(
@@ -83,21 +55,56 @@ def run_turn(
         context=context,
         mode=mode,
         user=user,
-        prompt_messages=prompt_messages,
+        prompt_messages=[dict(message) for message in context.get_messages()],
     )
 
-    def on_event(event: Any) -> None:
+    def on_observation(event: Any) -> None:
         write_live_event(live_path, turn_id, event)
+        if observation_handler is not None:
+            observation_handler(event)
+
+    def on_event(event: Any) -> None:
         if event.type == "progress.updated" and on_progress:
             on_progress(dict(event.data))
         if event_handler is not None:
             event_handler(event)
 
+    context.on_observation = on_observation
     context.on_event = on_event
-    input_estimate = token_estimate(context, build_tools(workspace, workspace / ".friday")) + _tokens(text)
-    start = time.perf_counter()
-    chat = goal_chat if goal else verified_chat
     try:
+        agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
+        context.on_event = on_event
+        context.on_observation = on_observation
+        record_context_transition(live_path, turn_id, notice, context.get_messages())
+        begin_guarded_run(context, usage_start)
+        if notice and on_context_notice:
+            on_context_notice(notice)
+        if approval_result is not None:
+            context.add_message("system", "## Approval Result\n" + json.dumps(approval_result, ensure_ascii=False, indent=2))
+
+        start_event = len(context.events)
+        progress = begin_progress(
+            context,
+            text,
+            mode="goal" if goal else "normal",
+            continuation=continuation,
+        )
+        append_progress_checkpoint(context)
+        if on_progress:
+            on_progress(progress)
+        recalled = relevant_memory(workspace, text)
+        if recalled:
+            context.add_message("system", recalled, friday_memory_recall=True)
+        if user_label is None:
+            capture_user_memory(
+                workspace,
+                text,
+                session_id=str(context.metadata.get("session_id") or ""),
+            )
+        prompt_messages = [dict(message) for message in context.get_messages()]
+        input_estimate = token_estimate(context, build_tools(workspace, workspace / ".friday")) + _tokens(text)
+        start = time.perf_counter()
+        chat = goal_chat if goal else verified_chat
         answer, verifications = chat(
             agent,
             context,
@@ -116,6 +123,7 @@ def run_turn(
         raise
     finally:
         context.on_event = event_handler
+        context.on_observation = observation_handler
     turn_usage = context.usage.since(usage_start).to_dict()
     estimated = turn_usage["input_tokens"] is None or turn_usage["output_tokens"] is None
     metrics = {
@@ -126,8 +134,6 @@ def run_turn(
         "output_tokens": turn_usage["output_tokens"] if not estimated else _tokens(answer),
     }
     context.metadata["friday.last_usage"] = metrics
-    finish_live_trace(live_path, turn_id, status="done", metrics=metrics)
-
     write_trace(
         workspace,
         mode=mode,
@@ -141,6 +147,7 @@ def run_turn(
         context_notice=notice,
         turn_id=turn_id,
     )
+    finish_live_trace(live_path, turn_id, status="done", metrics=metrics)
     save_turn(
         workspace,
         user,
