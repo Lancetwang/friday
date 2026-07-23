@@ -1,7 +1,7 @@
 [project]
 name = "friday-agent"
 version = "0.1.0"
-description = "Friday, a personal CLI agent built on agent-core-runtime."
+description = "Friday, a general-purpose local CLI agent built on agent-core-runtime."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

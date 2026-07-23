@@ -25,7 +25,7 @@ class CliTests(unittest.TestCase):
             self.assertIn(command, output.getvalue())
 
     def test_progressive_help_aliases_work(self) -> None:
-        for argv, expected in ((["help"], "Friday personal CLI agent"), (["skill", "help"], "Inspect reusable Friday skills"), (["memory", "help"], "Inspect and manage Friday memory")):
+        for argv, expected in ((["help"], "Friday general-purpose local CLI agent"), (["skill", "help"], "Inspect reusable Friday skills"), (["memory", "help"], "Inspect and manage Friday memory")):
             output = StringIO()
             with patch.object(sys, "stdout", output), self.assertRaises(SystemExit):
                 cli.main(argv)

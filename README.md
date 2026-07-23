@@ -2,7 +2,7 @@
 
 [中文说明](README.zh-CN.md)
 
-Friday is a local CLI coding agent. Run `friday` in any workspace to read and edit files, execute commands, search the web, retain project knowledge, and verify delivered changes.
+Friday is a local general-purpose CLI agent. Run `friday` from any directory to work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
 
 It uses [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) for generic agent execution. The Friday harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, CLI, and TUI behavior.
 
@@ -20,25 +20,17 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 
 ## Features
 
-- Workspace-aware startup: the directory where `friday` is launched becomes the active workspace.
-- Layered model configuration: non-secret provider and token budgets live in global JSON with optional project overrides; credentials remain in `.env`.
-- Harness-first context: stable runtime rules lead the prompt; user and project state are layered later for prefix caching.
-- Agent-as-router: files, nested rules, skill bodies, and episodic memories enter context only when needed.
-- Layered rules: global `~/.friday/AGENTS.md` plus root and nested project `AGENTS.md` files.
-- Progressive skills: the prompt keeps one CLI routing hint; `friday skill list --json` returns structured metadata and paths, then Bash reads only the selected `SKILL.md` and referenced resources.
-- Layered memory: bounded profile and fact files stay in the prefix, counted Markdown episodes are captured and recalled on demand, repeated episodes can be consolidated into permanent memory, and current progress remains a separate resumable session snapshot.
-- Visible progress: non-trivial work keeps one objective, structured plan, status, next action, and verifier state without splitting the conversation into task contexts.
-- Multi-stage context compression: Friday first probes lossless tool-result simplification, then falls back to a structured summary plus the latest ten complete turns when the gain is insufficient.
-- Completion-first turns: ordinary action requests continue through implementation and validation instead of stopping at a plan or partial result.
-- Bounded web research: search repeats only for missing required evidence, and grounded answers cite retrieved sources while separating inference from facts.
-- Independent verification: a verifier agent inspects the workspace without trusting the main agent's claims.
-- Adaptive verification: simple deliverables receive the smallest sufficient independent check; concrete repairs can continue without a fixed attempt cap until a semantic stop.
-- Goal mode: `/goal <task>` keeps the original objective pinned and requires verifier pass; it stops on blockage, insufficient evidence, repeated no-progress, approval, or Token Budget.
-- Program-enforced permissions: dangerous Bash commands are stopped before execution and require explicit approval.
-- Exact runtime accounting: provider usage is accumulated across main-agent and verifier calls, with marked estimates only when usage is unavailable.
-- Trace Workbench: every session records append-only model requests, responses, tool activity, compaction, verification, usage, and results; a behavior-level `YOU / FRI / TOOL` timeline and one-call DeepSeek analysis sit on top of the lossless trace.
-- Session resume: one atomic snapshot per session restores both the conversation and its current progress under a freshly rebuilt prefix.
-- Compatible runtime upgrades: Friday pins a tested agent-core source and checks the isolated tool environment before a turn starts.
+- General-purpose execution: work with local files and commands, search the web, and continue ordinary tasks through delivery and validation.
+- Two-layer loop: the agent loop handles model-tool interaction; the independent Verify / Goal loop checks deliverables and drives evidence-based repair.
+- Prefix-aware context: stable runtime rules lead the prompt, while user, project, Skill, and recalled memory layers are disclosed only when needed.
+- Multi-stage compaction: lossless tool-result simplification is probed first; structured conversation compaction preserves the latest ten complete turns when required.
+- Layered memory and progress: stable user facts, project knowledge, episodic recall, and resumable task progress remain separate.
+- Progressive Skills: Friday lists metadata and paths first, then reads only the selected `SKILL.md` and referenced resources.
+- Long-running task control: explicit objectives, plans, next actions, verifier state, semantic stop conditions, and session resume keep work on track.
+- Program-enforced permissions: dangerous Bash commands stop before execution and require explicit approval.
+- Bounded web research: search continues only for missing evidence, with retrieved sources separated from model inference.
+- Exact accounting and traces: provider usage, model calls, tool activity, compaction, verification, and results are recorded for inspection and analysis.
+- Runtime compatibility: Friday pins a tested `agent-core-runtime` revision and checks the installed environment before execution.
 
 ## Architecture
 
@@ -58,62 +50,6 @@ flowchart TD
     Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan"] --> AgentLoop
 ```
 
-## Harness
-
-Friday assembles the model prefix in this order:
-
-1. `SOUL.md`: Friday's identity and purpose.
-2. Bundled `RUNTIME.md`: outcomes, autonomy, evidence, memory boundaries, validation, and stopping conditions.
-3. Bundled `TOOL_GUIDANCE.md`.
-4. Global rules from `~/.friday/AGENTS.md`.
-5. `~/.friday/USER.md` profile.
-6. Global `~/.friday/MEMORY.md`.
-7. One-line Skill discovery and on-demand routing guidance.
-8. Root and nested project instructions.
-9. Live environment details.
-10. Project `.friday/MEMORY.md`.
-
-Static system prompts are bundled Markdown files rather than Python string literals. This code-owned prefix stays first and changes only on upgrade. User layers follow it, while workspace-specific state stays near the tail. This preserves the largest useful provider-cache prefix without letting live paths or project state go stale.
-
-Friday provisions missing global defaults and the bundled `friday-cli` skill under `~/.friday/`. `friday init` is intentionally project-scoped and creates only `AGENTS.md`; project memory, permissions, skills, and sessions are created lazily, while raw traces live under `~/.friday/observability/`.
-
-## Memory
-
-Friday separates facts, rules, and task state:
-
-- `USER.md`: stable user profile and preferences.
-- `~/.friday/MEMORY.md`: durable cross-project facts.
-- `<workspace>/.friday/MEMORY.md`: durable project facts and decisions.
-- `~/.friday/memory/YYYY-MM-DD.md`: dated personal context and explicit preference evidence, searched only when relevant.
-- `AGENTS.md`: operating rules, not memory.
-- `friday.progress`: the only current task objective, plan, status, and next action.
-- Session snapshots and traces: resumable context and evidence, not another task-state store.
-
-The harness captures ordinary preference and correction signals as counted episodic notes, while explicit "always remember" requests go directly to the appropriate permanent scope. It rejects credential-like content, searches dated Markdown with deterministic English terms and Chinese character pairs, and injects at most three relevant episodes near the conversation tail. `friday memory consolidate --days 2` uses one LLM call to merge semantic duplicates and promote repeated stable facts; code still validates counts, scopes, sources, and secrets before changing files. Hot memory stays frozen for a session and refreshes on start, resume, or compact. Compact summaries and temporary progress never become long-term memory.
-
-## Context Management
-
-- The default context window is 353K tokens and the default per-response output budget is 64K tokens; both are configurable globally or per project.
-- At 85% usage, Friday probes oversized structured tool results.
-- Tool results are simplified only when the lossless rewrite preserves every field and predicts at least 25% context gain.
-- Otherwise Friday performs one in-band structured compact pass, preserving the existing prefix.
-- The rebuilt context is the fresh prefix followed by the structured summary and the latest ten complete user turns verbatim, including paired assistant tool calls and tool results.
-- `/context` separates system prompt, skill routing, tool schemas, messages, and tool results, and shows latest-turn provider usage when available.
-
-## Upgrade
-
-Friday and agent-core are upgraded together through Friday's pinned dependency:
-
-```powershell
-cd path\to\friday
-git pull --ff-only
-npm --prefix ui-tui ci
-npm --prefix ui-tui run build
-uv tool install -e . --force --reinstall
-```
-
-Do not independently upgrade agent-core inside the tool environment. If a newer core is not pinned by Friday yet, it has not been compatibility-tested for this agent. Friday checks the installed direct dependency against its current pin at startup and gives the reinstall command before any turn runs.
-
 ## Docs
 
 - [Install](docs/install.md)
@@ -123,6 +59,7 @@ Do not independently upgrade agent-core inside the tool environment. If a newer 
 - [Tools](docs/tools.md)
 - [Memory](docs/memory.md)
 - [Skills](docs/skills.md)
+- [Observability](docs/observability.md)
 
 ## Validate
 

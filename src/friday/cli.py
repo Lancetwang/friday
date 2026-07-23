@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> None:
     _configure_stdio()
     argv = _help_alias(list(sys.argv[1:] if argv is None else argv))
 
-    parser = argparse.ArgumentParser(prog="friday", description="Friday personal CLI agent.")
+    parser = argparse.ArgumentParser(prog="friday", description="Friday general-purpose local CLI agent.")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output.")
     parser.add_argument("--permission-mode", choices=["manual", "accept-edits", "dont-ask", "bypass"], default=None)
     parser.add_argument("--dangerously-skip-permissions", action="store_true", help="Bypass command approvals for sandboxed runs.")

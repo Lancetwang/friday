@@ -1,6 +1,6 @@
 # Friday Docs
 
-Friday is a local CLI coding agent. The README explains what it is; these docs explain how to use it.
+Friday is a local general-purpose CLI agent. The README explains what it is; these docs explain how to use it.
 
 Start here:
 
