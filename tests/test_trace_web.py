@@ -6,14 +6,14 @@ import threading
 import unittest
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.request import Request, urlopen
 from http.server import ThreadingHTTPServer
 
 from agent_core import RunContext
 
 from friday.trace import begin_live_trace, finish_live_trace
-from friday.trace_web import TraceRequestHandler, analyze_trace, list_analyses
+from friday.trace_web import TraceRequestHandler, analyze_trace, list_analyses, serve_trace_ui
 
 
 class FakeModel:
@@ -30,6 +30,17 @@ class FakeModel:
 
 
 class TraceWebTests(unittest.TestCase):
+    def test_serve_trace_ui_stops_on_keyboard_interrupt(self) -> None:
+        # The wait loop must sleep in short interruptible slices; an untimed
+        # Event.wait() here would swallow Ctrl+C on Windows forever.
+        server = MagicMock()
+        with patch("friday.trace_web.start_trace_server", return_value=(server, "http://127.0.0.1:1")):
+            with patch("friday.trace_web.time.sleep", side_effect=KeyboardInterrupt):
+                with patch("builtins.print"):
+                    serve_trace_ui(open_browser=False)
+
+        server.shutdown.assert_called_once_with()
+
     def test_analysis_chat_is_persisted_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": tmp}):
             workspace = Path(tmp) / "workspace"

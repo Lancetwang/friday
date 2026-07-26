@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -112,9 +113,16 @@ def start_trace_server(*, port: int = 8765, open_browser: bool = True) -> tuple[
 def serve_trace_ui(*, port: int = 8765, open_browser: bool = True) -> None:
     server, url = start_trace_server(port=port, open_browser=open_browser)
     print(f"Friday Trace Workbench: {url}")
+    print("Press Ctrl+C to stop.")
+    # Sleep in short slices instead of an untimed Event.wait(): on Windows the
+    # untimed wait blocks in a non-interruptible lock acquire, so Ctrl+C would
+    # never reach the main thread and the server could not be stopped.
     try:
-        threading.Event().wait()
+        while True:
+            time.sleep(0.5)
     except KeyboardInterrupt:
+        pass
+    finally:
         server.shutdown()
 
 
