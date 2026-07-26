@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import sys
@@ -25,6 +25,8 @@ def main() -> None:
     gateway = Gateway()
     gateway.event("gateway.ready", {"cwd": str(Path.cwd().resolve())})
     for line in sys.stdin:
+        # Tolerate a UTF-8 BOM from Windows shells piping into the gateway.
+        line = line.lstrip("\ufeff")
         if line.strip():
             gateway.handle(json.loads(line))
 
