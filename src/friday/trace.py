@@ -199,6 +199,22 @@ def finish_live_trace(path: Path, turn_id: str, *, status: str, metrics: dict[st
     _write_json(path.parent / "manifest.json", manifest)
 
 
+def record_checkpoint_restore(session_id: str, checkpoint_id: str, changed_paths: list[str]) -> None:
+    session_dir = _session_dir(session_id)
+    _append_event(
+        session_dir / "events.jsonl",
+        {
+            "type": "checkpoint.restored",
+            "category": "turn",
+            "turn_id": uuid4().hex,
+            "data": {
+                "checkpoint_id": checkpoint_id,
+                "changed_paths": changed_paths,
+            },
+        },
+    )
+
+
 def list_traces() -> list[dict[str, Any]]:
     sessions = trace_root() / "sessions"
     if not sessions.exists():

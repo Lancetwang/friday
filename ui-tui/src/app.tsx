@@ -41,6 +41,7 @@ const HELP_TEXT = `# Friday commands
 | \`/compact\` | Summarize the live conversation into a fresh context. |
 | \`/goal <text>\` | Loop until the verifier passes, blocks, needs approval, or is cancelled. |
 | \`/resume\` | Resume recent Friday session context. |
+| \`/undo\` | Restore the workspace and conversation to before the latest Friday turn. |
 | \`/approve\` | Open the pending approval choices. |
 | \`/reject\` | Open the pending approval choices with Reject selected. |
 | \`/reset\` | Clear Friday project state and global Friday user state. |
@@ -340,6 +341,20 @@ function runCommand(
         setMessages(items => [...items, { role: 'system', text: 'No recent sessions to resume.' }])
       }
     })
+  } else if (command.startsWith('/undo')) {
+    const id = text.slice('/undo'.length).trim() || undefined
+    void gateway.request<{ changed_paths: string[]; progress: ProgressState; user: string }>('checkpoint.undo', { id }).then(result => {
+      setProgress(result.progress)
+      setMessages(items => [
+        ...removeLastTurn(items),
+        {
+          role: 'system',
+          text: `Undid: ${result.user || 'latest Friday turn'}\nRestored ${result.changed_paths.length} workspace path${result.changed_paths.length === 1 ? '' : 's'}.`
+        }
+      ])
+    }).catch(error =>
+      setMessages(items => [...items, { role: 'system', text: error.message }])
+    )
   } else if (command.startsWith('/approve')) {
     openApprovalPicker(gateway, setApprovalPicker, setMessages, 'once')
   } else if (command.startsWith('/reject')) {
@@ -475,6 +490,11 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
       </Box>
     </Box>
   )
+}
+
+function removeLastTurn(messages: UiMessage[]) {
+  const index = turnIndex(messages, null)
+  return index === -1 ? messages : messages.slice(0, index)
 }
 
 function ProgressLine({ progress }: { progress: ProgressState }) {

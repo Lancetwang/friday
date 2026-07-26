@@ -27,6 +27,7 @@ uv tool install -e . --force --reinstall
 - 分层记忆与进度：稳定用户事实、项目知识、情景召回和可恢复任务进度彼此独立。
 - 渐进式 Skill：先返回元数据和路径，只读取被选中的 `SKILL.md` 及其引用资源。
 - 长程任务控制：显式目标、计划、下一步、验证状态、语义停止条件和 Session 恢复共同防止任务迷失。
+- Turn 级检查点：`/undo` 同时恢复最近一次 Friday 执行前的工作区文件、对话和任务进度，不改动项目自身的 Git 历史。
 - 程序级权限：危险 Bash 命令在执行前停止并请求明确批准。
 - 有预算的联网检索：只为缺失证据继续搜索，并区分检索事实与模型推断。
 - 精确统计与 Trace：记录 Provider Usage、模型调用、工具过程、压缩、验证和结果，支持检查与分析。
@@ -60,6 +61,7 @@ flowchart TD
 - [记忆](docs/memory.md)
 - [Skills](docs/skills.md)
 - [可观测性](docs/observability.md)
+- [检查点与撤回](docs/checkpoints.md)
 
 ## 验证
 

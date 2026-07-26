@@ -50,6 +50,19 @@ class TuiGatewayTests(unittest.TestCase):
         ensure_agent.assert_not_called()
         self.assertIn("Memory status", ok.call_args.args[1]["text"])
 
+    def test_gateway_undo_replaces_the_active_session(self) -> None:
+        gateway = Gateway()
+        context = type("Context", (), {"on_event": None})()
+        restored = {"id": "cp-1", "user": "change file", "changed_paths": ["file.txt"]}
+
+        with patch("friday.tui_gateway.undo_friday", return_value=(object(), context, restored)):
+            with patch("friday.tui_gateway.current_progress", return_value={"objective": "previous"}):
+                with patch.object(gateway, "ok") as ok:
+                    gateway.handle({"id": "1", "method": "checkpoint.undo"})
+
+        self.assertIs(gateway.context, context)
+        self.assertEqual(ok.call_args.args[1]["changed_paths"], ["file.txt"])
+
     def test_session_info_does_not_require_llm_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"LLM_API_KEY": "", "OPENAI_API_KEY": "", "DEEPSEEK_API_KEY": ""}, clear=False):

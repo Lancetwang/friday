@@ -14,6 +14,7 @@ from typing import Any
 from agent_core import Agent, RunContext
 
 from friday.agent_flow import build_guarded_flow
+from friday.checkpoint import restore_checkpoint
 from friday.config import ModelConfig, build_model, default_config_text, load_model_config, load_model_environment
 from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
 from friday.prompts import (
@@ -25,6 +26,7 @@ from friday.prompts import (
 from friday.progress import append_progress_checkpoint, current_progress, is_progress_checkpoint, restore_progress
 from friday.skills import ensure_default_skill, skill_routing
 from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions
+from friday.trace import record_checkpoint_restore
 
 PROJECT_INSTRUCTIONS_LIMIT = 12000
 RECENT_CONVERSATION_LIMIT = 10
@@ -197,6 +199,40 @@ def resume_friday(workspace: Path | None = None, *, stream: bool = True, resume_
         context.metadata["friday.last_usage"] = dict(session["last_usage"])
     append_progress_checkpoint(context)
     return agent, context, int(session.get("turns", 0) or 0)
+
+
+def undo_friday(
+    workspace: Path | None = None,
+    *,
+    checkpoint_id: str | None = None,
+    stream: bool = True,
+    force: bool = False,
+) -> tuple[Agent, RunContext, dict[str, Any]]:
+    root = (workspace or Path.cwd()).resolve()
+    restored = restore_checkpoint(root, checkpoint_id=checkpoint_id, force=force)
+    agent, context = build_friday(root, stream=stream)
+    session_id = str(restored.get("session_id") or context.metadata.get("session_id") or "")
+    context.metadata["session_id"] = session_id
+    _replace_context_messages(
+        context,
+        [dict(message) for message in context.get_messages()] + _conversation_body(restored["messages"]),
+    )
+    restore_progress(context, restored.get("before_progress"))
+    append_progress_checkpoint(context)
+
+    session_path = root / ".friday" / "sessions" / f"{session_id}.json"
+    if restored.get("session_existed"):
+        snapshot = {
+            **dict(restored.get("before_session") or {}),
+            "session_id": session_id,
+            "messages": context.get_messages(),
+            "progress": current_progress(context),
+        }
+        _write_session(session_path, snapshot)
+    elif session_path.exists():
+        session_path.unlink()
+    record_checkpoint_restore(session_id, str(restored["id"]), list(restored.get("changed_paths") or []))
+    return agent, context, restored
 
 
 def _conversation_body(messages: list[Any]) -> list[dict[str, Any]]:

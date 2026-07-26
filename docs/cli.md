@@ -21,6 +21,10 @@ friday memory consolidate [--days 2] [--json]
 friday trace list [--json]
 friday trace show <session-id> [--json]
 friday trace serve [--port 8765] [--no-open]
+friday undo
+friday undo --checkpoint <id>
+friday checkpoint list [--json]
+friday checkpoint restore <id> [--force]
 friday ask "..."
 friday goal "..."
 friday chat
@@ -55,6 +59,7 @@ Slash commands in chat/TUI:
 /compact
 /goal <task>
 /resume
+/undo [checkpoint-id]
 /approve
 /approve session
 /reject

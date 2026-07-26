@@ -21,7 +21,7 @@ class CliTests(unittest.TestCase):
         with patch.object(sys, "stdout", output), self.assertRaises(SystemExit):
             cli.main(["--help"])
 
-        for command in ("memory", "context", "progress", "compact", "goal", "resume", "approve", "reject", "reset"):
+        for command in ("memory", "context", "progress", "compact", "goal", "resume", "undo", "checkpoint", "approve", "reject", "reset"):
             self.assertIn(command, output.getvalue())
 
     def test_progressive_help_aliases_work(self) -> None:

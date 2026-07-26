@@ -15,7 +15,13 @@ from friday.turn import run_turn
 class TurnTests(unittest.TestCase):
     def setUp(self) -> None:
         self.trace_tmp = tempfile.TemporaryDirectory()
-        self.trace_env = patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": self.trace_tmp.name})
+        self.trace_env = patch.dict(
+            os.environ,
+            {
+                "FRIDAY_OBSERVABILITY_DIR": self.trace_tmp.name,
+                "FRIDAY_CHECKPOINT_DIR": str(Path(self.trace_tmp.name) / "checkpoints"),
+            },
+        )
         self.trace_env.start()
 
     def tearDown(self) -> None:

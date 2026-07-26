@@ -6,7 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, compact_friday, ensure_user_home, init_project, reset_friday, resume_choices, resume_friday
+from friday.app import build_friday, build_instructions, compact_friday, ensure_user_home, init_project, reset_friday, resume_choices, resume_friday, undo_friday
+from friday.checkpoint import checkpoint_choices, finish_pending_checkpoint
 from friday.context import context_report
 from friday.memory import (
     add_memory,
@@ -93,6 +94,16 @@ def main(argv: list[str] | None = None) -> None:
     trace_serve = trace_sub.add_parser("serve", help="Open the local Trace Workbench.")
     trace_serve.add_argument("--port", type=int, default=8765)
     trace_serve.add_argument("--no-open", action="store_true")
+    checkpoint = sub.add_parser("checkpoint", help="List or restore turn checkpoints.")
+    checkpoint_sub = checkpoint.add_subparsers(dest="checkpoint_command", required=True)
+    checkpoint_list = checkpoint_sub.add_parser("list", help="List restorable checkpoints.")
+    checkpoint_list.add_argument("--json", action="store_true")
+    checkpoint_restore = checkpoint_sub.add_parser("restore", help="Restore one checkpoint.")
+    checkpoint_restore.add_argument("id")
+    checkpoint_restore.add_argument("--force", action="store_true", help="Overwrite workspace changes made after Friday's last turn.")
+    undo = sub.add_parser("undo", help="Undo the latest Friday turn.")
+    undo.add_argument("--checkpoint", help="Restore a specific checkpoint id.")
+    undo.add_argument("--force", action="store_true", help="Overwrite workspace changes made after Friday's last turn.")
     context = sub.add_parser("context", help="Print context usage for a saved session.")
     context.add_argument("--session", help="Inspect a specific session id.")
     progress = sub.add_parser("progress", help="Print progress for a saved Friday session.")
@@ -149,6 +160,21 @@ def main(argv: list[str] | None = None) -> None:
         _trace_cli(args)
         return
 
+    if command == "checkpoint":
+        if args.checkpoint_command == "list":
+            choices = checkpoint_choices()
+            if args.json:
+                print(json_dump({"checkpoints": choices}))
+            else:
+                _print_checkpoint_choices(choices)
+        else:
+            _undo_cli(args.id, stream, args.force)
+        return
+
+    if command == "undo":
+        _undo_cli(args.checkpoint, stream, args.force)
+        return
+
     if command == "context":
         _agent, context, count = resume_friday(stream=False, resume_id=args.session)
         print(f"Context for {'session ' + str(context.metadata.get('session_id')) if count else 'a new session'} ({count} saved turns)")
@@ -175,6 +201,7 @@ def main(argv: list[str] | None = None) -> None:
         if not result.get("approved"):
             print(result.get("message") or "Approval was not executed.")
             return
+        finish_pending_checkpoint(Path.cwd().resolve(), pending=True)
         print(_approval_status(result))
         agent, context, count = resume_friday(stream=stream, resume_id=args.session)
         if count:
@@ -201,8 +228,10 @@ def main(argv: list[str] | None = None) -> None:
                     user_label="/approve",
                     continuation=True,
                 )
-        elif args.session:
-            print(f"Session not found: {args.session}. The command was executed, but no AI continuation ran.")
+        else:
+            if args.session:
+                print(f"Session not found: {args.session}. The command was executed, but no AI continuation ran.")
+            finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
         return
 
     if command == "reject":
@@ -217,6 +246,7 @@ def main(argv: list[str] | None = None) -> None:
                 _continue_with_guidance(_agent, context, args.message, result, stream)
             else:
                 finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
+        finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
         return
 
     if command == "reset":
@@ -300,7 +330,7 @@ def _slash(text: str, stream: bool, agent, context):
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /prompt, /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /approve [session], /reject [guidance], /reset, /exit")
+        print("/help, /prompt, /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /undo [checkpoint], /approve [session], /reject [guidance], /reset, /exit")
     elif command == "prompt":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
     elif command.startswith("memory"):
@@ -321,6 +351,10 @@ def _slash(text: str, stream: bool, agent, context):
         agent, context, count = resume_friday(stream=stream)
         print(f"resumed {count} turns")
         print(f"[progress] {progress_line(current_progress(context))}")
+    elif command.startswith("undo"):
+        checkpoint_id = raw_command[len("undo") :].strip() or None
+        agent, context, restored = undo_friday(checkpoint_id=checkpoint_id, stream=stream)
+        _print_undo(restored)
     elif command.startswith("goal"):
         goal = text.split(" ", 1)[1].strip() if " " in text else ""
         if not goal:
@@ -331,6 +365,7 @@ def _slash(text: str, stream: bool, agent, context):
         result = approve_pending()
         print(json_dump(result))
         if result.get("approved"):
+            finish_pending_checkpoint(Path.cwd().resolve(), pending=True)
             if command == "approve session":
                 allow_permissions_for_session(context)
             agent, context, _ = _ask(
@@ -352,6 +387,7 @@ def _slash(text: str, stream: bool, agent, context):
             else:
                 progress = finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
                 _print_progress(progress)
+            finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
     elif command == "reset":
         if _reset(False):
             agent, context = build_friday(stream=stream)
@@ -494,6 +530,26 @@ def _trace_cli(args) -> None:
             print(f"[event:{event_ids}] TOOL {behavior['name']} {detail}" + (f" -> {result}" if result else ""))
         else:
             print(f"[event:{event_ids}] {behavior['label']} {behavior['text']}")
+
+
+def _undo_cli(checkpoint_id: str | None, stream: bool, force: bool) -> None:
+    _agent, _context, restored = undo_friday(checkpoint_id=checkpoint_id, stream=stream, force=force)
+    _print_undo(restored)
+
+
+def _print_undo(restored: dict) -> None:
+    changed = list(restored.get("changed_paths") or [])
+    print(f"Undid: {restored.get('user') or restored.get('id')}")
+    print(f"Restored {len(changed)} workspace path{'s' if len(changed) != 1 else ''}.")
+
+
+def _print_checkpoint_choices(choices: list[dict]) -> None:
+    if not choices:
+        print("No restorable checkpoints.")
+        return
+    print("ID\tSTATE\tTIME\tREQUEST")
+    for item in choices:
+        print(f"{item['id']}\t{item['state']}\t{item['created']}\t{item['user']}")
 
 
 def _memory_text(args, parser: argparse.ArgumentParser) -> str:

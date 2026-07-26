@@ -14,3 +14,4 @@ Start here:
 - [Skills](skills.md)
 - [Verification](verification.md)
 - [Observability](observability.md)
+- [Checkpoints](checkpoints.md)

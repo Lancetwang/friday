@@ -62,6 +62,15 @@ friday resume --session <id>
 
 Inside chat or the TUI, use `/resume` and select a session.
 
+Undo the latest Friday turn, including its workspace files and resumable
+conversation state:
+
+```powershell
+friday undo
+```
+
+Inside chat or the TUI, use `/undo`.
+
 Inspect or compact context:
 
 ```powershell

@@ -8,7 +8,8 @@ from typing import Any
 
 from agent_core import Agent, AgentEvent, RunContext
 
-from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday
+from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday, undo_friday
+from friday.checkpoint import finish_pending_checkpoint
 from friday.config import load_model_config
 from friday.context import context_report
 from friday.memory import format_memory_result, run_memory_command
@@ -87,10 +88,29 @@ class Gateway:
                 self.ok(rid, {"count": count, "progress": current_progress(self.context)})
             elif method == "session.resume_choices":
                 self.ok(rid, {"choices": resume_choices()})
+            elif method == "checkpoint.undo":
+                self.agent, self.context, restored = undo_friday(
+                    checkpoint_id=params.get("id"),
+                    stream=True,
+                    force=bool(params.get("force")),
+                )
+                self.context.on_event = self.on_agent_event
+                self.suspended_turn = None
+                self.ok(
+                    rid,
+                    {
+                        "id": restored["id"],
+                        "user": restored.get("user", ""),
+                        "changed_paths": restored.get("changed_paths", []),
+                        "progress": current_progress(self.context),
+                    },
+                )
             elif method == "approval.pending":
                 self.ok(rid, pending_approval())
             elif method == "approval.approve":
                 result = approve_pending()
+                if result.get("approved"):
+                    finish_pending_checkpoint(Path.cwd().resolve(), pending=True)
                 suspended = self.suspended_turn if result.get("approved") else None
                 self.suspended_turn = None
                 if result.get("approved") and params.get("session"):
@@ -107,6 +127,8 @@ class Gateway:
                     )
                     self.ok(rid, {"approval": result, "approved": True, "continued": True, "message": continued})
                 else:
+                    if result.get("approved"):
+                        finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
                     self.ok(rid, result)
             elif method == "approval.instruct":
                 instruction = str(params.get("text") or "").strip()
@@ -130,11 +152,15 @@ class Gateway:
                     self.ok(rid, {"approval": result, "continued": True, "message": continued})
                 else:
                     self.ok(rid, result)
+                if result.get("rejected"):
+                    finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
             elif method == "approval.reject":
                 self.suspended_turn = None
                 result = approve_pending(reject=True)
                 if self.context is not None and result.get("rejected"):
                     finish_progress(self.context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
+                if result.get("rejected"):
+                    finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
                 self.ok(rid, result)
             else:
                 self.err(rid, f"unknown method: {method}")

@@ -10,11 +10,12 @@ from agent_core import Agent, RunContext
 
 from friday.agent_flow import begin_guarded_run
 from friday.app import prepare_context_for_chat, save_turn
+from friday.checkpoint import begin_checkpoint, finish_checkpoint
 from friday.context import token_estimate
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.memory import capture_user_memory, relevant_memory
-from friday.progress import append_progress_checkpoint, begin_progress, finish_progress
-from friday.tools import build_tools
+from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress
+from friday.tools import build_tools, pending_approval
 from friday.trace import begin_live_trace, finish_live_trace, record_context_transition, write_live_event, write_trace
 
 
@@ -57,6 +58,18 @@ def run_turn(
         user=user,
         prompt_messages=[dict(message) for message in context.get_messages()],
     )
+    try:
+        checkpoint_id = begin_checkpoint(
+            workspace,
+            session_id=str(context.metadata.get("session_id") or ""),
+            turn_id=turn_id,
+            user=user,
+            progress=current_progress(context),
+            continuation=continuation,
+        )
+    except BaseException:
+        finish_live_trace(live_path, turn_id, status="error")
+        raise
 
     def on_observation(event: Any) -> None:
         write_live_event(live_path, turn_id, event)
@@ -118,8 +131,12 @@ def run_turn(
             str(context.metadata.get("friday.loop_status") or "done"),
             verifications,
         )
-    except BaseException:
+    except BaseException as exc:
         finish_live_trace(live_path, turn_id, status="error")
+        try:
+            finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
+        except Exception as checkpoint_error:
+            exc.add_note(f"Friday could not finalize the recovery checkpoint: {checkpoint_error}")
         raise
     finally:
         context.on_event = event_handler
@@ -158,6 +175,7 @@ def run_turn(
         progress,
         last_usage=metrics,
     )
+    finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
     return TurnResult(agent, context, answer, verifications, metrics, progress, notice)
 
 
