@@ -709,8 +709,8 @@ class PromptTests(unittest.TestCase):
             _require_runtime(object())
 
     def test_pinned_runtime_mismatch_fails_during_startup(self) -> None:
-        with patch("friday.app._pinned_core_url", return_value="https://example/core-v2.zip"):
-            with patch("friday.app._installed_core_url", return_value="https://example/core-v1.zip"):
+        with patch("friday.app._pinned_core_version", return_value="0.2.0"):
+            with patch("friday.app._installed_core_version", return_value="0.1.0"):
                 with self.assertRaisesRegex(RuntimeError, "--force --reinstall"):
                     _require_runtime(RunContext())
 

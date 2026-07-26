@@ -1,6 +1,6 @@
 # Architecture
 
-Friday is built on [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime). The two codebases tell two deliberately different stories, and the value of the design is that neither story leaks into the other.
+Friday is built on [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime), published on PyPI as [`friday-agent-core`](https://pypi.org/project/friday-agent-core/). The two codebases tell two deliberately different stories, and the value of the design is that neither story leaks into the other.
 
 ## Two stories
 

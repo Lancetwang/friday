@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import shutil
 import tomllib
 from datetime import datetime
-from importlib.metadata import PackageNotFoundError, distribution
+from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
 from typing import Any
 
@@ -103,11 +102,11 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
 
 
 def _require_runtime(context: Any) -> None:
-    expected = _pinned_core_url()
-    installed = _installed_core_url()
+    expected = _pinned_core_version()
+    installed = _installed_core_version()
     if not hasattr(context, "usage") or (expected and installed != expected):
         raise RuntimeError(
-            "Incompatible agent-core-runtime installation. Reinstall Friday and its pinned dependencies with "
+            "Incompatible friday-agent-core installation. Reinstall Friday and its pinned dependencies with "
             f"`uv tool install -e \"{_source_root()}\" --force --reinstall`."
         )
 
@@ -116,23 +115,22 @@ def _source_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _pinned_core_url() -> str:
+def _pinned_core_version() -> str:
     pyproject = _source_root() / "pyproject.toml"
     if not pyproject.exists():
         return ""
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     for requirement in data.get("project", {}).get("dependencies", []):
-        name, separator, url = str(requirement).partition("@")
-        if separator and name.strip() == "agent-core-runtime":
-            return url.strip()
+        name, separator, pinned = str(requirement).partition("==")
+        if separator and name.strip() == "friday-agent-core":
+            return pinned.strip()
     return ""
 
 
-def _installed_core_url() -> str:
+def _installed_core_version() -> str:
     try:
-        direct_url = distribution("agent-core-runtime").read_text("direct_url.json")
-        return str(json.loads(direct_url or "{}").get("url") or "")
-    except (PackageNotFoundError, json.JSONDecodeError):
+        return metadata_version("friday-agent-core")
+    except PackageNotFoundError:
         return ""
 
 

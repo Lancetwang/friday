@@ -31,7 +31,7 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Program-enforced permissions: dangerous Bash commands stop before execution and require explicit approval.
 - Bounded web research: search continues only for missing evidence, with retrieved sources separated from model inference.
 - Exact accounting and traces: provider usage, model calls, tool activity, compaction, verification, and results are recorded for inspection and analysis.
-- Runtime compatibility: Friday pins a tested `agent-core-runtime` revision and checks the installed environment before execution.
+- Runtime compatibility: Friday pins a tested [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) version and checks the installed environment before execution.
 
 ## Architecture
 

@@ -5,7 +5,7 @@ description = "Friday, a general-purpose local CLI agent built on agent-core-run
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "agent-core-runtime @ https://github.com/Lancetwang/agent-core-runtime/archive/cbec066c7013cb12b9ae5114b8b836f4934ce5f8.zip",
+    "friday-agent-core==0.1.0",
     "rich>=13.7.0",
 ]
 
@@ -18,6 +18,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/friday"]
-
-[tool.hatch.metadata]
-allow-direct-references = true

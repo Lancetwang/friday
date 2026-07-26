@@ -29,7 +29,7 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
-`uv tool install` creates an isolated Python environment and installs the exact `agent-core-runtime` revision pinned by this Friday checkout. The editable Friday install keeps the global command connected to the cloned TUI and Python source.
+`uv tool install` creates an isolated Python environment and installs the exact `friday-agent-core` version pinned by this Friday checkout (resolved from PyPI). The editable Friday install keeps the global command connected to the cloned TUI and Python source.
 
 If `friday` is not found after installation, run `uv tool update-shell`, reopen the terminal, and try `friday --help`.
 
@@ -102,7 +102,7 @@ The first two commands verify the global launcher, model connection, and runtime
 
 ## Upgrade Friday And Agent Core
 
-Friday pins a tested `agent-core-runtime` revision in `pyproject.toml`. Do not independently upgrade agent-core inside the tool environment: a newer core may have an incompatible API.
+Friday pins a tested `friday-agent-core` version in `pyproject.toml`. Do not independently upgrade the runtime inside the tool environment: a newer core may have an incompatible API.
 
 To update both Friday and its compatible core together:
 
@@ -116,7 +116,7 @@ uv tool install -e . --force --reinstall
 
 If agent-core v2 is released but Friday still pins v1, continue using v1. Once Friday updates its pin after compatibility testing, `git pull` plus the reinstall command upgrades both together.
 
-Friday checks the installed core against its pinned source at startup. If the checkout was updated without reinstalling the isolated tool environment, startup stops with the exact reinstall command instead of failing midway through a turn.
+Friday checks the installed runtime version against its pin at startup. If the checkout was updated without reinstalling the isolated tool environment, startup stops with the exact reinstall command instead of failing midway through a turn.
 
 ## Uninstall
 

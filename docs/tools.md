@@ -20,7 +20,7 @@ Dangerous Bash commands create `.friday/pending_approval.json` and suspend the A
 
 `WebSearch` uses Tavily first when `TAVILY_API_KEY` is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Set `ANYSEARCH_API_KEY` for higher AnySearch limits; anonymous fallback remains available. Keys can be placed in the process environment, the workspace `.env`, or `~/.friday/.env`.
 `WebFetch` works without a key through Jina Reader; set `JINA_API_KEY` for higher rate limits.
-They are Friday application tools, not part of `agent-core-runtime`.
+They are Friday application tools, not part of `friday-agent-core`.
 
 Skill discovery and memory management are deliberately not model tools. Friday uses Bash with `friday skill list --json` or `friday memory ...`; the harness performs automatic memory capture and recall in code.
 

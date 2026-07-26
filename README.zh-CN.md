@@ -31,7 +31,7 @@ uv tool install -e . --force --reinstall
 - 程序级权限：危险 Bash 命令在执行前停止并请求明确批准。
 - 有预算的联网检索：只为缺失证据继续搜索，并区分检索事实与模型推断。
 - 精确统计与 Trace：记录 Provider Usage、模型调用、工具过程、压缩、验证和结果，支持检查与分析。
-- Runtime 兼容性：固定经过验证的 `agent-core-runtime` 版本，并在执行前检查安装环境。
+- Runtime 兼容性：固定经过验证的 [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) 版本，并在执行前检查安装环境。
 
 ## 架构
 
