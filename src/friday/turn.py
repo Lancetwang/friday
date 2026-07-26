@@ -9,12 +9,13 @@ from typing import Any, Callable
 from agent_core import Agent, RunContext
 
 from friday.agent_flow import begin_guarded_run
-from friday.app import prepare_context_for_chat, save_turn
+from friday.app import prepare_context_for_chat
 from friday.checkpoint import begin_checkpoint, finish_checkpoint
 from friday.context import token_estimate
-from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
+from friday.loop import AGENT_MAX_STEPS, run_loop
 from friday.memory import capture_user_memory, relevant_memory
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress
+from friday.state import save_turn
 from friday.tools import build_tools, pending_approval
 from friday.trace import begin_live_trace, finish_live_trace, record_context_transition, write_live_event, write_trace
 
@@ -117,15 +118,23 @@ def run_turn(
         prompt_messages = [dict(message) for message in context.get_messages()]
         input_estimate = token_estimate(context, build_tools(workspace, workspace / ".friday")) + _tokens(text)
         start = time.perf_counter()
-        chat = goal_chat if goal else verified_chat
-        answer, verifications = chat(
+        loop_result = run_loop(
             agent,
             context,
             text,
+            force_verify=goal,
+            max_attempts=None,
             max_steps=AGENT_MAX_STEPS,
+            stream=stream,
+            compact_between_attempts=True,
             on_delta=on_delta,
             on_verify=on_verify,
         )
+        answer, verifications = loop_result.answer, loop_result.verifications
+        if loop_result.context is not None and loop_result.context is not context:
+            # The loop compacted mid-run and rebuilt the pair; continue with it.
+            agent, context = loop_result.agent, loop_result.context
+            start_event = 0
         progress = finish_progress(
             context,
             str(context.metadata.get("friday.loop_status") or "done"),
@@ -169,7 +178,6 @@ def run_turn(
         workspace,
         user,
         answer,
-        [event.to_dict() for event in context.events[-20:]],
         str(context.metadata.get("session_id") or ""),
         context.get_messages(),
         progress,

@@ -9,11 +9,13 @@ from agent_core import CallableNode, Flow, ModelNode, RunContext, Tool, ToolCall
 from agent_core.llm import ChatModel
 
 from friday.config import DEFAULT_MODEL_CONFIG
+from friday.context import TOOL_COMPACT_AT, compact_tool_results, context_ratio
 
 GUARD_STATE = "friday.loop_guard"
 GUARD_STOP_REASON = "friday.guard_stop_reason"
 RUN_USAGE_BASELINE = "friday.run_usage_baseline"
 TOKEN_BUDGET_SOFT_LIMIT = 0.85
+CONTEXT_WINDOW_HARD_LIMIT = 0.95
 
 
 def build_guarded_flow(
@@ -26,11 +28,16 @@ def build_guarded_flow(
     router_node = ToolRouterNode(tool_action="tool_call", done_action="final")
     tool_node = ToolCallNode(executor=ToolExecutor(tools), next_action="guard")
     guard_node = CallableNode(_guard_after_tools)
+    suspend_node = CallableNode(_suspend_for_approval)
 
     model_node - "observe" >> router_node
     router_node - "tool_call" >> tool_node
     tool_node - "guard" >> guard_node
     guard_node - "chat" >> model_node
+    # Terminal edges: an action with no successor ends an agent-core flow. The
+    # router's "final" answer exits that way, and the suspend node makes the
+    # approval exit an explicit part of the graph instead of an unwired action.
+    guard_node - "suspend" >> suspend_node
     return Flow(model_node)
 
 
@@ -65,16 +72,23 @@ def _guard_after_tools(payload: Any):
     approval = _approval_required(context)
     if approval:
         context.emit("approval.pending", category="tool", action="suspend", data=approval)
-        state["answer"] = ""
         return "suspend", state
 
-    reason = _no_progress(context) or _token_budget(context)
+    reason = _no_progress(context) or _token_budget(context) or _context_window(context)
     if reason:
         context.metadata[GUARD_STOP_REASON] = reason
         context.emit("loop.guard", category="flow", action="finalize", data={"reason": reason})
         context.add_message("system", _finalize_message(reason))
         state["chat_kwargs"] = {**dict(state.get("chat_kwargs", {}) or {}), "tool_choice": "none"}
     return "chat", state
+
+
+def _suspend_for_approval(payload: Any):
+    state = dict(payload or {})
+    # The run ends without an answer; the pending-approval file carries the
+    # command, and the harness resumes with a continuation turn after a decision.
+    state["answer"] = ""
+    return "halt", state
 
 
 def _approval_required(context: RunContext) -> dict[str, Any] | None:
@@ -131,7 +145,24 @@ def _token_budget(context: RunContext) -> str | None:
     return "token_budget" if used >= int(budget * TOKEN_BUDGET_SOFT_LIMIT) else None
 
 
+def _context_window(context: RunContext) -> str | None:
+    """Mid-run context pressure relief.
+
+    First reclaim tool results losslessly (full outputs stay on disk); only if
+    the window is still nearly full force a final answer. Conversation-level
+    compaction needs an agent rebuild and happens between attempts and turns.
+    """
+    if context_ratio(context) < TOOL_COMPACT_AT:
+        return None
+    count = compact_tool_results(context)
+    if count:
+        context.emit("context.compacted", category="context", action="tool_results", data={"count": count})
+    return "context_window" if context_ratio(context) >= CONTEXT_WINDOW_HARD_LIMIT else None
+
+
 def _finalize_message(reason: str) -> str:
     if reason == "no_progress":
         return "Loop guard: the same tool cycle produced the same result again. Do not call more tools. Return the best supported answer, state unresolved items, and stop."
+    if reason == "context_window":
+        return "Loop guard: the context window is nearly full. Do not call more tools. Return the best supported answer, state unresolved items, and stop."
     return "Loop guard: the run reached its Token Budget reserve. Do not call more tools. Return the best supported answer, state unresolved items, and stop."

@@ -7,7 +7,7 @@ from typing import Any, Callable, Literal
 
 from agent_core import Agent, CallableNode, Flow, RunContext
 
-from friday.agent_flow import GUARD_STOP_REASON
+from friday.agent_flow import GUARD_STOP_REASON, inherit_guarded_run
 from friday.config import DEFAULT_MODEL_CONFIG
 from friday.prompts import goal_attempt_prompt, retry_prompt
 from friday.verification import record_verification, verify_friday
@@ -15,6 +15,7 @@ from friday.verification import record_verification, verify_friday
 AGENT_MAX_STEPS = 10000
 FLOW_MAX_STEPS = 10000
 TOKEN_BUDGET_SOFT_LIMIT = 0.85
+GUARD_STOP_REASONS = {"no_progress", "token_budget", "context_window"}
 
 LoopStatus = Literal[
     "done",
@@ -23,6 +24,7 @@ LoopStatus = Literal[
     "inconclusive",
     "no_progress",
     "token_budget",
+    "context_window",
     "error",
     "max_attempts",
 ]
@@ -33,6 +35,10 @@ class LoopResult:
     answer: str = ""
     status: LoopStatus = "done"
     verifications: list[dict[str, Any]] = field(default_factory=list)
+    # The loop may compact between attempts, which rebuilds the pair; callers
+    # must continue with the returned agent and context.
+    agent: Agent | None = None
+    context: RunContext | None = None
 
 
 def verified_chat(
@@ -89,6 +95,8 @@ def run_loop(
     force_verify: bool,
     max_attempts: int | None,
     max_steps: int,
+    stream: bool = True,
+    compact_between_attempts: bool = False,
     on_delta: Any = None,
     on_verify: Callable[[dict[str, Any]], None] | None = None,
 ) -> LoopResult:
@@ -96,6 +104,7 @@ def run_loop(
         "agent": agent,
         "answer": "",
         "attempt": 0,
+        "compact_between_attempts": compact_between_attempts,
         "context": context,
         "feedback": "",
         "force_verify": force_verify,
@@ -108,12 +117,13 @@ def run_loop(
         "on_verify": on_verify,
         "start_event": len(context.events),
         "status": "done",
+        "stream": stream,
         "token_budget": _token_budget(context),
         "usage_start": _usage_snapshot(context),
         "verifications": [],
     }
     result = _loop_flow().run(state, max_steps=FLOW_MAX_STEPS).payload["result"]
-    context.metadata["friday.loop_status"] = result.status
+    result.context.metadata["friday.loop_status"] = result.status
     return result
 
 
@@ -129,6 +139,8 @@ def _loop_flow() -> Flow:
 
 def _attempt(state: dict[str, Any]):
     state["attempt"] += 1
+    if state["attempt"] > 1 and state.get("compact_between_attempts"):
+        _refresh_context(state)
     if state["attempt"] == 1:
         prompt = goal_attempt_prompt(state["goal"]) if state["force_verify"] else state["goal"]
     else:
@@ -142,6 +154,29 @@ def _attempt(state: dict[str, Any]):
     )
     state["attempt_signature"] = _event_signature(state["context"].events[event_start:])
     return "verify", state
+
+
+def _refresh_context(state: dict[str, Any]) -> None:
+    """Between repair attempts, let the harness compact a long-running goal so the
+    next attempt starts inside the context window. A swap re-inherits the run's
+    guard baseline and resets event-relative bookkeeping; usage accounting is
+    shared across the swap, so the token budget keeps counting the whole run.
+    """
+    from friday.app import prepare_context_for_chat
+
+    context = state["context"]
+    if not isinstance(getattr(context, "metadata", None), dict) or "workspace" not in context.metadata:
+        return
+    agent, new_context, notice = prepare_context_for_chat(state["agent"], context, stream=state.get("stream", True))
+    if new_context is context:
+        return
+    new_context.on_event = context.on_event
+    new_context.on_observation = context.on_observation
+    inherit_guarded_run(new_context, context)
+    state["agent"] = agent
+    state["context"] = new_context
+    state["start_event"] = 0
+    new_context.emit("context.transition", category="context", data={"notice": notice})
 
 
 def _verify(state: dict[str, Any]):
@@ -169,7 +204,7 @@ def _verify(state: dict[str, Any]):
         return _finish(state, result, "inconclusive")
 
     guard_reason = result.get("guard_stop_reason") or state["context"].metadata.get(GUARD_STOP_REASON)
-    if guard_reason in {"no_progress", "token_budget"}:
+    if guard_reason in GUARD_STOP_REASONS:
         result["stop_reason"] = guard_reason
         return _finish(state, result, guard_reason)
 
@@ -275,4 +310,6 @@ def _to_result(state: dict[str, Any]) -> LoopResult:
         answer=str(state.get("answer", "")),
         status=state.get("status", "done"),
         verifications=list(state.get("verifications", [])),
+        agent=state.get("agent"),
+        context=state.get("context"),
     )

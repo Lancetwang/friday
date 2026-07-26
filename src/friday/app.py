@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 import shutil
-import tempfile
 import tomllib
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, distribution
@@ -23,13 +22,39 @@ from friday.prompts import (
     environment,
     prompt_template,
 )
-from friday.progress import append_progress_checkpoint, current_progress, is_progress_checkpoint, restore_progress
+from friday.progress import current_progress
 from friday.skills import ensure_default_skill, skill_routing
+from friday.state import (
+    SessionState,
+    conversation_body,
+    hydrate,
+    load_session,
+    recent_turns,
+    resume_choices,
+    save_session_state,
+    save_turn,
+    state_from_snapshot,
+    write_session,
+)
 from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions
 from friday.trace import record_checkpoint_restore
 
+__all__ = [
+    "build_friday",
+    "build_instructions",
+    "compact_friday",
+    "ensure_user_home",
+    "init_project",
+    "prepare_context_for_chat",
+    "reset_friday",
+    "resume_choices",
+    "resume_friday",
+    "save_session_state",
+    "save_turn",
+    "undo_friday",
+]
+
 PROJECT_INSTRUCTIONS_LIMIT = 12000
-RECENT_CONVERSATION_LIMIT = 10
 # Replace shipped placeholders only when the user's file is still byte-for-byte equivalent.
 LEGACY_PROMPT_DEFAULT_HASHES = {
     "SOUL.md": {
@@ -137,7 +162,7 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     # One in-band pass: inserted into the current conversation so it reuses the cached
     # prefix. Within this single turn the agent saves memory candidates through Friday's
     # CLI (so compaction never forgets them), then returns the structured summary.
-    recent_messages = _recent_turn_messages(context)
+    recent_messages = recent_turns(context.get_messages())
     session_id = str(context.metadata.get("session_id") or "")
     progress = current_progress(context)
     summary = agent.chat(
@@ -149,19 +174,20 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     )
     workspace = Path(context.metadata["workspace"])
     new_agent, new_context = build_friday(workspace, stream=stream)
-    if session_id:
-        new_context.metadata["session_id"] = session_id
     if hasattr(context, "usage") and hasattr(new_context, "usage"):
+        # Deliberate aliasing: the rebuilt context accumulates into the same RunUsage
+        # so run-level budget accounting survives compaction.
         new_context.usage = context.usage
     # C1 is the structured state summary. C2 keeps the latest complete turns verbatim,
     # including assistant tool calls and their matching tool results.
-    new_context.add_message("assistant", f"## Session Summary\n{summary.strip()}")
-    _replace_context_messages(
+    hydrate(
         new_context,
-        [*map(dict, new_context.get_messages()), *recent_messages],
+        SessionState(
+            session_id=session_id,
+            body=[{"role": "assistant", "content": f"## Session Summary\n{summary.strip()}"}, *recent_messages],
+            progress=progress,
+        ),
     )
-    restore_progress(new_context, progress)
-    append_progress_checkpoint(new_context)
     if session_id:
         save_session_state(workspace, session_id, new_context.get_messages(), current_progress(new_context))
     return new_agent, new_context, summary
@@ -182,23 +208,16 @@ def prepare_context_for_chat(agent: Agent, context: RunContext, *, stream: bool 
 def resume_friday(workspace: Path | None = None, *, stream: bool = True, resume_id: str | None = None) -> tuple[Agent, RunContext, int]:
     root = (workspace or Path.cwd()).resolve()
     agent, context = build_friday(root, stream=stream)
-    session = _resume_session(root, resume_id)
-    if not session:
+    snapshot = load_session(root, resume_id)
+    if not snapshot:
         return agent, context, 0
-    context.metadata["session_id"] = str(session.get("session_id") or context.metadata.get("session_id") or "")
-    saved = session.get("messages")
-    if isinstance(saved, list) and saved:
-        # Keep the freshly built system prefix (current rules, memory, environment)
-        # and restore the saved conversation body verbatim. Only the stale leading
-        # prefix is dropped; later messages (e.g. compaction summaries, approvals)
-        # are kept. No summarization: the original turns come back as-is.
-        body = _conversation_body(saved)
-        _replace_context_messages(context, [dict(message) for message in context.get_messages()] + body)
-    restore_progress(context, session.get("progress"))
-    if isinstance(session.get("last_usage"), dict):
-        context.metadata["friday.last_usage"] = dict(session["last_usage"])
-    append_progress_checkpoint(context)
-    return agent, context, int(session.get("turns", 0) or 0)
+    # Keep the freshly built system prefix (current rules, memory, environment)
+    # and replay the saved conversation body verbatim after it. Only the stale
+    # leading prefix is dropped; later messages (e.g. compaction summaries,
+    # approvals) come back as-is.
+    state = state_from_snapshot(snapshot)
+    hydrate(context, state)
+    return agent, context, state.turns
 
 
 def undo_friday(
@@ -212,13 +231,15 @@ def undo_friday(
     restored = restore_checkpoint(root, checkpoint_id=checkpoint_id, force=force)
     agent, context = build_friday(root, stream=stream)
     session_id = str(restored.get("session_id") or context.metadata.get("session_id") or "")
-    context.metadata["session_id"] = session_id
-    _replace_context_messages(
+    before_progress = restored.get("before_progress")
+    hydrate(
         context,
-        [dict(message) for message in context.get_messages()] + _conversation_body(restored["messages"]),
+        SessionState(
+            session_id=session_id,
+            body=conversation_body(restored["messages"]),
+            progress=before_progress if isinstance(before_progress, dict) else {},
+        ),
     )
-    restore_progress(context, restored.get("before_progress"))
-    append_progress_checkpoint(context)
 
     session_path = root / ".friday" / "sessions" / f"{session_id}.json"
     if restored.get("session_existed"):
@@ -228,48 +249,11 @@ def undo_friday(
             "messages": context.get_messages(),
             "progress": current_progress(context),
         }
-        _write_session(session_path, snapshot)
+        write_session(session_path, snapshot)
     elif session_path.exists():
         session_path.unlink()
     record_checkpoint_restore(session_id, str(restored["id"]), list(restored.get("changed_paths") or []))
     return agent, context, restored
-
-
-def _conversation_body(messages: list[Any]) -> list[dict[str, Any]]:
-    body = [dict(message) for message in messages if isinstance(message, dict) and not is_progress_checkpoint(message)]
-    start = 0
-    while start < len(body) and body[start].get("role") == "system":
-        start += 1
-    return body[start:]
-
-
-def _replace_context_messages(context: RunContext, messages: list[Any]) -> None:
-    clean = [dict(message) for message in messages if isinstance(message, dict)]
-    context.messages = clean
-    if context.active_message_scope is not None:
-        context.message_scopes[context.active_message_scope] = [dict(message) for message in clean]
-
-
-def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dict[str, str]]:
-    root = (workspace or Path.cwd()).resolve()
-    choices: list[dict[str, str]] = []
-    for path in reversed(_session_files(root)[-limit:]):
-        data = _read_session(path)
-        if not data:
-            continue
-        progress = data.get("progress") if isinstance(data.get("progress"), dict) else {}
-        choices.append(
-            {
-                "assistant": _preview(str(data.get("assistant", ""))),
-                "id": str(data.get("session_id") or path.stem),
-                "objective": _preview(str(progress.get("objective", ""))),
-                "status": str(progress.get("status", "")),
-                "time": str(data.get("updated") or ""),
-                "turns": str(data.get("turns", 0)),
-                "user": _preview(str(data.get("user", ""))),
-            }
-        )
-    return choices
 
 
 def ensure_user_home(home: Path | None = None) -> list[Path]:
@@ -351,118 +335,6 @@ def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None
     return removed
 
 
-def save_turn(
-    workspace: Path,
-    user: str,
-    assistant: str,
-    events: list[dict[str, Any]] | None = None,
-    session_id: str | None = None,
-    messages: list[dict[str, Any]] | None = None,
-    progress: dict[str, Any] | None = None,
-    last_usage: dict[str, Any] | None = None,
-) -> Path:
-    """Persist one snapshot per session, overwritten in place (atomic).
-
-    The file holds the current full message list plus light index metadata, so
-    a session's on-disk size tracks the live context (O(N)) instead of appending
-    a full snapshot every turn (O(N^2)).
-    """
-    sessions = workspace / ".friday" / "sessions"
-    sessions.mkdir(parents=True, exist_ok=True)
-    sid = session_id or datetime.now().strftime("%Y%m%d%H%M%S%f")
-    path = sessions / f"{sid}.json"
-    existing = _read_session(path) or {}
-    now = datetime.now().isoformat(timespec="seconds")
-    snapshot = {
-        "session_id": sid,
-        "created": existing.get("created") or now,
-        "updated": now,
-        "turns": int(existing.get("turns", 0) or 0) + 1,
-        "user": existing.get("user") or _preview(user, 180),
-        "assistant": _preview(assistant, 220),
-        "messages": messages or [],
-        "progress": progress if isinstance(progress, dict) else existing.get("progress", {}),
-        "last_usage": last_usage if isinstance(last_usage, dict) else existing.get("last_usage", {}),
-    }
-    _write_session(path, snapshot)
-    return path
-
-
-def save_progress(workspace: Path, session_id: str, progress: dict[str, Any]) -> Path:
-    sessions = workspace / ".friday" / "sessions"
-    sessions.mkdir(parents=True, exist_ok=True)
-    path = sessions / f"{session_id}.json"
-    existing = _read_session(path) or {}
-    now = datetime.now().isoformat(timespec="seconds")
-    snapshot = {
-        **existing,
-        "session_id": session_id,
-        "created": existing.get("created") or now,
-        "updated": now,
-        "turns": int(existing.get("turns", 0) or 0),
-        "user": existing.get("user") or _preview(str(progress.get("objective") or ""), 180),
-        "assistant": existing.get("assistant") or "",
-        "messages": existing.get("messages") or [],
-        "progress": progress,
-    }
-    _write_session(path, snapshot)
-    return path
-
-
-def save_session_state(workspace: Path, session_id: str, messages: list[dict[str, Any]], progress: dict[str, Any]) -> Path | None:
-    path = workspace / ".friday" / "sessions" / f"{session_id}.json"
-    existing = _read_session(path)
-    if not existing:
-        return None
-    existing.update(
-        updated=datetime.now().isoformat(timespec="seconds"),
-        messages=messages,
-        progress=progress,
-    )
-    _write_session(path, existing)
-    return path
-
-
-def _write_session(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=path.parent) as file:
-        json.dump(data, file, ensure_ascii=False)
-        temp_path = Path(file.name)
-    temp_path.replace(path)
-
-
-def _read_session(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _session_files(workspace: Path) -> list[Path]:
-    sessions = workspace / ".friday" / "sessions"
-    if not sessions.exists():
-        return []
-    # Session ids are timestamps, so lexical filename order is chronological.
-    return sorted(sessions.glob("*.json"))
-
-
-def _resume_session(workspace: Path, resume_id: str | None) -> dict[str, Any] | None:
-    files = _session_files(workspace)
-    if not files:
-        return None
-    if resume_id:
-        return _read_session(workspace / ".friday" / "sessions" / f"{resume_id}.json")
-    return _read_session(files[-1])
-
-
-def _preview(text: str, limit: int = 80) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[:limit - 3] + "..."
-
-
 def _read_optional(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
@@ -491,16 +363,6 @@ def _embedded_markdown(text: str, *, heading_offset: int = 1) -> str:
                 line = "#" * level + match.group(2)
         output.append(line)
     return "\n".join(output).strip()
-
-
-def _recent_turn_messages(context: RunContext) -> list[dict[str, Any]]:
-    if not hasattr(context, "get_messages"):
-        return []
-    messages = [dict(message) for message in context.get_messages() if isinstance(message, dict) and not is_progress_checkpoint(message)]
-    user_indices = [index for index, message in enumerate(messages) if message.get("role") == "user"]
-    if not user_indices:
-        return []
-    return messages[user_indices[-RECENT_CONVERSATION_LIMIT] :]
 
 
 def _exists_exact(path: Path) -> bool:

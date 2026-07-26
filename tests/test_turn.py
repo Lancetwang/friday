@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from agent_core import Agent, RunContext
 
+from friday.loop import LoopResult
 from friday.trace import expand_event, load_trace
 from friday.turn import run_turn
 
@@ -36,11 +37,11 @@ class TurnTests(unittest.TestCase):
             def chat(*args, **kwargs):
                 context.record_model_usage({"prompt_tokens": 10, "completion_tokens": 3})
                 context.record_model_usage({"input_tokens": 12, "output_tokens": 4})
-                return "done", []
+                return LoopResult(answer="done")
 
             with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
                 with patch("friday.turn.build_tools", return_value=[]):
-                    with patch("friday.turn.verified_chat", side_effect=chat):
+                    with patch("friday.turn.run_loop", side_effect=chat):
                         with patch("friday.turn.write_trace") as write_trace:
                             with patch("friday.turn.save_turn") as save_turn:
                                 result = run_turn(agent, context, "hello", stream=False)
@@ -78,7 +79,7 @@ class TurnTests(unittest.TestCase):
 
         with patch("friday.turn.prepare_context_for_chat", return_value=(agent, new_context, "compacted")):
             with patch("friday.turn.build_tools", return_value=[]):
-                with patch("friday.turn.verified_chat", return_value=("done", [])):
+                with patch("friday.turn.run_loop", return_value=LoopResult(answer="done")):
                     with patch("friday.turn.write_trace"):
                         with patch("friday.turn.save_turn"):
                             result = run_turn(agent, old_context, "hello", stream=False)
@@ -93,12 +94,12 @@ class TurnTests(unittest.TestCase):
             def chat(*args, **kwargs):
                 memory_messages = [message for message in context.get_messages() if message.get("friday_memory_recall")]
                 self.assertEqual(memory_messages[0]["content"], "## Relevant Memory\n- prior preference")
-                return "done", []
+                return LoopResult(answer="done")
 
             with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
                 with patch("friday.turn.relevant_memory", return_value="## Relevant Memory\n- prior preference"):
                     with patch("friday.turn.capture_user_memory") as capture:
-                        with patch("friday.turn.build_tools", return_value=[]), patch("friday.turn.verified_chat", side_effect=chat):
+                        with patch("friday.turn.build_tools", return_value=[]), patch("friday.turn.run_loop", side_effect=chat):
                             with patch("friday.turn.write_trace"), patch("friday.turn.save_turn"):
                                 run_turn(agent, context, "以后请用中文", stream=False)
 

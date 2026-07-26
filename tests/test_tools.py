@@ -928,7 +928,7 @@ class CompactTests(unittest.TestCase):
             root = Path(tmp)
             sessions = root / ".friday" / "sessions"
 
-            save_turn(root, "hi", "hello", [], "s1", [{"role": "user", "content": "hi"}])
+            save_turn(root, "hi", "hello", "s1", [{"role": "user", "content": "hi"}])
             data = json.loads((sessions / "s1.json").read_text(encoding="utf-8"))
             self.assertEqual(data["session_id"], "s1")
             self.assertEqual(data["turns"], 1)
@@ -936,7 +936,7 @@ class CompactTests(unittest.TestCase):
             self.assertNotIn("events", data)
             self.assertFalse((root / ".friday" / "STATE.md").exists())
 
-            save_turn(root, "hi", "hello again", [], "s1", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi2"}])
+            save_turn(root, "hi", "hello again", "s1", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi2"}])
             updated = json.loads((sessions / "s1.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["turns"], 2)
             self.assertEqual(len(updated["messages"]), 2)
@@ -1494,7 +1494,7 @@ class ResumeTests(unittest.TestCase):
                 {"role": "assistant", "content": "hello"},
             ]
 
-            save_turn(root, "hi", "hello", [], "s1", snapshot, last_usage={"input_tokens": 42, "output_tokens": 3})
+            save_turn(root, "hi", "hello", "s1", snapshot, last_usage={"input_tokens": 42, "output_tokens": 3})
             home = root / "home"
             with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
                 _agent, resumed, count = resume_friday(root, stream=False)

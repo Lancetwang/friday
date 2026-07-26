@@ -113,10 +113,13 @@ def append_progress_checkpoint(context: RunContext) -> None:
         for messages in collections:
             if messages and is_progress_checkpoint(messages[-1]):
                 messages.pop()
-        context.add_message("assistant", progress_checkpoint(state))
+        context.add_message("assistant", progress_checkpoint(state), friday_progress=True)
 
 
 def is_progress_checkpoint(message: dict[str, Any]) -> bool:
+    if message.get("friday_progress"):
+        return True
+    # Sessions saved before the metadata flag existed carry only the heading.
     return str(message.get("content") or "").startswith(PROGRESS_HEADING)
 
 
@@ -175,7 +178,7 @@ def _store(context: RunContext, state: dict[str, Any], *, explanation: str = "")
     workspace = context.metadata.get("workspace")
     session_id = context.metadata.get("session_id")
     if workspace and session_id:
-        from friday.app import save_progress
+        from friday.state import save_progress
 
         save_progress(Path(str(workspace)), str(session_id), state)
     return current_progress(context)

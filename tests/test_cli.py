@@ -13,6 +13,7 @@ from agent_core import RunContext
 
 from friday import cli
 from friday import tui_node
+from friday.session import FridaySession
 
 
 class CliTests(unittest.TestCase):
@@ -32,7 +33,7 @@ class CliTests(unittest.TestCase):
             self.assertIn(expected, output.getvalue())
 
     def test_bare_friday_starts_tui(self) -> None:
-        with patch("friday.cli.build_friday") as build_friday:
+        with patch("friday.session.build_friday") as build_friday:
             with patch("friday.cli.run_tui") as run_tui:
                 cli.main([])
 
@@ -40,7 +41,7 @@ class CliTests(unittest.TestCase):
         run_tui.assert_called_once_with()
 
     def test_tui_launch_does_not_build_agent_first(self) -> None:
-        with patch("friday.cli.build_friday") as build_friday:
+        with patch("friday.session.build_friday") as build_friday:
             with patch("friday.cli.run_tui") as run_tui:
                 cli.main(["tui"])
 
@@ -92,26 +93,28 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(kernel32.calls, [("in", 65001), ("out", 65001)])
 
-    def test_cli_approve_continues_chat_context(self) -> None:
-        agent = object()
-        context = RunContext()
+    def test_slash_approve_delegates_to_the_session_state_machine(self) -> None:
+        session = FridaySession()
 
-        with patch("friday.cli.approve_pending", return_value={"approved": True, "result": {"exit_code": 0}}):
-            with patch("friday.cli._ask", return_value=(agent, context, "done")) as ask:
-                with patch("builtins.print"):
-                    returned_agent, returned_context = cli._slash("/approve", False, agent, context)
+        with patch.object(FridaySession, "approve", return_value={"approval": {"approved": True}, "continued": True}) as approve:
+            with patch("builtins.print"):
+                cli._slash("/approve", session)
+                cli._slash("/approve session", session)
 
-        self.assertIs(returned_agent, agent)
-        self.assertIs(returned_context, context)
-        ask.assert_called_once_with(
-            agent,
-            context,
-            cli._approval_followup_prompt(),
-            False,
-            approval_result={"approved": True, "result": {"exit_code": 0}},
-            user_label="/approve",
-            continuation=True,
+        self.assertEqual(
+            [call.kwargs for call in approve.call_args_list],
+            [{"for_session": False}, {"for_session": True}],
         )
+
+    def test_slash_reject_prints_progress_when_not_continuing(self) -> None:
+        session = FridaySession()
+
+        with patch.object(FridaySession, "reject", return_value={"approval": {"rejected": True}, "continued": False}) as reject:
+            with patch("builtins.print") as printed:
+                cli._slash("/reject", session)
+
+        reject.assert_called_once_with("")
+        self.assertTrue(any("[progress]" in str(call) for call in printed.call_args_list))
 
     def test_permission_flags_configure_environment(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -130,34 +133,34 @@ class CliTests(unittest.TestCase):
             self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "dont-ask")
 
     def test_ask_can_read_long_request_from_stdin(self) -> None:
-        agent = object()
-        context = RunContext()
         with patch.object(sys, "stdin", StringIO("long request\nwith context")):
-            with patch("friday.cli.build_friday", return_value=(agent, context)):
-                with patch("friday.cli._ask", return_value=(agent, context, "done")) as ask:
-                    cli.main(["--no-stream", "ask", "--stdin"])
+            with patch.object(FridaySession, "chat") as chat:
+                cli.main(["--no-stream", "ask", "--stdin"])
 
-        ask.assert_called_once_with(agent, context, "long request\nwith context", False)
+        chat.assert_called_once_with("long request\nwith context")
 
     def test_top_level_goal_uses_the_shared_goal_turn(self) -> None:
-        agent = object()
-        context = RunContext()
-        with patch("friday.cli.build_friday", return_value=(agent, context)):
-            with patch("friday.cli._goal") as goal:
-                cli.main(["--no-stream", "goal", "finish", "the", "task"])
+        with patch.object(FridaySession, "chat") as chat:
+            cli.main(["--no-stream", "goal", "finish", "the", "task"])
 
-        goal.assert_called_once_with(agent, context, "finish the task", False)
+        chat.assert_called_once_with("finish the task", goal=True)
 
     def test_top_level_compact_targets_a_saved_session(self) -> None:
-        agent = object()
-        context = RunContext(metadata={"session_id": "session-1"})
-        with patch("friday.cli.resume_friday", return_value=(agent, context, 3)) as resume:
-            with patch("friday.cli.compact_friday", return_value=(agent, context, "summary")) as compact:
+        resumed = []
+
+        def fake_resume(self, resume_id=None):
+            resumed.append(resume_id)
+            self.agent = object()
+            self.context = RunContext(metadata={"session_id": resume_id or ""})
+            return 3
+
+        with patch.object(FridaySession, "resume", fake_resume):
+            with patch.object(FridaySession, "compact", return_value="summary") as compact:
                 with patch("builtins.print"):
                     cli.main(["--no-stream", "compact", "--session", "session-1"])
 
-        resume.assert_called_once_with(stream=False, resume_id="session-1")
-        compact.assert_called_once_with(agent, context, stream=False)
+        self.assertEqual(resumed, ["session-1"])
+        compact.assert_called_once_with()
 
     def test_skill_list_json_does_not_build_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,7 +174,7 @@ class CliTests(unittest.TestCase):
             )
             output = StringIO()
             with patch("friday.cli.Path.cwd", return_value=root), patch("friday.cli.Path.home", return_value=home):
-                with patch.object(sys, "stdout", output), patch("friday.cli.build_friday") as build_friday:
+                with patch.object(sys, "stdout", output), patch("friday.session.build_friday") as build_friday:
                     cli.main(["skill", "list", "--json"])
 
             data = json.loads(output.getvalue())
@@ -187,7 +190,7 @@ class CliTests(unittest.TestCase):
             root.mkdir()
             output = StringIO()
             with patch("friday.cli.Path.cwd", return_value=root), patch("friday.memory.Path.home", return_value=home):
-                with patch.object(sys, "stdout", output), patch("friday.cli.build_friday") as build_friday:
+                with patch.object(sys, "stdout", output), patch("friday.session.build_friday") as build_friday:
                     cli.main(["memory", "add", "--scope", "user", "Preferred language is Chinese.", "--json"])
 
             saved = json.loads(output.getvalue())

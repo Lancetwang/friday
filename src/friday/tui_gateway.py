@@ -6,17 +6,15 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from agent_core import Agent, AgentEvent, RunContext
+from agent_core import AgentEvent
 
-from friday.app import build_friday, build_instructions, compact_friday, reset_friday, resume_choices, resume_friday, undo_friday
-from friday.checkpoint import finish_pending_checkpoint
+from friday.app import build_instructions, resume_choices
 from friday.config import load_model_config
 from friday.context import context_report
 from friday.memory import format_memory_result, run_memory_command
-from friday.progress import current_progress, finish_progress
-from friday.tools import allow_permissions_for_session, approve_pending, build_tools, pending_approval
+from friday.session import FridaySession
+from friday.tools import build_tools, pending_approval
 from friday.trace_web import start_trace_server
-from friday.turn import run_turn
 
 _real_stdout = sys.stdout
 sys.stdout = sys.stderr
@@ -40,10 +38,21 @@ def verification_status(result: dict[str, Any]) -> dict[str, Any]:
 
 
 class Gateway:
+    """JSON-RPC view over one FridaySession: renders events, owns no agent state."""
+
     def __init__(self) -> None:
-        self.agent: Agent | None = None
-        self.context: RunContext | None = None
-        self.suspended_turn: dict[str, Any] | None = None
+        self.session = FridaySession(
+            stream=True,
+            on_delta=lambda chunk: self.event("message.delta", {"text": chunk}),
+            on_verify=lambda verification: self.event("verification.complete", verification_status(verification)),
+            on_context_notice=lambda notice: self.event("gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"}),
+            on_event=self.on_agent_event,
+            on_turn_start=lambda text: self.event("message.start", {"text": text}),
+            on_turn_complete=lambda result: self.event(
+                "message.complete",
+                {"text": result.answer, "metrics": result.metrics, "progress": result.progress},
+            ),
+        )
 
     def handle(self, msg: dict[str, Any]) -> None:
         rid = msg.get("id")
@@ -53,115 +62,78 @@ class Gateway:
             if method == "session.info":
                 self.ok(rid, self.session_info())
             elif method == "chat.send":
-                self.ok(rid, self.chat(str(params.get("text") or "")))
+                self.ok(rid, {"text": self.session.chat(str(params.get("text") or "")).answer})
             elif method == "goal.run":
-                self.ok(rid, self.chat(str(params.get("text") or ""), goal=True))
+                self.ok(rid, {"text": self.session.chat(str(params.get("text") or ""), goal=True).answer})
             elif method == "prompt.get":
                 self.ok(rid, {"text": build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")})
             elif method == "memory.command":
                 result = run_memory_command(str(params.get("command") or ""), Path.cwd().resolve())
                 self.ok(rid, {"text": format_memory_result(result)})
             elif method == "context.get":
-                agent, context = self.ensure_agent()
+                _agent, context = self.session.ensure()
                 self.ok(rid, {"text": context_report(context, build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))})
             elif method == "progress.get":
-                _agent, context = self.ensure_agent()
-                self.ok(rid, {"progress": current_progress(context)})
+                self.session.ensure()
+                self.ok(rid, {"progress": self.session.progress()})
             elif method == "trace.serve":
                 _server, url = start_trace_server()
                 self.ok(rid, {"url": url})
             elif method == "session.reset":
-                removed = reset_friday(include_user=True)
-                self.agent = None
-                self.context = None
-                self.suspended_turn = None
+                removed = self.session.reset()
                 self.ok(rid, {"removed": [str(path) for path in removed], "info": self.session_info()})
             elif method == "session.compact":
-                agent, context = self.ensure_agent()
-                self.agent, self.context, summary = compact_friday(agent, context, stream=True)
-                self.context.on_event = self.on_agent_event
-                self.ok(rid, {"text": summary})
+                self.ok(rid, {"text": self.session.compact()})
             elif method == "session.resume":
-                self.agent, self.context, count = resume_friday(stream=True, resume_id=params.get("id"))
-                self.context.on_event = self.on_agent_event
-                self.suspended_turn = None
-                self.ok(rid, {"count": count, "progress": current_progress(self.context)})
+                count = self.session.resume(params.get("id"))
+                self.ok(rid, {"count": count, "progress": self.session.progress()})
             elif method == "session.resume_choices":
                 self.ok(rid, {"choices": resume_choices()})
             elif method == "checkpoint.undo":
-                self.agent, self.context, restored = undo_friday(
-                    checkpoint_id=params.get("id"),
-                    stream=True,
-                    force=bool(params.get("force")),
-                )
-                self.context.on_event = self.on_agent_event
-                self.suspended_turn = None
+                restored = self.session.undo(params.get("id"), force=bool(params.get("force")))
                 self.ok(
                     rid,
                     {
                         "id": restored["id"],
                         "user": restored.get("user", ""),
                         "changed_paths": restored.get("changed_paths", []),
-                        "progress": current_progress(self.context),
+                        "progress": self.session.progress(),
                     },
                 )
             elif method == "approval.pending":
                 self.ok(rid, pending_approval())
             elif method == "approval.approve":
-                result = approve_pending()
-                if result.get("approved"):
-                    finish_pending_checkpoint(Path.cwd().resolve(), pending=True)
-                suspended = self.suspended_turn if result.get("approved") else None
-                self.suspended_turn = None
-                if result.get("approved") and params.get("session"):
-                    _agent, context = self.ensure_agent()
-                    allow_permissions_for_session(context)
-                if suspended:
-                    prompt = str(suspended["text"]) if suspended.get("goal") else _approval_followup_prompt()
-                    continued = self.chat(
-                        prompt,
-                        goal=bool(suspended.get("goal")),
-                        approval_result=result,
-                        user_label="/approve",
-                        continuation=True,
+                outcome = self.session.approve(for_session=bool(params.get("session")))
+                if outcome["continued"]:
+                    self.ok(
+                        rid,
+                        {
+                            "approval": outcome["approval"],
+                            "approved": True,
+                            "continued": True,
+                            "message": {"text": outcome["turn"].answer},
+                        },
                     )
-                    self.ok(rid, {"approval": result, "approved": True, "continued": True, "message": continued})
                 else:
-                    if result.get("approved"):
-                        finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
-                    self.ok(rid, result)
+                    self.ok(rid, outcome["approval"])
             elif method == "approval.instruct":
                 instruction = str(params.get("text") or "").strip()
                 if not instruction:
                     raise ValueError("Tell Friday what to do before continuing.")
-                suspended = self.suspended_turn
-                self.suspended_turn = None
-                result = approve_pending(reject=True)
-                if suspended and result.get("rejected"):
-                    goal = bool(suspended.get("goal"))
-                    prompt = instruction
-                    if goal:
-                        prompt = f"{suspended['text']}\n\nHuman guidance after declining the pending command: {instruction}"
-                    continued = self.chat(
-                        prompt,
-                        goal=goal,
-                        approval_result={**result, "instruction": instruction},
-                        user_label=instruction,
-                        continuation=True,
+                outcome = self.session.reject(instruction)
+                if outcome["continued"]:
+                    self.ok(
+                        rid,
+                        {
+                            "approval": outcome["approval"],
+                            "continued": True,
+                            "message": {"text": outcome["turn"].answer},
+                        },
                     )
-                    self.ok(rid, {"approval": result, "continued": True, "message": continued})
                 else:
-                    self.ok(rid, result)
-                if result.get("rejected"):
-                    finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
+                    self.ok(rid, outcome["approval"])
             elif method == "approval.reject":
-                self.suspended_turn = None
-                result = approve_pending(reject=True)
-                if self.context is not None and result.get("rejected"):
-                    finish_progress(self.context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
-                if result.get("rejected"):
-                    finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
-                self.ok(rid, result)
+                self.ok(rid, self.session.reject()["approval"])
             else:
                 self.err(rid, f"unknown method: {method}")
         except Exception as exc:
@@ -172,45 +144,9 @@ class Gateway:
         return {
             "cwd": str(Path.cwd().resolve()),
             "model": f"{config.provider}/{config.model}",
-            "progress": current_progress(self.context) if self.context is not None else {},
+            "progress": self.session.progress(),
             "tools": [tool.name for tool in build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")],
         }
-
-    def chat(
-        self,
-        text: str,
-        *,
-        goal: bool = False,
-        approval_result: dict[str, Any] | None = None,
-        user_label: str | None = None,
-        continuation: bool = False,
-    ) -> dict[str, Any]:
-        agent, context = self.ensure_agent()
-        self.event("message.start", {"text": text})
-        result = run_turn(
-            agent,
-            context,
-            text,
-            goal=goal,
-            on_delta=lambda chunk: self.event("message.delta", {"text": chunk}),
-            on_verify=lambda verification: self.event("verification.complete", verification_status(verification)),
-            on_context_notice=lambda notice: self.event("gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"}),
-            approval_result=approval_result,
-            user_label=user_label,
-            continuation=continuation,
-        )
-        self.agent, self.context = result.agent, result.context
-        if self.context.events:
-            pending = pending_approval(Path(self.context.metadata["workspace"]))
-            self.suspended_turn = {"text": text, "goal": goal} if pending.get("pending") else None
-        self.event("message.complete", {"text": result.answer, "metrics": result.metrics, "progress": result.progress})
-        return {"text": result.answer}
-
-    def ensure_agent(self) -> tuple[Agent, RunContext]:
-        if self.agent is None or self.context is None:
-            self.agent, self.context = build_friday(stream=True)
-            self.context.on_event = self.on_agent_event
-        return self.agent, self.context
 
     def on_agent_event(self, event: AgentEvent) -> None:
         if event.type == "verification.start":
@@ -251,14 +187,6 @@ class Gateway:
         with _write_lock:
             _real_stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
             _real_stdout.flush()
-
-
-def _approval_followup_prompt() -> str:
-    return (
-        "The user approved the pending command and it has now executed. "
-        "Use the approval result in the system context to continue or briefly report the final state to the user. "
-        "Do not ask for approval again unless a new dangerous action is required."
-    )
 
 
 if __name__ == "__main__":

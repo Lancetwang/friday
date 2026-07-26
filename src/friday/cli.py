@@ -6,8 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-from friday.app import build_friday, build_instructions, compact_friday, ensure_user_home, init_project, reset_friday, resume_choices, resume_friday, undo_friday
-from friday.checkpoint import checkpoint_choices, finish_pending_checkpoint
+from friday.app import build_instructions, ensure_user_home, init_project, reset_friday, resume_choices
+from friday.checkpoint import checkpoint_choices
 from friday.context import context_report
 from friday.memory import (
     add_memory,
@@ -20,13 +20,14 @@ from friday.memory import (
     search_memories,
     update_memory,
 )
-from friday.progress import current_progress, finish_progress, progress_line
+from friday.progress import progress_line
+from friday.session import FridaySession
 from friday.skills import discover_skills
-from friday.tui_node import run_tui
-from friday.tools import allow_permissions_for_session, approve_pending, build_tools
+from friday.tools import build_tools
 from friday.trace import behavior_events, list_traces, load_trace, trace_stats
 from friday.trace_web import serve_trace_ui, start_trace_server
-from friday.turn import run_turn
+from friday.tui_node import run_tui
+from friday.turn import TurnResult
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -176,108 +177,75 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "context":
-        _agent, context, count = resume_friday(stream=False, resume_id=args.session)
-        print(f"Context for {'session ' + str(context.metadata.get('session_id')) if count else 'a new session'} ({count} saved turns)")
-        print(_context_report(context))
+        session = _session(False)
+        count = session.resume(args.session)
+        print(f"Context for {'session ' + str(session.context.metadata.get('session_id')) if count else 'a new session'} ({count} saved turns)")
+        print(_context_report(session.context))
         return
 
     if command == "progress":
-        _agent, context, _count = resume_friday(stream=False, resume_id=args.session)
-        print(progress_line(current_progress(context)))
+        session = _session(False)
+        session.resume(args.session)
+        print(progress_line(session.progress()))
         return
 
     if command == "compact":
-        agent, context, count = resume_friday(stream=stream, resume_id=args.session)
+        session = _session(stream)
+        count = session.resume(args.session)
         if not count:
             print("No saved session to compact.")
             return
-        _agent, context, summary = compact_friday(agent, context, stream=stream)
-        print(f"Compacted session {context.metadata.get('session_id')} ({count} turns).")
+        summary = session.compact()
+        print(f"Compacted session {session.context.metadata.get('session_id')} ({count} turns).")
         print(summary)
         return
 
     if command == "approve":
-        result = approve_pending()
-        if not result.get("approved"):
-            print(result.get("message") or "Approval was not executed.")
-            return
-        finish_pending_checkpoint(Path.cwd().resolve(), pending=True)
-        print(_approval_status(result))
-        agent, context, count = resume_friday(stream=stream, resume_id=args.session)
-        if count:
-            if args.for_session:
-                allow_permissions_for_session(context)
-            progress = current_progress(context)
-            if progress.get("mode") == "goal":
-                _goal(
-                    agent,
-                    context,
-                    str(progress.get("objective") or "Continue the approved goal."),
-                    stream,
-                    approval_result=result,
-                    user_label="/approve",
-                    continuation=True,
-                )
-            else:
-                _ask(
-                    agent,
-                    context,
-                    _approval_followup_prompt(),
-                    stream,
-                    approval_result=result,
-                    user_label="/approve",
-                    continuation=True,
-                )
-        else:
-            if args.session:
-                print(f"Session not found: {args.session}. The command was executed, but no AI continuation ran.")
-            finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
+        session = _session(stream)
+        count = session.resume(args.session)
+        if args.session and not count:
+            print(f"Session not found: {args.session}. Approving executes the command without an AI continuation.")
+        outcome = session.approve(for_session=args.for_session)
+        if not outcome["approval"].get("approved"):
+            print(outcome["approval"].get("message") or "Approval was not executed.")
         return
 
     if command == "reject":
-        result = approve_pending(reject=True)
-        if not result.get("rejected"):
-            print(result.get("message") or "No pending approval.")
-            return
-        print(f"Rejected: {result.get('command') or 'pending command'}")
-        _agent, context, count = resume_friday(stream=stream if args.message else False, resume_id=args.session)
-        if count:
-            if args.message:
-                _continue_with_guidance(_agent, context, args.message, result, stream)
-            else:
-                finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
-        finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
+        session = _session(stream if args.message else False)
+        session.resume(args.session)
+        outcome = session.reject(args.message or "")
+        if not outcome["approval"].get("rejected"):
+            print(outcome["approval"].get("message") or "No pending approval.")
         return
 
     if command == "reset":
-        _reset(args.yes)
+        if _confirm_reset(args.yes):
+            _print_reset(reset_friday(include_user=True))
         return
 
     if command == "tui":
         run_tui()
         return
 
+    session = _session(stream)
     if command == "resume":
         if args.list:
             _print_resume_choices()
             return
-        agent, context, count = resume_friday(stream=stream, resume_id=args.session)
+        count = session.resume(args.session)
         if args.session and not count:
             print(f"Session not found: {args.session}")
             return
         print(f"Resumed {count} turns." if count else "No saved session; starting a new chat.")
-        print(f"[progress] {progress_line(current_progress(context))}")
+        print(f"[progress] {progress_line(session.progress())}")
         command = "chat"
-    else:
-        agent, context = build_friday(stream=stream)
 
     if command == "ask":
-        text = _request_text(args, parser, "ask")
-        _ask(agent, context, text, stream)
+        session.chat(_request_text(args, parser, "ask"))
         return
 
     if command == "goal":
-        _goal(agent, context, _request_text(args, parser, "goal"), stream)
+        session.chat(_request_text(args, parser, "goal"), goal=True)
         return
 
     if command == "chat":
@@ -293,9 +261,9 @@ def main(argv: list[str] | None = None) -> None:
             if not text:
                 continue
             if text.startswith("/"):
-                agent, context = _slash(text, stream, agent, context)
+                _slash(text, session)
                 continue
-            agent, context, _ = _ask(agent, context, text, stream)
+            session.chat(text)
         return
 
     parser.error(f"unknown command: {command}")
@@ -326,7 +294,19 @@ def _configure_permissions(args) -> None:
         os.environ["FRIDAY_DISALLOWED_TOOLS"] = json.dumps(args.disallowed_tools, ensure_ascii=False)
 
 
-def _slash(text: str, stream: bool, agent, context):
+def _session(stream: bool) -> FridaySession:
+    return FridaySession(
+        stream=stream,
+        on_delta=_print_delta if stream else None,
+        on_progress=_print_progress,
+        on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
+        on_turn_complete=lambda result: _print_turn(result, stream),
+        on_approval=lambda result: print(_approval_status(result)),
+        on_rejection=lambda result: print(f"Rejected: {result.get('command') or 'pending command'}"),
+    )
+
+
+def _slash(text: str, session: FridaySession) -> None:
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
@@ -337,68 +317,50 @@ def _slash(text: str, stream: bool, agent, context):
         result = run_memory_command(raw_command[len("memory") :].strip(), Path.cwd().resolve())
         print(format_memory_result(result))
     elif command == "context":
+        _agent, context = session.ensure()
         print(_context_report(context))
     elif command == "progress":
-        print(progress_line(current_progress(context)))
+        print(progress_line(session.progress()))
     elif command == "trace":
         _server, url = start_trace_server()
         print(f"Trace Workbench: {url}")
     elif command == "compact":
-        agent, context, summary = compact_friday(agent, context, stream=stream)
+        summary = session.compact()
         print("compacted conversation:")
         print(summary)
     elif command == "resume":
-        agent, context, count = resume_friday(stream=stream)
+        count = session.resume()
         print(f"resumed {count} turns")
-        print(f"[progress] {progress_line(current_progress(context))}")
+        print(f"[progress] {progress_line(session.progress())}")
     elif command.startswith("undo"):
         checkpoint_id = raw_command[len("undo") :].strip() or None
-        agent, context, restored = undo_friday(checkpoint_id=checkpoint_id, stream=stream)
-        _print_undo(restored)
+        _print_undo(session.undo(checkpoint_id))
     elif command.startswith("goal"):
         goal = text.split(" ", 1)[1].strip() if " " in text else ""
         if not goal:
             print("usage: /goal describe the goal")
         else:
-            agent, context, _ = _goal(agent, context, goal, stream)
+            session.chat(goal, goal=True)
     elif command in {"approve", "approve session"}:
-        result = approve_pending()
-        print(json_dump(result))
-        if result.get("approved"):
-            finish_pending_checkpoint(Path.cwd().resolve(), pending=True)
-            if command == "approve session":
-                allow_permissions_for_session(context)
-            agent, context, _ = _ask(
-                agent,
-                context,
-                _approval_followup_prompt(),
-                stream,
-                approval_result=result,
-                user_label="/approve",
-                continuation=True,
-            )
+        outcome = session.approve(for_session=command == "approve session")
+        if not outcome["approval"].get("approved"):
+            print(outcome["approval"].get("message") or "No pending approval.")
     elif command.startswith("reject"):
-        instruction = raw_command[len("reject") :].strip()
-        result = approve_pending(reject=True)
-        print(json_dump(result))
-        if result.get("rejected"):
-            if instruction:
-                agent, context, _ = _continue_with_guidance(agent, context, instruction, result, stream)
-            else:
-                progress = finish_progress(context, "blocked", [{"verdict": "blocked", "feedback": "User rejected the pending command."}])
-                _print_progress(progress)
-            finish_pending_checkpoint(Path.cwd().resolve(), pending=False)
+        outcome = session.reject(raw_command[len("reject") :].strip())
+        if not outcome["approval"].get("rejected"):
+            print(outcome["approval"].get("message") or "No pending approval.")
+        elif not outcome["continued"]:
+            _print_progress(session.progress())
     elif command == "reset":
-        if _reset(False):
-            agent, context = build_friday(stream=stream)
+        if _confirm_reset(False):
+            _print_reset(session.reset())
     elif command in {"exit", "quit", "q"}:
         raise SystemExit
     else:
         print(f"unknown slash command: /{command}")
-    return agent, context
 
 
-def _reset(yes: bool) -> bool:
+def _confirm_reset(yes: bool) -> bool:
     targets = [
         Path.cwd().resolve() / ".friday",
         Path.home() / ".friday",
@@ -411,60 +373,28 @@ def _reset(yes: bool) -> bool:
         if confirm != "RESET":
             print("cancelled")
             return False
-    removed = reset_friday(include_user=True)
-    print("reset Friday")
-    for path in removed:
-        print(f"removed {path}")
     return True
 
 
-def _ask(agent, context, text: str, stream: bool, *, approval_result=None, user_label: str | None = None, continuation: bool = False):
-    result = run_turn(
-        agent,
-        context,
-        text,
-        stream=stream,
-        on_delta=_print_delta if stream else None,
-        on_progress=_print_progress,
-        on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
-        approval_result=approval_result,
-        user_label=user_label,
-        continuation=continuation,
-    )
+def _print_reset(removed: list[Path]) -> None:
+    print("reset Friday")
+    for path in removed:
+        print(f"removed {path}")
+
+
+def _print_turn(result: TurnResult, stream: bool) -> None:
     if stream:
         print()
     else:
         print(result.answer)
+    goal = result.progress.get("mode") == "goal"
     for verification in result.verifications:
         status = verification.get("verdict") or ("pass" if verification.get("passed") else "failed")
         stopped = f" ({verification['stop_reason']})" if verification.get("stop_reason") else ""
-        print(f"[verify] {status}{stopped}")
-    return result.agent, result.context, result.answer
-
-
-def _goal(agent, context, text: str, stream: bool, *, approval_result=None, user_label: str | None = None, continuation: bool = False):
-    result = run_turn(
-        agent,
-        context,
-        text,
-        goal=True,
-        stream=stream,
-        on_delta=_print_delta if stream else None,
-        on_progress=_print_progress,
-        on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
-        approval_result=approval_result,
-        user_label=user_label,
-        continuation=continuation,
-    )
-    if stream:
-        print()
-    else:
-        print(result.answer)
-    for verification in result.verifications:
-        status = verification.get("verdict") or ("passed" if verification.get("passed") else "blocked" if verification.get("blocked") else "failed")
-        stopped = f" ({verification['stop_reason']})" if verification.get("stop_reason") else ""
-        print(f"[goal verify] attempt {verification.get('attempt')}: {status}{stopped}")
-    return result.agent, result.context, result.answer
+        if goal:
+            print(f"[goal verify] attempt {verification.get('attempt')}: {status}{stopped}")
+        else:
+            print(f"[verify] {status}{stopped}")
 
 
 def _print_delta(text: str) -> None:
@@ -533,8 +463,8 @@ def _trace_cli(args) -> None:
 
 
 def _undo_cli(checkpoint_id: str | None, stream: bool, force: bool) -> None:
-    _agent, _context, restored = undo_friday(checkpoint_id=checkpoint_id, stream=stream, force=force)
-    _print_undo(restored)
+    session = _session(stream)
+    _print_undo(session.undo(checkpoint_id, force=force))
 
 
 def _print_undo(restored: dict) -> None:
@@ -564,10 +494,6 @@ def _context_report(context) -> str:
     return context_report(context, build_tools(root, root / ".friday"))
 
 
-def _approval_followup_prompt() -> str:
-    return "The approved command has executed. Report the result to the user and continue only if another action is needed."
-
-
 def _approval_status(result: dict) -> str:
     approval = result.get("approval") if isinstance(result.get("approval"), dict) else {}
     execution = result.get("result") if isinstance(result.get("result"), dict) else {}
@@ -575,32 +501,6 @@ def _approval_status(result: dict) -> str:
     status = "timed out" if execution.get("timed_out") else f"exit {execution.get('exit_code', 'unknown')}"
     output = str(execution.get("output") or "").strip()
     return f"Approved and executed ({status}): {command}" + (f"\n{output}" if output else "")
-
-
-def _continue_with_guidance(agent, context, instruction: str, result: dict, stream: bool):
-    progress = current_progress(context)
-    approval_result = {**result, "instruction": instruction}
-    if progress.get("mode") == "goal":
-        objective = str(progress.get("objective") or "Continue the goal.")
-        prompt = f"{objective}\n\nHuman guidance after declining the pending command: {instruction}"
-        return _goal(
-            agent,
-            context,
-            prompt,
-            stream,
-            approval_result=approval_result,
-            user_label=instruction,
-            continuation=True,
-        )
-    return _ask(
-        agent,
-        context,
-        instruction,
-        stream,
-        approval_result=approval_result,
-        user_label=instruction,
-        continuation=True,
-    )
 
 
 def _request_text(args, parser: argparse.ArgumentParser, command: str) -> str:
