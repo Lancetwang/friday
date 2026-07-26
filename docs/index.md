@@ -6,6 +6,7 @@ Start here:
 
 - [Install](install.md)
 - [Quick Start](quick-start.md)
+- [Architecture](architecture.md)
 - [Model Configuration](model-configuration.md)
 - [Evaluation Results](evaluation-results.md)
 - [CLI Commands](cli.md)

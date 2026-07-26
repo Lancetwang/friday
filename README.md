@@ -2,9 +2,9 @@
 
 [中文说明](README.zh-CN.md)
 
-Friday is a local general-purpose CLI agent. Run `friday` from any directory to work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
+Friday is a personal CLI agent that runs locally. Run `friday` from any directory to work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
 
-It uses [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) for generic agent execution. The Friday harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, CLI, and TUI behavior.
+It uses [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) for generic agent execution. The Friday harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, CLI, and TUI behavior. [Architecture](docs/architecture.md) describes the boundary between the two.
 
 ## Install
 
@@ -55,6 +55,7 @@ flowchart TD
 
 - [Install](docs/install.md)
 - [Quick Start](docs/quick-start.md)
+- [Architecture](docs/architecture.md)
 - [Model Configuration](docs/model-configuration.md)
 - [CLI Commands](docs/cli.md)
 - [Tools](docs/tools.md)

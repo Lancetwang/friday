@@ -2,9 +2,9 @@
 
 [English](README.md)
 
-Friday 是一个本地通用 CLI Agent。在任意目录运行 `friday`，它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
+Friday 是一个具有个人特色的本地 Personal CLI Agent。在任意目录运行 `friday`，它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
 
-底层的 [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) 负责通用 Agent 执行。Friday Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace、CLI 和 TUI。
+底层的 [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) 负责通用 Agent 执行。Friday Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace、CLI 和 TUI。两者之间的边界契约见[架构文档](docs/architecture.md)。
 
 ## 安装
 
@@ -55,6 +55,7 @@ flowchart TD
 
 - [安装](docs/install.md)
 - [快速开始](docs/quick-start.md)
+- [架构](docs/architecture.md)
 - [模型配置](docs/model-configuration.md)
 - [CLI 命令](docs/cli.md)
 - [工具](docs/tools.md)
