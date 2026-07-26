@@ -16,6 +16,8 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
+Friday is an application, so it installs from source: the TUI is built from this repo, and the checkout stays on disk. All Python dependencies — including the [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) runtime — resolve automatically from PyPI during `uv tool install`; only the runtime is published as a standalone library.
+
 Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json`, then run `friday` from any project directory. See [Install](docs/install.md) for prerequisites, configuration, verification, upgrades, and uninstall steps.
 
 ## Features

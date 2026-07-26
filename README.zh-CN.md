@@ -16,6 +16,8 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
+Friday 是应用而非库，因此从源码安装：TUI 由本仓库构建，源码目录需保留在磁盘上。所有 Python 依赖——包括 [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) runtime——会在 `uv tool install` 时自动从 PyPI 解析；只有 runtime 以独立库的形式发布。
+
 将 API Key 写入 `~/.friday/.env`，将模型配置写入 `~/.friday/config.json`，之后即可在任意项目目录运行 `friday`。完整的环境要求、配置、验证、升级与卸载步骤见 [安装文档](docs/install.md)。
 
 ## 特性
