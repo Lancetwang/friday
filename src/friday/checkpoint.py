@@ -180,6 +180,7 @@ def _snapshot(workspace: Path) -> str:
 def _restore_tree(workspace: Path, current_tree: str, target_tree: str) -> None:
     current_paths = set(_tree_paths(workspace, current_tree))
     target_paths = set(_tree_paths(workspace, target_tree))
+    changed = set(_diff_paths(workspace, current_tree, target_tree))
     removed = current_paths - target_paths
     for relative in removed:
         path = (workspace / Path(*PurePosixPath(relative).parts)).resolve()
@@ -190,7 +191,16 @@ def _restore_tree(workspace: Path, current_tree: str, target_tree: str) -> None:
         elif path.exists():
             raise RuntimeError(f"Cannot safely replace directory while restoring: {relative}")
     _git(workspace, "read-tree", target_tree)
-    _git(workspace, "checkout-index", "--all", "--force")
+    restored = sorted(changed & target_paths)
+    if restored:
+        _git_input(
+            workspace,
+            "\0".join(restored) + "\0",
+            "checkout-index",
+            "--force",
+            "--stdin",
+            "-z",
+        )
     for relative in removed:
         parent = (workspace / Path(*PurePosixPath(relative).parts)).parent
         while parent != workspace and parent.exists():

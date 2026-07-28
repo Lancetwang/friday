@@ -59,6 +59,16 @@ def skill_routing() -> str:
     return "Run `friday skill list --json`, then read only the selected `SKILL.md` and resources it references."
 
 
+def skill_body(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return text
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            return "".join(lines[index + 1 :]).lstrip("\r\n")
+    return text
+
+
 def _skill_metadata(path: Path) -> tuple[str, str]:
     text = path.read_text(encoding="utf-8")
     name = path.parent.name

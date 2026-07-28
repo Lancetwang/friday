@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -68,6 +69,24 @@ class CheckpointTests(unittest.TestCase):
 
             restore_checkpoint(root, force=True)
             self.assertEqual(path.read_text(encoding="utf-8"), "before")
+
+    def test_restore_does_not_rewrite_unchanged_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stable = root / "stable.txt"
+            changed = root / "changed.txt"
+            stable.write_text("stable", encoding="utf-8")
+            changed.write_text("before", encoding="utf-8")
+            checkpoint_id = self._begin(root)
+            changed.write_text("after", encoding="utf-8")
+            finish_checkpoint(root, checkpoint_id, pending=False)
+            old_time = time.time() - 3600
+            os.utime(stable, (old_time, old_time))
+
+            restore_checkpoint(root)
+
+            self.assertEqual(changed.read_text(encoding="utf-8"), "before")
+            self.assertAlmostEqual(stable.stat().st_mtime, old_time, delta=2)
 
     def test_undo_rebuilds_prefix_and_rewinds_saved_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

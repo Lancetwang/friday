@@ -9,11 +9,14 @@ from typing import Any
 from agent_core import AgentEvent
 
 from friday.app import build_instructions, resume_choices
+from friday.checkpoint import checkpoint_choices
 from friday.config import load_model_config
 from friday.context import context_report
 from friday.memory import format_memory_result, run_memory_command
 from friday.session import FridaySession
+from friday.skills import discover_skills, skill_body
 from friday.state import USER_MESSAGE_TIMES_KEY, delete_session, rename_session
+from friday.storage import friday_home
 from friday.tools import build_tools, pending_approval, permission_mode, set_permission_mode
 from friday.trace_web import start_trace_server
 
@@ -101,6 +104,21 @@ class Gateway:
             elif method == "progress.get":
                 self.session.ensure()
                 self.ok(rid, {"progress": self.session.progress()})
+            elif method == "skill.list":
+                self.ok(rid, {"skills": discover_skills(Path.cwd().resolve(), friday_home())})
+            elif method == "skill.get":
+                path = str(params.get("path") or "")
+                skill = next(
+                    (
+                        item
+                        for item in discover_skills(Path.cwd().resolve(), friday_home())
+                        if str(item["path"]) == path
+                    ),
+                    None,
+                )
+                if skill is None:
+                    raise ValueError("Skill is not available to Friday.")
+                self.ok(rid, {"skill": skill, "content": skill_body(Path(path).read_text(encoding="utf-8"))})
             elif method == "permission.set":
                 self.ok(rid, {"permission_mode": set_permission_mode(str(params.get("mode") or ""))})
             elif method == "trace.serve":
@@ -148,6 +166,8 @@ class Gateway:
                         "history": session_history(self.session),
                     },
                 )
+            elif method == "checkpoint.list":
+                self.ok(rid, {"checkpoints": checkpoint_choices(Path.cwd().resolve(), limit=50)})
             elif method == "checkpoint.undo":
                 restored = self.session.undo(params.get("id"), force=bool(params.get("force")))
                 self.ok(
@@ -157,6 +177,8 @@ class Gateway:
                         "user": restored.get("user", ""),
                         "changed_paths": restored.get("changed_paths", []),
                         "progress": self.session.progress(),
+                        "history": session_history(self.session),
+                        "info": self.session_info(),
                     },
                 )
             elif method == "approval.pending":

@@ -293,6 +293,45 @@ summary:focus-visible {
   margin-top: 0;
 }
 
+.sidebar-nav {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.sidebar-nav button {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.sidebar-nav button:hover,
+.sidebar-nav button.active {
+  background: var(--selection);
+}
+
+.sidebar-nav button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.plugin-nav-glyph {
+  width: 14px;
+  color: var(--muted);
+  font: 14px/1 Arial, sans-serif;
+  text-align: center;
+}
+
 .section-heading {
   display: flex;
   align-items: center;
@@ -412,15 +451,14 @@ summary:focus-visible {
 
 .project-close {
   display: none;
-  width: 24px;
-  height: 24px;
-  margin-right: 5px;
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
   color: var(--muted);
   background: transparent;
-  font: 18px/1 Arial, sans-serif;
+  font: 13px/1 Arial, sans-serif;
 }
 
 .project-entry:hover .project-close,
@@ -430,7 +468,7 @@ summary:focus-visible {
 
 .project-close:hover {
   color: var(--danger);
-  background: rgba(255, 255, 255, 0.7);
+  background: transparent;
 }
 
 .sessions {
@@ -446,6 +484,7 @@ summary:focus-visible {
   justify-content: center;
   gap: 2px;
   padding: 7px 10px;
+  transition: padding-right 120ms ease-out;
 }
 
 .session-main span {
@@ -489,16 +528,21 @@ summary:focus-visible {
 .session-actions {
   display: none;
   position: absolute;
-  right: 5px;
+  right: 8px;
   align-items: center;
-  gap: 3px;
-  padding-left: 18px;
-  background: linear-gradient(90deg, transparent, rgba(238, 238, 236, 0.98) 25%);
+  gap: 2px;
+  padding-left: 6px;
+  background: transparent;
 }
 
 .session-entry:hover .session-actions,
 .session-entry:focus-within .session-actions {
   display: flex;
+}
+
+.session-entry:hover:not(.renaming) .session-main,
+.session-entry:focus-within:not(.renaming) .session-main {
+  padding-right: 52px;
 }
 
 .session-entry.renaming .session-actions {
@@ -507,20 +551,19 @@ summary:focus-visible {
 
 .session-actions button {
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 6px;
   color: var(--muted);
   background: transparent;
-  font: 16px/1 Arial, sans-serif;
+  font: 12px/1 Arial, sans-serif;
 }
 
 .session-actions button:hover {
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.82);
+  background: transparent;
 }
 
 .empty-sessions {
@@ -561,17 +604,13 @@ summary:focus-visible {
 
 .topbar {
   z-index: 2;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
+  justify-content: center;
   padding: 8px 22px;
   border-bottom: 0;
   background: rgba(249, 249, 247, 0.82);
   backdrop-filter: blur(22px) saturate(125%);
-}
-
-.topbar-spacer {
-  min-width: 0;
 }
 
 .conversation-heading {
@@ -601,15 +640,270 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
-.tool-count {
-  justify-self: end;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
+.skills-page {
+  grid-row: 1 / -1;
+  width: 100%;
+  max-width: 1040px;
+  min-height: 0;
+  margin: 0 auto;
+  overflow-y: auto;
+  padding: clamp(24px, 6vh, 48px) clamp(22px, 6vw, 52px) 48px;
+}
+
+.skills-heading h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 30px;
+  font-weight: 620;
+  line-height: 1.2;
+}
+
+.skills-heading p {
+  margin: 7px 0 24px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.42);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 14px;
+}
+
+.skill-search {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 21px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.skill-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: 13px;
+}
+
+.skill-search:focus-within {
+  border-color: rgba(45, 45, 43, 0.26);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.skills-section-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 34px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.skills-section-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.skills-section-heading span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 6px 20px;
+  padding-top: 18px;
+}
+
+.skill-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+  min-height: 68px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.skill-card:hover {
+  background: var(--selection);
+}
+
+.skill-card-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  color: var(--accent);
+  background: rgba(45, 45, 43, 0.05);
+  font: 18px/1 Arial, sans-serif;
+}
+
+.skill-card-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.skill-card-copy strong,
+.skill-card-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-card-copy strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.skill-card-copy small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.skill-card-check {
+  color: rgba(45, 45, 43, 0.35);
+  font-size: 13px;
+}
+
+.skills-empty,
+.skill-error {
+  padding: 28px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.skill-error {
+  color: var(--danger);
+}
+
+.skill-modal-backdrop {
+  position: fixed;
+  inset: 36px 0 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(10px, 3vw, 26px);
+  overflow: hidden;
+  background: rgba(45, 45, 43, 0.18);
+  backdrop-filter: blur(3px);
+}
+
+.skill-modal {
+  display: flex;
+  width: min(720px, 100%);
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  padding: clamp(16px, 3vw, 24px);
+  border: 1px solid rgba(45, 45, 43, 0.12);
+  border-radius: 16px;
+  color: var(--ink);
+  background: var(--canvas);
+  box-shadow: 0 24px 70px rgba(45, 45, 43, 0.18);
+}
+
+.skill-modal > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.skill-modal > header button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 18px;
+}
+
+.skill-modal > header button:hover {
+  color: var(--ink);
+  background: var(--selection);
+}
+
+.skill-modal h2 {
+  margin: 18px 0 5px;
+  font-size: 22px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.skill-modal h2 span {
+  color: var(--muted);
+  font-weight: 450;
+}
+
+.skill-modal > p {
+  margin: 0 0 7px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.skill-modal > small {
+  overflow: hidden;
+  margin-bottom: 16px;
+  color: rgba(45, 45, 43, 0.44);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.34);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.skill-content > :first-child {
+  margin-top: 0;
+}
+
+.skill-content > :last-child {
+  margin-bottom: 0;
+}
+
+.skill-content pre {
+  overflow: auto;
+  padding: 11px 13px;
+  border-radius: 6px;
+  background: rgba(45, 45, 43, 0.06);
+}
+
+.skill-content code {
+  font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
 }
 
 .timeline {
@@ -639,6 +933,7 @@ summary:focus-visible {
 }
 
 .message.assistant .message-body {
+  position: relative;
   width: min(100%, 820px);
 }
 
@@ -662,6 +957,15 @@ summary:focus-visible {
   content: "";
 }
 
+.message.assistant .message-body::after {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 80px;
+  height: 30px;
+  content: "";
+}
+
 .message-meta {
   position: absolute;
   top: calc(100% + 4px);
@@ -679,21 +983,30 @@ summary:focus-visible {
   z-index: 1;
 }
 
-.message.user .message-body:hover .message-meta,
-.message.user .message-body:focus-within .message-meta {
+.message .message-body:hover .message-meta,
+.message .message-body:focus-within .message-meta {
   opacity: 1;
   pointer-events: auto;
 }
 
+.message.assistant .message-meta {
+  right: auto;
+  left: 0;
+}
+
 .message-meta button {
   position: relative;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 0;
   border-radius: 5px;
   color: var(--muted);
   background: transparent;
+}
+
+.restore-icon {
+  font: 15px/1 Arial, sans-serif;
 }
 
 .message-meta button:hover,
@@ -892,25 +1205,38 @@ summary:focus-visible {
 }
 
 .tool-status {
-  color: var(--success);
-  font-size: 9px;
-  font-weight: 750;
-  text-transform: uppercase;
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--success);
 }
 
 .tool-row.running > summary .tool-status,
 .tool-subrow.running > summary .tool-status {
-  color: var(--accent);
+  background: var(--accent);
+  animation: pulse 1.2s infinite ease-in-out;
 }
 
 .tool-row.approval > summary .tool-status,
 .tool-subrow.approval > summary .tool-status {
-  color: var(--accent);
+  background: var(--accent);
 }
 
 .tool-row.error > summary .tool-status,
 .tool-subrow.error > summary .tool-status {
-  color: var(--danger);
+  background: var(--danger);
+}
+
+.tool-row > summary strong,
+.tool-subrow > summary strong {
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.tool-subrow > summary small {
+  color: rgba(45, 45, 43, 0.42);
+  font-size: 9px;
 }
 
 .tool-group-list {

@@ -116,16 +116,51 @@ class TuiGatewayTests(unittest.TestCase):
 
     def test_gateway_undo_replaces_the_active_session(self) -> None:
         gateway = Gateway()
-        context = type("Context", (), {"on_event": None})()
+        context = RunContext(metadata={"session_id": "s1", "workspace": str(Path.cwd())})
         restored = {"id": "cp-1", "user": "change file", "changed_paths": ["file.txt"]}
 
         with patch("friday.session.undo_friday", return_value=(object(), context, restored)):
             with patch("friday.session.current_progress", return_value={"objective": "previous"}):
-                with patch.object(gateway, "ok") as ok:
-                    gateway.handle({"id": "1", "method": "checkpoint.undo"})
+                with patch.object(gateway, "session_info", return_value={"session_id": "s1"}):
+                    with patch.object(gateway, "ok") as ok:
+                        gateway.handle({"id": "1", "method": "checkpoint.undo"})
 
         self.assertIs(gateway.session.context, context)
         self.assertEqual(ok.call_args.args[1]["changed_paths"], ["file.txt"])
+        self.assertEqual(ok.call_args.args[1]["history"], [])
+        self.assertEqual(ok.call_args.args[1]["info"], {"session_id": "s1"})
+
+    def test_gateway_exposes_shared_skill_and_checkpoint_catalogs(self) -> None:
+        gateway = Gateway()
+        skills = [{"name": "friday-cli", "description": "Friday commands", "path": "SKILL.md", "scope": "user"}]
+        checkpoints = [{"id": "cp-1", "session_id": "s1", "user": "hello"}]
+
+        with patch("friday.app_server.discover_skills", return_value=skills):
+            with patch("friday.app_server.checkpoint_choices", return_value=checkpoints):
+                with patch.object(gateway, "ok") as ok:
+                    gateway.handle({"id": "1", "method": "skill.list"})
+                    self.assertEqual(ok.call_args.args[1], {"skills": skills})
+                    gateway.handle({"id": "2", "method": "checkpoint.list"})
+
+        self.assertEqual(ok.call_args.args[1], {"checkpoints": checkpoints})
+
+    def test_gateway_reads_only_catalogued_skill_files(self) -> None:
+        gateway = Gateway()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "SKILL.md"
+            path.write_text(
+                "---\nname: demo\ndescription: Demo skill\n---\n\n# Skill\n\nReal instructions.",
+                encoding="utf-8",
+            )
+            skill = {"name": "demo", "description": "Demo skill", "path": str(path), "scope": "user"}
+            with patch("friday.app_server.discover_skills", return_value=[skill]):
+                with patch.object(gateway, "ok") as ok:
+                    gateway.handle({"id": "1", "method": "skill.get", "params": {"path": str(path)}})
+                self.assertEqual(ok.call_args.args[1]["content"], "# Skill\n\nReal instructions.")
+                with patch.object(gateway, "err") as err:
+                    gateway.handle({"id": "2", "method": "skill.get", "params": {"path": str(path.parent / "other.md")}})
+
+        self.assertIn("not available", err.call_args.args[1])
 
     def test_session_info_does_not_require_llm_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

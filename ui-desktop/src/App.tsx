@@ -63,6 +63,26 @@ type ResumeChoice = {
   user: string
 }
 
+type CheckpointChoice = {
+  created: string
+  id: string
+  session_id: string
+  state: string
+  user: string
+}
+
+type SkillInfo = {
+  description: string
+  name: string
+  path: string
+  scope: string
+}
+
+type SkillDetail = {
+  content: string
+  skill: SkillInfo
+}
+
 type HistoryItem = {
   arguments?: unknown
   kind: TimelineItem['kind']
@@ -75,6 +95,7 @@ type HistoryItem = {
 
 type TimelineItem = {
   arguments?: string
+  checkpointId?: string
   createdAt?: string
   id: string
   kind: 'assistant' | 'system' | 'tool' | 'user'
@@ -88,12 +109,14 @@ type TimelineItem = {
 type ProjectView = {
   activeSession: string
   busy: boolean
+  checkpoints: CheckpointChoice[]
   draft: string
   guidance: string
   info: SessionInfo
   items: TimelineItem[]
   pendingApproval: Approval | null
   sessions: ResumeChoice[]
+  skills: SkillInfo[]
   status: ProjectStatus
 }
 
@@ -134,12 +157,14 @@ function emptyView(path = ''): ProjectView {
   return {
     activeSession: '',
     busy: false,
+    checkpoints: [],
     draft: '',
     guidance: '',
     info: { cwd: path, model: path ? 'loading' : '', permission_mode: 'manual', tools: [] },
     items: [welcome],
     pendingApproval: null,
     sessions: [],
+    skills: [],
     status: path ? 'connecting' : 'idle'
   }
 }
@@ -185,6 +210,10 @@ function App() {
   const [renaming, setRenaming] = useState<{ id: string; original: string; title: string } | null>(null)
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
+  const [page, setPage] = useState<'chat' | 'skills'>('chat')
+  const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null)
+  const [skillError, setSkillError] = useState('')
+  const [skillQuery, setSkillQuery] = useState('')
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
   const activeAssistants = useRef(new Map<string, string>())
@@ -196,7 +225,7 @@ function App() {
   const openProjects = useRef(new Set(initialProjects.current.map(pathKey)))
 
   const view = views[activeProject] || emptyView(activeProject)
-  const { activeSession, busy, draft, guidance, info, items, pendingApproval, sessions, status } = view
+  const { activeSession, busy, checkpoints, draft, guidance, info, items, pendingApproval, sessions, skills, status } = view
 
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
     setViews(current => ({
@@ -246,19 +275,33 @@ function App() {
       updateView(workspace, current => ({ ...current, sessions: result.choices }))
     })
 
+  const refreshCheckpoints = (workspace: string) =>
+    sendGateway<{ checkpoints: CheckpointChoice[] }>(workspace, 'checkpoint.list').then(result => {
+      updateView(workspace, current => ({ ...current, checkpoints: result.checkpoints }))
+    })
+
+  const refreshSkills = (workspace: string) =>
+    sendGateway<{ skills: SkillInfo[] }>(workspace, 'skill.list').then(result => {
+      updateView(workspace, current => ({ ...current, skills: result.skills }))
+    })
+
   const hydrateProject = (workspace: string) =>
     Promise.all([
       sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.current'),
-      sendGateway<{ choices: ResumeChoice[] }>(workspace, 'session.resume_choices')
-    ]).then(([current, saved]) => {
+      sendGateway<{ choices: ResumeChoice[] }>(workspace, 'session.resume_choices'),
+      sendGateway<{ checkpoints: CheckpointChoice[] }>(workspace, 'checkpoint.list'),
+      sendGateway<{ skills: SkillInfo[] }>(workspace, 'skill.list')
+    ]).then(([current, saved, checkpointResult, skillResult]) => {
       updateView(workspace, existing => ({
         ...existing,
         activeSession: current.info.session_id || '',
         busy: false,
+        checkpoints: checkpointResult.checkpoints,
         info: current.info,
         items: timelineFromHistory(current.history),
         pendingApproval: current.info.approval?.pending ? current.info.approval : null,
         sessions: saved.choices,
+        skills: skillResult.skills,
         status: 'ready'
       }))
     })
@@ -270,6 +313,8 @@ function App() {
   useEffect(() => {
     if (activeProject) localStorage.setItem(ACTIVE_PROJECT_KEY, activeProject)
     setRenaming(null)
+    setSkillDetail(null)
+    setSkillError('')
   }, [activeProject])
 
   useEffect(() => {
@@ -351,7 +396,11 @@ function App() {
             items
           }
         })
-        void refreshSessions(workspace).catch(() => undefined)
+        void Promise.all([
+          refreshSessions(workspace),
+          refreshCheckpoints(workspace),
+          refreshSkills(workspace)
+        ]).catch(() => undefined)
       } else if (type === 'tool.start') {
         const assistantId = activeAssistants.current.get(workspace)
         const tool: TimelineItem = {
@@ -532,12 +581,14 @@ function App() {
 
   const startNewSession = () => {
     if (busy || !activeProject) return
+    setPage('chat')
     updateView(activeProject, current => ({ ...current, busy: true }))
     void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(activeProject, 'session.new').then(result => {
       updateView(activeProject, current => ({
         ...current,
         activeSession: '',
         busy: false,
+        checkpoints: [],
         info: result.info,
         items: timelineFromHistory(result.history),
         pendingApproval: null
@@ -553,6 +604,7 @@ function App() {
 
   const resumeSession = (session: ResumeChoice) => {
     if (busy || session.id === activeSession) return
+    setPage('chat')
     updateView(activeProject, current => ({ ...current, busy: true }))
     void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(activeProject, 'session.resume', { id: session.id }).then(result => {
       updateView(activeProject, current => ({
@@ -563,6 +615,7 @@ function App() {
         items: timelineFromHistory(result.history),
         pendingApproval: result.info.approval?.pending ? result.info.approval : null
       }))
+      void refreshCheckpoints(activeProject).catch(() => undefined)
     }).catch(error => {
       updateView(activeProject, current => ({
         ...current,
@@ -575,6 +628,7 @@ function App() {
   const selectProject = async (workspace: string) => {
     const known = projects.find(path => samePath(path, workspace)) || workspace
     const wasStarted = startedProjects.current.has(pathKey(known))
+    setPage('chat')
     activeProjectRef.current = known
     setActiveProject(known)
     updateView(known, current => ({ ...current, status: wasStarted ? current.status : 'connecting' }))
@@ -672,17 +726,50 @@ function App() {
           ? {
               ...current,
               activeSession: result.info.session_id || '',
+              checkpoints: [],
               info: result.info,
               items: timelineFromHistory(result.history),
               pendingApproval: null
             }
           : current)
-        return refreshSessions(activeProject)
+        return Promise.all([refreshSessions(activeProject), refreshCheckpoints(activeProject)])
       })
       .catch(error => updateView(activeProject, current => ({
         ...current,
         items: [...current.items, { id: nextId('delete'), kind: 'system', text: String(error) }]
       })))
+  }
+
+  const restoreCheckpoint = (checkpointId: string) => {
+    if (busy || !checkpointId) return
+    updateView(activeProject, current => ({ ...current, busy: true }))
+    void sendGateway<{
+      history: HistoryItem[]
+      info: SessionInfo
+    }>(activeProject, 'checkpoint.undo', { id: checkpointId }).then(result => {
+      updateView(activeProject, current => ({
+        ...current,
+        activeSession: result.info.session_id || '',
+        busy: false,
+        info: result.info,
+        items: timelineFromHistory(result.history),
+        pendingApproval: result.info.approval?.pending ? result.info.approval : null
+      }))
+      return Promise.all([refreshSessions(activeProject), refreshCheckpoints(activeProject)])
+    }).catch(error => {
+      updateView(activeProject, current => ({
+        ...current,
+        busy: false,
+        items: [...current.items, { id: nextId('checkpoint'), kind: 'system', text: String(error) }]
+      }))
+    })
+  }
+
+  const openSkill = (skill: SkillInfo) => {
+    setSkillError('')
+    void sendGateway<SkillDetail>(activeProject, 'skill.get', { path: skill.path })
+      .then(setSkillDetail)
+      .catch(error => setSkillError(String(error)))
   }
 
   const selectedSession = sessions.find(session => session.id === activeSession)
@@ -715,6 +802,8 @@ function App() {
     setResizingSidebar(false)
   }
 
+  const timelineItems = bindCheckpoints(items, checkpoints, activeSession)
+
   return (
     <div className="desktop-window">
       <WindowTitlebar />
@@ -723,6 +812,21 @@ function App() {
         style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
       >
         <aside className="sidebar">
+          <nav className="sidebar-nav">
+            <button
+              className={page === 'skills' ? 'active' : ''}
+              disabled={!activeProject}
+              onClick={() => {
+                setPage('skills')
+                setSkillDetail(null)
+                setSkillError('')
+              }}
+              type="button"
+            >
+              <span aria-hidden="true" className="plugin-nav-glyph">{'\u25c9'}</span>
+              <span>Plugins</span>
+            </button>
+          </nav>
 
           <section className="sidebar-section projects">
           <div className="section-heading">
@@ -744,7 +848,7 @@ function App() {
                   title="Close project"
                   type="button"
                 >
-                  <span aria-hidden="true">×</span>
+                  <span aria-hidden="true">{'\u00d7'}</span>
                 </button>
               </div>
             )
@@ -799,10 +903,10 @@ function App() {
               )}
               <div className="session-actions">
                 <button aria-label="Rename conversation" disabled={busy} onClick={event => beginRenameConversation(event, session)} title="Rename" type="button">
-                  <span aria-hidden="true">✎</span>
+                  <span aria-hidden="true">{'\u270e'}</span>
                 </button>
                 <button aria-label="Delete conversation" disabled={busy} onClick={event => deleteConversation(event, session)} title="Delete" type="button">
-                  <span aria-hidden="true">×</span>
+                  <span aria-hidden="true">{'\u00d7'}</span>
                 </button>
               </div>
             </div>
@@ -839,21 +943,31 @@ function App() {
         />
 
         <main className="workspace">
+        {page === 'skills' ? (
+          <SkillBrowser
+            detail={skillDetail}
+            error={skillError}
+            onClose={() => setSkillDetail(null)}
+            onOpen={openSkill}
+            onQueryChange={setSkillQuery}
+            query={skillQuery}
+            skills={skills}
+          />
+        ) : (
+        <>
         <header className="topbar">
-          <div className="topbar-spacer" aria-hidden="true" />
           <div className="conversation-heading">
             <h1>{conversationTitle}</h1>
             <p>{project}</p>
           </div>
-          <div className="tool-count">{info.tools.length} tools</div>
         </header>
 
         <section className="timeline" aria-live="polite">
-          {groupToolItems(items).map(item => Array.isArray(item)
+          {groupToolItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
-              ? <TimelineRow item={item[0]!} key={item[0]!.id} />
+              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onRestore={restoreCheckpoint} />
               : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
-            : <TimelineRow item={item} key={item.id} />)}
+            : <TimelineRow busy={busy} item={item} key={item.id} onRestore={restoreCheckpoint} />)}
           {pendingApproval && (
             <section className="approval-panel">
               <strong>Approval required</strong>
@@ -951,9 +1065,93 @@ function App() {
             </div>
           </div>
         </form>
+        </>
+        )}
         </main>
       </div>
     </div>
+  )
+}
+
+function SkillBrowser({
+  detail,
+  error,
+  onClose,
+  onOpen,
+  onQueryChange,
+  query,
+  skills
+}: {
+  detail: SkillDetail | null
+  error: string
+  onClose: () => void
+  onOpen: (skill: SkillInfo) => void
+  onQueryChange: (query: string) => void
+  query: string
+  skills: SkillInfo[]
+}) {
+  const needle = query.trim().toLocaleLowerCase()
+  const filtered = needle
+    ? skills.filter(skill => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(needle))
+    : skills
+
+  return (
+    <section className="skills-page">
+      <header className="skills-heading">
+        <h1>Skills</h1>
+        <p>Reusable workflows available to Friday</p>
+      </header>
+      <label className="skill-search">
+        <span aria-hidden="true">{'\u2315'}</span>
+        <input
+          aria-label="Search skills"
+          onChange={event => onQueryChange(event.target.value)}
+          placeholder="Search skills"
+          value={query}
+        />
+      </label>
+      <div className="skills-section-heading">
+        <h2>Installed</h2>
+        <span>{filtered.length}</span>
+      </div>
+      {error && <div className="skill-error">{error}</div>}
+      <div className="skills-grid">
+        {filtered.map(skill => (
+          <button className="skill-card" key={`${skill.scope}-${skill.path}`} onClick={() => onOpen(skill)} type="button">
+            <span aria-hidden="true" className="skill-card-icon">{'\u25c7'}</span>
+            <span className="skill-card-copy">
+              <strong>{skill.name}</strong>
+              <small>{skill.description}</small>
+            </span>
+            <span aria-hidden="true" className="skill-card-check">{'\u2713'}</span>
+          </button>
+        ))}
+      </div>
+      {!filtered.length && <div className="skills-empty">No matching skills</div>}
+      {detail && (
+        <div className="skill-modal-backdrop" onMouseDown={onClose}>
+          <article
+            aria-modal="true"
+            className="skill-modal"
+            onMouseDown={event => event.stopPropagation()}
+            role="dialog"
+          >
+            <header>
+              <span aria-hidden="true" className="skill-card-icon">{'\u25c7'}</span>
+              <button aria-label="Close skill details" onClick={onClose} title="Close" type="button">
+                {'\u00d7'}
+              </button>
+            </header>
+            <h2>{detail.skill.name} <span>Skill</span></h2>
+            <p>{detail.skill.description}</p>
+            <small>{detail.skill.scope} · {detail.skill.path}</small>
+            <div className="skill-content">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.content}</ReactMarkdown>
+            </div>
+          </article>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -1031,6 +1229,29 @@ function groupToolItems(items: TimelineItem[]) {
   return rows
 }
 
+function bindCheckpoints(items: TimelineItem[], checkpoints: CheckpointChoice[], sessionId: string) {
+  const userIndexes = items.flatMap((item, index) => item.kind === 'user' ? [index] : [])
+  const ordered = checkpoints
+    .filter(checkpoint => checkpoint.session_id === sessionId)
+    .reverse()
+    .slice(-userIndexes.length)
+  if (!ordered.length) return items
+
+  const next: TimelineItem[] = items.map(item => ({ ...item, checkpointId: undefined }))
+  const offset = userIndexes.length - ordered.length
+  for (let position = offset; position < userIndexes.length; position += 1) {
+    const checkpoint = ordered[position - offset]
+    const start = userIndexes[position]!
+    const end = userIndexes[position + 1] ?? next.length
+    for (let index = start; index < end; index += 1) {
+      if (next[index]!.kind === 'user' || next[index]!.kind === 'assistant') {
+        next[index]!.checkpointId = checkpoint!.id
+      }
+    }
+  }
+  return next
+}
+
 function timelineFromHistory(history: HistoryItem[]) {
   return history.length
     ? history.map((item, index): TimelineItem => ({
@@ -1046,7 +1267,15 @@ function timelineFromHistory(history: HistoryItem[]) {
     : [welcome]
 }
 
-function TimelineRow({ item }: { item: TimelineItem }) {
+function TimelineRow({
+  busy,
+  item,
+  onRestore
+}: {
+  busy: boolean
+  item: TimelineItem
+  onRestore: (checkpointId: string) => void
+}) {
   const [copied, setCopied] = useState(false)
 
   if (item.kind === 'system') {
@@ -1057,10 +1286,8 @@ function TimelineRow({ item }: { item: TimelineItem }) {
     return (
       <details className={`tool-row ${item.status}`}>
         <summary>
-          <span className="tool-status">
-            {toolStatusLabel(item.status)}
-          </span>
-          <strong>{item.name}</strong>
+          <span aria-hidden="true" className="tool-status" />
+          <strong>{toolActivityLabel(item)}</strong>
         </summary>
         <ToolDetails item={item} />
       </details>
@@ -1074,27 +1301,40 @@ function TimelineRow({ item }: { item: TimelineItem }) {
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
         </div>
         {item.metrics && <MetricsLine metrics={item.metrics} />}
-        {item.kind === 'user' && (
+        {(item.kind === 'user' || item.checkpointId) && (
           <div className="message-meta">
-            {item.createdAt && (
+            {item.kind === 'user' && item.createdAt && (
               <time dateTime={item.createdAt}>
                 {formatMessageTime(item.createdAt)}
               </time>
             )}
-            <button
-              aria-label={copied ? 'Copied' : 'Copy message'}
-              className={copied ? 'copied' : ''}
-              onClick={() => {
-                void navigator.clipboard.writeText(item.text).then(() => {
-                  setCopied(true)
-                  window.setTimeout(() => setCopied(false), 1200)
-                }).catch(() => setCopied(false))
-              }}
-              title={copied ? 'Copied' : 'Copy message'}
-              type="button"
-            >
-              <span className="copy-icon" />
-            </button>
+            {item.kind === 'user' && (
+              <button
+                aria-label={copied ? 'Copied' : 'Copy message'}
+                className={copied ? 'copied' : ''}
+                onClick={() => {
+                  void navigator.clipboard.writeText(item.text).then(() => {
+                    setCopied(true)
+                    window.setTimeout(() => setCopied(false), 1200)
+                  }).catch(() => setCopied(false))
+                }}
+                title={copied ? 'Copied' : 'Copy message'}
+                type="button"
+              >
+                <span className="copy-icon" />
+              </button>
+            )}
+            {item.checkpointId && (
+              <button
+                aria-label="Restore to before this turn"
+                disabled={busy}
+                onClick={() => onRestore(item.checkpointId!)}
+                title="Restore to before this turn"
+                type="button"
+              >
+                <span aria-hidden="true" className="restore-icon">{'\u21b6'}</span>
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1113,15 +1353,16 @@ function ToolGroup({ items }: { items: TimelineItem[] }) {
   return (
     <details className={`tool-row tool-group ${status}`}>
       <summary>
-        <span className="tool-status">{toolStatusLabel(status)}</span>
-        <strong>{status === 'running' ? `Running ${items.length} tools` : `Ran ${items.length} tools`}</strong>
+        <span aria-hidden="true" className="tool-status" />
+        <strong>{toolGroupLabel(items, status)}</strong>
       </summary>
       <div className="tool-group-list">
         {items.map(item => (
           <details className={`tool-subrow ${item.status}`} key={item.id}>
             <summary>
-              <span className="tool-status">{toolStatusLabel(item.status)}</span>
-              <strong>{item.name}</strong>
+              <span aria-hidden="true" className="tool-status" />
+              <strong>{toolActivityLabel(item)}</strong>
+              <small>{item.name}</small>
             </summary>
             <ToolDetails item={item} />
           </details>
@@ -1146,8 +1387,64 @@ function ToolDetails({ item }: { item: TimelineItem }) {
   )
 }
 
-function toolStatusLabel(status: TimelineItem['status']) {
-  return status === 'running' ? 'Running' : status === 'approval' ? 'Approval required' : status === 'error' ? 'Failed' : 'Done'
+function toolVerb(name = '') {
+  const value = name.toLocaleLowerCase()
+  if (value === 'websearch') return '\u641c\u7d22\u7f51\u9875'
+  if (value === 'webfetch') return '\u8bfb\u53d6\u7f51\u9875'
+  if (value === 'bash') return '\u8fd0\u884c\u547d\u4ee4'
+  if (value === 'read') return '\u8bfb\u53d6\u6587\u4ef6'
+  if (value === 'write' || value === 'edit') return '\u4fee\u6539\u6587\u4ef6'
+  if (value === 'glob' || value === 'grep') return '\u67e5\u627e\u6587\u4ef6'
+  if (value === 'updateplan') return '\u66f4\u65b0\u4efb\u52a1\u8fdb\u5ea6'
+  return '\u4f7f\u7528\u5de5\u5177'
+}
+
+function completedToolAction(name = '') {
+  const value = name.toLocaleLowerCase()
+  if (value === 'websearch') return '\u641c\u7d22\u4e86\u7f51\u9875'
+  if (value === 'webfetch') return '\u8bfb\u53d6\u4e86\u7f51\u9875'
+  if (value === 'bash') return '\u8fd0\u884c\u4e86\u547d\u4ee4'
+  if (value === 'read') return '\u8bfb\u53d6\u4e86\u6587\u4ef6'
+  if (value === 'write' || value === 'edit') return '\u4fee\u6539\u4e86\u6587\u4ef6'
+  if (value === 'glob' || value === 'grep') return '\u67e5\u627e\u4e86\u6587\u4ef6'
+  if (value === 'updateplan') return '\u66f4\u65b0\u4e86\u4efb\u52a1\u8fdb\u5ea6'
+  return '\u4f7f\u7528\u4e86\u5de5\u5177'
+}
+
+function toolActivityLabel(item: TimelineItem) {
+  const verb = toolVerb(item.name)
+  if (item.status === 'running') return `\u6b63\u5728${verb}`
+  if (item.status === 'approval') return `\u7b49\u5f85\u6279\u51c6\uff1a${verb}`
+  if (item.status === 'error') return `${verb}\u65f6\u9047\u5230\u95ee\u9898`
+  return completedToolAction(item.name)
+}
+
+function toolGroupLabel(items: TimelineItem[], status: NonNullable<TimelineItem['status']>) {
+  const verbs = [...new Set(items.map(item => toolVerb(item.name)))]
+  if (verbs.length === 1 && items.length > 1) {
+    const verb = verbs[0]!
+    if (status === 'running') {
+      if (verb === '\u8fd0\u884c\u547d\u4ee4') return '\u6b63\u5728\u8fd0\u884c\u591a\u4e2a\u547d\u4ee4'
+      if (verb === '\u641c\u7d22\u7f51\u9875') return '\u6b63\u5728\u8fdb\u884c\u591a\u6b21\u7f51\u9875\u641c\u7d22'
+      if (verb === '\u8bfb\u53d6\u6587\u4ef6') return '\u6b63\u5728\u8bfb\u53d6\u591a\u4e2a\u6587\u4ef6'
+      if (verb === '\u4fee\u6539\u6587\u4ef6') return '\u6b63\u5728\u4fee\u6539\u591a\u4e2a\u6587\u4ef6'
+      return `\u6b63\u5728\u591a\u6b21${verb}`
+    }
+    if (status === 'approval') return `\u7b49\u5f85\u6279\u51c6\uff1a\u591a\u6b21${verb}`
+    if (status === 'error') return `\u591a\u6b21${verb}\u65f6\u6709\u64cd\u4f5c\u5931\u8d25`
+    if (verb === '\u8fd0\u884c\u547d\u4ee4') return '\u8fd0\u884c\u4e86\u591a\u4e2a\u547d\u4ee4'
+    if (verb === '\u8bfb\u53d6\u6587\u4ef6') return '\u8bfb\u53d6\u4e86\u591a\u4e2a\u6587\u4ef6'
+    if (verb === '\u4fee\u6539\u6587\u4ef6') return '\u4fee\u6539\u4e86\u591a\u4e2a\u6587\u4ef6'
+    if (verb === '\u641c\u7d22\u7f51\u9875') return '\u8fdb\u884c\u4e86\u591a\u6b21\u7f51\u9875\u641c\u7d22'
+    if (verb === '\u8bfb\u53d6\u7f51\u9875') return '\u8bfb\u53d6\u4e86\u591a\u4e2a\u7f51\u9875'
+    if (verb === '\u67e5\u627e\u6587\u4ef6') return '\u8fdb\u884c\u4e86\u591a\u6b21\u6587\u4ef6\u67e5\u627e'
+    return '\u6267\u884c\u4e86\u591a\u9879\u5de5\u5177\u64cd\u4f5c'
+  }
+  const text = verbs.join('\u3001')
+  if (status === 'running') return `\u6b63\u5728${text}`
+  if (status === 'approval') return `\u7b49\u5f85\u6279\u51c6\uff1a${text}`
+  if (status === 'error') return `${text}\u65f6\u6709\u64cd\u4f5c\u5931\u8d25`
+  return [...new Set(items.map(item => completedToolAction(item.name)))].join('\u3001')
 }
 
 function MetricsLine({ metrics }: { metrics: Metrics }) {
