@@ -22,6 +22,7 @@ from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.skills import discover_skills, skill_routing
 from friday.state import delete_session, rename_session
+from friday.storage import project_state_dir, workspace_key
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, _permission_decision, allow_permissions_for_session, approve_pending, build_tools, pending_approval
 from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt
 
@@ -83,6 +84,21 @@ class ToolTests(unittest.TestCase):
             self.assertIn("20: line-19", artifact.read_text(encoding="utf-8"))
             self.assertIn(result["full_output_path"], result["content"])
 
+    def test_read_can_open_central_tool_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {"FRIDAY_HOME": str(Path(tmp) / "home" / ".friday")},
+        ):
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            tools = {tool.name: tool for tool in build_tools(root)}
+
+            result = tools["Bash"]('python -c "print(\'x\' * 1000)"', max_chars=100)
+            restored = tools["Read"](result["full_output_path"], max_chars=2000)
+
+            self.assertIn("x" * 100, restored["content"])
+            self.assertFalse((root / ".friday").exists())
+
     def test_run_shell_returns_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -129,30 +145,32 @@ class ToolTests(unittest.TestCase):
     def test_bash_approval_blocks_dangerous_commands_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            with patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home" / ".friday")}):
+                tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
-            safe = tools["Bash"]("python -c \"print('ok')\"")
-            safe_comparison = tools["Bash"]("python -c \"print(2 > 1)\"")
-            blocked = tools["Bash"]("rm missing-file")
-            approved = approve_pending(root)
+                safe = tools["Bash"]("python -c \"print('ok')\"")
+                safe_comparison = tools["Bash"]("python -c \"print(2 > 1)\"")
+                blocked = tools["Bash"]("rm missing-file")
+                approved = approve_pending(root)
 
-            self.assertFalse(safe["timed_out"])
-            self.assertFalse(safe_comparison["timed_out"])
-            self.assertTrue(blocked["approval_required"])
-            self.assertFalse((root / ".friday" / APPROVAL_FILE).exists())
-            self.assertTrue(approved["approved"])
+                self.assertFalse(safe["timed_out"])
+                self.assertFalse(safe_comparison["timed_out"])
+                self.assertTrue(blocked["approval_required"])
+                self.assertFalse((root / ".friday" / APPROVAL_FILE).exists())
+                self.assertTrue(approved["approved"])
 
     def test_pending_approval_reads_without_consuming(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            with patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home" / ".friday")}):
+                tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
-            tools["Bash"]("rm missing-file")
-            pending = pending_approval(root)
+                tools["Bash"]("rm missing-file")
+                pending = pending_approval(root)
 
-            self.assertTrue(pending["pending"])
-            self.assertEqual(pending["command"], "rm missing-file")
-            self.assertTrue((root / ".friday" / APPROVAL_FILE).exists())
+                self.assertTrue(pending["pending"])
+                self.assertEqual(pending["command"], "rm missing-file")
+                self.assertTrue((project_state_dir(root) / APPROVAL_FILE).exists())
 
     def test_bash_permissions_json_controls_persistent_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -554,6 +572,19 @@ class ToolTests(unittest.TestCase):
 
 @patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
 class ResetTests(unittest.TestCase):
+    def test_reset_honors_friday_home_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            override = Path(tmp) / "portable-state"
+            state = override / "projects" / workspace_key(root)
+            state.mkdir(parents=True)
+            (state / "marker.txt").write_text("remove", encoding="utf-8")
+
+            with patch.dict(os.environ, {"FRIDAY_HOME": str(override)}):
+                reset_friday(root, include_user=False)
+
+            self.assertFalse(state.exists())
+
     def test_reset_clears_project_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -581,10 +612,10 @@ class ResetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
             home = Path(tmp) / "home"
-            project_config = root / ".friday" / "config.json"
+            project_config = project_state_dir(root, home) / "config.json"
             user_config = home / ".friday" / "config.json"
             project_config.parent.mkdir(parents=True)
-            user_config.parent.mkdir(parents=True)
+            user_config.parent.mkdir(parents=True, exist_ok=True)
             project_config.write_text('{"model":"project-model"}', encoding="utf-8")
             user_config.write_text('{"model":"global-model"}', encoding="utf-8")
 
@@ -881,6 +912,15 @@ class PromptTests(unittest.TestCase):
 
 
 class ProgressTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.state_tmp = tempfile.TemporaryDirectory()
+        self.state_env = patch.dict(os.environ, {"FRIDAY_HOME": str(Path(self.state_tmp.name) / ".friday")})
+        self.state_env.start()
+
+    def tearDown(self) -> None:
+        self.state_env.stop()
+        self.state_tmp.cleanup()
+
     def test_update_plan_tool_uses_the_active_run_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -903,30 +943,32 @@ class ProgressTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             context = RunContext(metadata={"workspace": str(root), "session_id": "s1"})
+            home_env = {"FRIDAY_HOME": str(root / "home" / ".friday")}
 
-            begin_progress(context, "build report", mode="normal")
-            planned = update_plan(
-                context,
-                [
-                    {"step": "inspect inputs", "status": "completed"},
-                    {"step": "write report", "status": "in_progress"},
-                ],
-                next_action="write report.md",
-            )
-
-            saved = json.loads((root / ".friday" / "sessions" / "s1.json").read_text(encoding="utf-8"))
-            self.assertEqual(saved["progress"], planned)
-            self.assertEqual(planned["next_action"], "write report.md")
-            with self.assertRaises(ValueError):
-                update_plan(
+            with patch.dict(os.environ, home_env):
+                begin_progress(context, "build report", mode="normal")
+                planned = update_plan(
                     context,
                     [
-                        {"step": "one", "status": "in_progress"},
-                        {"step": "two", "status": "in_progress"},
+                        {"step": "inspect inputs", "status": "completed"},
+                        {"step": "write report", "status": "in_progress"},
                     ],
+                    next_action="write report.md",
                 )
 
-            finished = finish_progress(context, "done", [{"verdict": "pass", "attempt": 1}])
+                saved = json.loads((project_state_dir(root) / "sessions" / "s1.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved["progress"], planned)
+                self.assertEqual(planned["next_action"], "write report.md")
+                with self.assertRaises(ValueError):
+                    update_plan(
+                        context,
+                        [
+                            {"step": "one", "status": "in_progress"},
+                            {"step": "two", "status": "in_progress"},
+                        ],
+                    )
+
+                finished = finish_progress(context, "done", [{"verdict": "pass", "attempt": 1}])
             restored = RunContext()
             restore_progress(restored, finished)
             append_progress_checkpoint(restored)
@@ -940,16 +982,18 @@ class CompactTests(unittest.TestCase):
     def test_session_title_survives_future_turns_and_session_can_be_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            save_turn(root, "hi", "hello", "s1", [])
+            with patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home" / ".friday")}):
+                save_turn(root, "hi", "hello", "s1", [])
 
-            rename_session(root, "s1", "  Research   notes  ")
-            save_turn(root, "next", "done", "s1", [])
-            saved = json.loads((root / ".friday" / "sessions" / "s1.json").read_text(encoding="utf-8"))
+                rename_session(root, "s1", "  Research   notes  ")
+                save_turn(root, "next", "done", "s1", [])
+                session_file = project_state_dir(root) / "sessions" / "s1.json"
+                saved = json.loads(session_file.read_text(encoding="utf-8"))
 
-            self.assertEqual(saved["title"], "Research notes")
-            self.assertEqual(resume_choices(root)[0]["title"], "Research notes")
-            delete_session(root, "s1")
-            self.assertFalse((root / ".friday" / "sessions" / "s1.json").exists())
+                self.assertEqual(saved["title"], "Research notes")
+                self.assertEqual(resume_choices(root)[0]["title"], "Research notes")
+                delete_session(root, "s1")
+                self.assertFalse(session_file.exists())
 
     def test_session_id_rejects_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -959,21 +1003,23 @@ class CompactTests(unittest.TestCase):
     def test_save_turn_writes_one_snapshot_per_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sessions = root / ".friday" / "sessions"
+            home_env = {"FRIDAY_HOME": str(root / "home" / ".friday")}
 
-            save_turn(root, "hi", "hello", "s1", [{"role": "user", "content": "hi"}])
-            data = json.loads((sessions / "s1.json").read_text(encoding="utf-8"))
-            self.assertEqual(data["session_id"], "s1")
-            self.assertEqual(data["turns"], 1)
-            self.assertEqual(data["messages"], [{"role": "user", "content": "hi"}])
-            self.assertNotIn("events", data)
-            self.assertFalse((root / ".friday" / "STATE.md").exists())
+            with patch.dict(os.environ, home_env):
+                sessions = project_state_dir(root) / "sessions"
+                save_turn(root, "hi", "hello", "s1", [{"role": "user", "content": "hi"}])
+                data = json.loads((sessions / "s1.json").read_text(encoding="utf-8"))
+                self.assertEqual(data["session_id"], "s1")
+                self.assertEqual(data["turns"], 1)
+                self.assertEqual(data["messages"], [{"role": "user", "content": "hi"}])
+                self.assertNotIn("events", data)
+                self.assertFalse((root / ".friday").exists())
 
-            save_turn(root, "hi", "hello again", "s1", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi2"}])
-            updated = json.loads((sessions / "s1.json").read_text(encoding="utf-8"))
-            self.assertEqual(updated["turns"], 2)
-            self.assertEqual(len(updated["messages"]), 2)
-            self.assertEqual(len(list(sessions.glob("*.json"))), 1)
+                save_turn(root, "hi", "hello again", "s1", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi2"}])
+                updated = json.loads((sessions / "s1.json").read_text(encoding="utf-8"))
+                self.assertEqual(updated["turns"], 2)
+                self.assertEqual(len(updated["messages"]), 2)
+                self.assertEqual(len(list(sessions.glob("*.json"))), 1)
 
     def test_context_report_breaks_down_prompt_tools_and_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1142,12 +1188,13 @@ class CompactTests(unittest.TestCase):
     def test_session_state_update_does_not_add_a_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            save_turn(root, "hello", "hi", session_id="session-1", messages=[])
-            save_session_state(root, "session-1", [{"role": "assistant", "content": "summary"}], {"status": "working"})
+            with patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home" / ".friday")}):
+                save_turn(root, "hello", "hi", session_id="session-1", messages=[])
+                save_session_state(root, "session-1", [{"role": "assistant", "content": "summary"}], {"status": "working"})
 
-            saved = json.loads((root / ".friday" / "sessions" / "session-1.json").read_text(encoding="utf-8"))
-            self.assertEqual(saved["turns"], 1)
-            self.assertEqual(saved["messages"][0]["content"], "summary")
+                saved = json.loads((project_state_dir(root) / "sessions" / "session-1.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved["turns"], 1)
+                self.assertEqual(saved["messages"][0]["content"], "summary")
 
 
 class VerificationTests(unittest.TestCase):
@@ -1250,10 +1297,14 @@ class VerificationTests(unittest.TestCase):
         read_events = [{"type": "tool.call", "data": {"name": "Read", "arguments": {"path": "x.py"}}}]
         write_events = [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}]
         bash_write_events = [{"type": "tool.call", "data": {"name": "Bash", "arguments": {"command": "Set-Content x.py hi"}}}]
+        bash_read_events = [{"type": "tool.call", "data": {"name": "Bash", "arguments": {"command": 'friday memory status 2>$null; friday memory list 2>/dev/null; friday session list 2>&1'}}}]
+        bash_redirect_events = [{"type": "tool.call", "data": {"name": "Bash", "arguments": {"command": "Get-ChildItem > files.txt"}}}]
 
         self.assertFalse(needs_verification(read_events))
+        self.assertFalse(needs_verification(bash_read_events))
         self.assertTrue(needs_verification(write_events))
         self.assertTrue(needs_verification(bash_write_events))
+        self.assertTrue(needs_verification(bash_redirect_events))
 
     def test_verifier_prompt_excludes_main_answer(self) -> None:
         prompt = verification_prompt("fix the bug", [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}])
@@ -1510,7 +1561,11 @@ class ResumeTests(unittest.TestCase):
             )
 
             home = root / "home"
-            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+            with (
+                patch.dict(os.environ, {"FRIDAY_HOME": str(home / ".friday")}),
+                patch("friday.app.Path.home", return_value=home),
+                patch("friday.tools.Path.home", return_value=home),
+            ):
                 agent, context, count = resume_friday(root, stream=False)
 
             self.assertEqual(count, 1)
@@ -1527,9 +1582,13 @@ class ResumeTests(unittest.TestCase):
                 {"role": "assistant", "content": "hello"},
             ]
 
-            save_turn(root, "hi", "hello", "s1", snapshot, last_usage={"input_tokens": 42, "output_tokens": 3})
             home = root / "home"
-            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+            with (
+                patch.dict(os.environ, {"FRIDAY_HOME": str(home / ".friday")}),
+                patch("friday.app.Path.home", return_value=home),
+                patch("friday.tools.Path.home", return_value=home),
+            ):
+                save_turn(root, "hi", "hello", "s1", snapshot, last_usage={"input_tokens": 42, "output_tokens": 3})
                 _agent, resumed, count = resume_friday(root, stream=False)
 
             messages = resumed.get_messages()
@@ -1581,9 +1640,13 @@ class ResumeTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            choices = resume_choices(root)
             home = root / "home"
-            with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
+            with (
+                patch.dict(os.environ, {"FRIDAY_HOME": str(home / ".friday")}),
+                patch("friday.app.Path.home", return_value=home),
+                patch("friday.tools.Path.home", return_value=home),
+            ):
+                choices = resume_choices(root)
                 agent, context, count = resume_friday(root, stream=False, resume_id=choices[1]["id"])
 
             non_system = [m for m in context.get_messages() if m.get("role") != "system"]

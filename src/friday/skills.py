@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from friday.storage import project_state_dir
+
 DEFAULT_FRIDAY_SKILL = Path(__file__).parent / "default_skills" / "friday-cli" / "SKILL.md"
 LEGACY_DEFAULT_SKILL_HASHES = {
     "2bb93f4e5e10b92552705a4ec17098b5ffe259d29a066cc632cf8da42d522caf",
@@ -14,6 +16,7 @@ LEGACY_DEFAULT_SKILL_HASHES = {
 def discover_skills(workspace: Path, user_dir: Path) -> list[dict[str, str]]:
     found: dict[str, dict[str, str]] = {}
     roots = [
+        ("project", project_state_dir(workspace) / "FridaySkills"),
         ("project", workspace.resolve() / ".friday" / "FridaySkills"),
         ("user", user_dir.resolve() / "FridaySkills"),
     ]

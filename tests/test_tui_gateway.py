@@ -15,18 +15,27 @@ from friday.state import save_turn
 from friday.turn import TurnResult
 
 
-def _turn_result(answer: str) -> TurnResult:
+def _turn_result(answer: str, verifications: list[dict] | None = None) -> TurnResult:
     return TurnResult(
         agent=object(),
         context=RunContext(metadata={"workspace": str(Path.cwd())}),
         answer=answer,
-        verifications=[],
+        verifications=verifications or [],
         metrics={},
         progress={},
     )
 
 
 class TuiGatewayTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.state_tmp = tempfile.TemporaryDirectory()
+        self.state_env = patch.dict(os.environ, {"FRIDAY_HOME": str(Path(self.state_tmp.name) / ".friday")})
+        self.state_env.start()
+
+    def tearDown(self) -> None:
+        self.state_env.stop()
+        self.state_tmp.cleanup()
+
     def test_gateway_writes_unicode_json_without_escaping(self) -> None:
         output = io.StringIO()
 
@@ -53,6 +62,17 @@ class TuiGatewayTests(unittest.TestCase):
             gateway.on_agent_event(AgentEvent("verification.start", category="verification"))
 
         event.assert_called_once_with("verification.start", {})
+
+    def test_message_complete_includes_final_verification(self) -> None:
+        gateway = Gateway()
+        callback = gateway.session.on_turn_complete
+        assert callback is not None
+
+        with patch.object(gateway, "event") as event:
+            callback(_turn_result("done", [{"passed": True, "verdict": "pass"}]))
+
+        payload = event.call_args.args[1]
+        self.assertEqual(payload["verification"], {"passed": True, "verdict": "pass"})
 
     def test_gateway_exposes_progress_updates(self) -> None:
         gateway = Gateway()
@@ -144,11 +164,24 @@ class TuiGatewayTests(unittest.TestCase):
                     gateway.handle({"id": "2", "method": "session.delete", "params": {"id": "s1"}})
             finally:
                 os.chdir(cwd)
-            self.assertFalse((root / ".friday" / "sessions" / "s1.json").exists())
+            self.assertEqual(list((Path(os.environ["FRIDAY_HOME"]) / "projects").glob("*/sessions/s1.json")), [])
+
+    def test_gateway_reset_is_project_only_by_default(self) -> None:
+        gateway = Gateway()
+
+        with patch.object(gateway.session, "reset", return_value=[]) as reset, patch.object(gateway, "ok"):
+            gateway.handle({"id": "1", "method": "session.reset"})
+
+        reset.assert_called_once_with(include_user=False)
 
     def test_session_history_restores_conversation_and_tools_only(self) -> None:
         gateway = Gateway()
-        context = RunContext(metadata={"workspace": str(Path.cwd())})
+        context = RunContext(
+            metadata={
+                "workspace": str(Path.cwd()),
+                "friday.user_message_times": [{"text": "Inspect skills", "time": "2026-07-28T16:00:00+08:00"}],
+            }
+        )
         context.add_message("system", "hidden prefix")
         context.add_message("user", "Inspect skills")
         context.add_message(
@@ -173,6 +206,7 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertEqual(history[1]["status"], "done")
         self.assertEqual(history[1]["arguments"]["command"], "friday skill list --json")
         self.assertIn("No extra skills", history[2]["text"])
+        self.assertEqual(history[0]["timestamp"], "2026-07-28T16:00:00+08:00")
         self.assertNotIn("hidden prefix", str(history))
 
     def test_gateway_continues_pending_goal_after_approval(self) -> None:

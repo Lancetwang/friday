@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     sync::Mutex,
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -44,6 +44,20 @@ fn canonical_directory(path: PathBuf) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+fn take_lines(buffer: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
+    buffer.extend_from_slice(bytes);
+    let mut lines = Vec::new();
+    while let Some(end) = buffer.iter().position(|byte| *byte == b'\n') {
+        let mut raw: Vec<u8> = buffer.drain(..=end).collect();
+        raw.pop();
+        if raw.last() == Some(&b'\r') {
+            raw.pop();
+        }
+        lines.push(String::from_utf8_lossy(&raw).to_string());
+    }
+    lines
+}
+
 #[tauri::command]
 fn gateway_start(
     app: tauri::AppHandle,
@@ -63,27 +77,60 @@ fn gateway_start(
         .current_dir(&workspace)
         .spawn()
         .map_err(|error| error.to_string())?;
+    let child_pid = child.pid();
 
     let workspace_label = workspace.display().to_string();
     let event_workspace = workspace_label.clone();
+    let process_workspace = workspace.clone();
     tauri::async_runtime::spawn(async move {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
         while let Some(event) = receiver.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) => {
-                    let line = String::from_utf8_lossy(&bytes).trim().to_string();
-                    if !line.is_empty() {
-                        let _ = app.emit("gateway-line", (event_workspace.clone(), line));
+                    for line in take_lines(&mut stdout, &bytes) {
+                        if !line.is_empty() {
+                            let _ = app.emit("gateway-line", (event_workspace.clone(), line));
+                        }
                     }
                 }
                 CommandEvent::Stderr(bytes) => {
-                    let line = String::from_utf8_lossy(&bytes).trim().to_string();
-                    if !line.is_empty() {
-                        let _ = app.emit("gateway-stderr", (event_workspace.clone(), line));
+                    for line in take_lines(&mut stderr, &bytes) {
+                        if !line.is_empty() {
+                            let _ = app.emit("gateway-stderr", (event_workspace.clone(), line));
+                        }
                     }
                 }
                 _ => {}
             }
         }
+        if !stdout.is_empty() {
+            let _ = app.emit(
+                "gateway-line",
+                (
+                    event_workspace.clone(),
+                    String::from_utf8_lossy(&stdout).to_string(),
+                ),
+            );
+        }
+        if !stderr.is_empty() {
+            let _ = app.emit(
+                "gateway-stderr",
+                (
+                    event_workspace.clone(),
+                    String::from_utf8_lossy(&stderr).to_string(),
+                ),
+            );
+        }
+        if let Ok(mut gateways) = app.state::<GatewayState>().0.lock() {
+            if gateways
+                .get(&process_workspace)
+                .is_some_and(|current| current.pid() == child_pid)
+            {
+                gateways.remove(&process_workspace);
+            }
+        }
+        let _ = app.emit("gateway-exit", event_workspace);
     });
 
     current.insert(workspace, child);
@@ -122,6 +169,25 @@ fn gateway_stop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_lines;
+
+    #[test]
+    fn frames_split_utf8_json_lines_without_corruption() {
+        let source = "{\"text\":\"你好\"}\n{\"ok\":true}\n".as_bytes();
+        let split = source.iter().position(|byte| *byte >= 0x80).unwrap() + 1;
+        let mut buffer = Vec::new();
+
+        assert!(take_lines(&mut buffer, &source[..split]).is_empty());
+        assert_eq!(
+            take_lines(&mut buffer, &source[split..]),
+            vec!["{\"text\":\"你好\"}", "{\"ok\":true}"]
+        );
+        assert!(buffer.is_empty());
+    }
 }
 
 fn main() {

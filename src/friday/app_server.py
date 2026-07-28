@@ -13,7 +13,7 @@ from friday.config import load_model_config
 from friday.context import context_report
 from friday.memory import format_memory_result, run_memory_command
 from friday.session import FridaySession
-from friday.state import delete_session, rename_session
+from friday.state import USER_MESSAGE_TIMES_KEY, delete_session, rename_session
 from friday.tools import build_tools, pending_approval, permission_mode, set_permission_mode
 from friday.trace_web import start_trace_server
 
@@ -32,7 +32,15 @@ def main() -> None:
         # Tolerate a UTF-8 BOM from Windows shells piping into the gateway.
         line = line.lstrip("\ufeff")
         if line.strip():
-            gateway.handle(json.loads(line))
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError as exc:
+                gateway.err(None, f"invalid JSON-RPC request: {exc}")
+                continue
+            if not isinstance(message, dict):
+                gateway.err(None, "invalid JSON-RPC request: expected an object")
+                continue
+            gateway.handle(message)
 
 
 def verification_status(result: dict[str, Any]) -> dict[str, Any]:
@@ -66,6 +74,7 @@ class Gateway:
                     "metrics": result.metrics,
                     "progress": result.progress,
                     "session_id": str(result.context.metadata.get("session_id") or ""),
+                    "verification": verification_status(result.verifications[-1]) if result.verifications else None,
                 },
             ),
         )
@@ -82,13 +91,13 @@ class Gateway:
             elif method == "goal.run":
                 self.ok(rid, {"text": self.session.chat(str(params.get("text") or ""), goal=True).answer})
             elif method == "prompt.get":
-                self.ok(rid, {"text": build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")})
+                self.ok(rid, {"text": build_instructions(Path.cwd().resolve())})
             elif method == "memory.command":
                 result = run_memory_command(str(params.get("command") or ""), Path.cwd().resolve())
                 self.ok(rid, {"text": format_memory_result(result)})
             elif method == "context.get":
                 _agent, context = self.session.ensure()
-                self.ok(rid, {"text": context_report(context, build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))})
+                self.ok(rid, {"text": context_report(context, build_tools(Path.cwd().resolve()))})
             elif method == "progress.get":
                 self.session.ensure()
                 self.ok(rid, {"progress": self.session.progress()})
@@ -98,7 +107,7 @@ class Gateway:
                 _server, url = start_trace_server()
                 self.ok(rid, {"url": url})
             elif method == "session.reset":
-                removed = self.session.reset()
+                removed = self.session.reset(include_user=bool(params.get("global")))
                 self.ok(rid, {"removed": [str(path) for path in removed], "info": self.session_info()})
             elif method == "session.new":
                 self.session.new()
@@ -205,7 +214,7 @@ class Gateway:
             "progress": self.session.progress(),
             "approval": pending_approval(),
             "session_id": session_id,
-            "tools": [tool.name for tool in build_tools(Path.cwd().resolve(), Path.cwd().resolve() / ".friday")],
+            "tools": [tool.name for tool in build_tools(Path.cwd().resolve())],
         }
 
     def on_agent_event(self, event: AgentEvent) -> None:
@@ -252,10 +261,10 @@ class Gateway:
     def event(self, event_type: str, payload: dict[str, Any]) -> None:
         self.write({"jsonrpc": "2.0", "method": "event", "params": {"type": event_type, "payload": payload}})
 
-    def ok(self, rid: str, result: Any) -> None:
+    def ok(self, rid: Any, result: Any) -> None:
         self.write({"jsonrpc": "2.0", "id": rid, "result": result})
 
-    def err(self, rid: str, message: str) -> None:
+    def err(self, rid: Any, message: str) -> None:
         self.write({"jsonrpc": "2.0", "id": rid, "error": {"message": message}})
 
     def write(self, msg: dict[str, Any]) -> None:
@@ -323,6 +332,18 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                     }
                 )
     flush_assistant()
+    message_times = session.context.metadata.get(USER_MESSAGE_TIMES_KEY, [])
+    records = [item for item in message_times if isinstance(item, dict)] if isinstance(message_times, list) else []
+    record_index = len(records) - 1
+    for item in reversed(history):
+        if item["kind"] != "user":
+            continue
+        while record_index >= 0:
+            record = records[record_index]
+            record_index -= 1
+            if record.get("text") == item["text"]:
+                item["timestamp"] = str(record.get("time") or "")
+                break
     return history
 
 

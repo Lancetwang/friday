@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -11,10 +9,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
+from friday.storage import checkpoint_dir, project_state_dir
 from friday.trace import load_trace, load_trace_object
 
 SCHEMA_VERSION = 1
 ACTIVE_STATES = {"pending", "ready"}
+MAX_CHECKPOINTS = 50
 
 
 def begin_checkpoint(
@@ -33,7 +33,7 @@ def begin_checkpoint(
             return str(pending["id"])
 
     checkpoint_id = datetime.now().strftime("%Y%m%d%H%M%S%f") + "-" + uuid4().hex[:8]
-    session = _read_json(root / ".friday" / "sessions" / f"{session_id}.json")
+    session = _read_json(project_state_dir(root) / "sessions" / f"{session_id}.json")
     _write_entry(
         root,
         {
@@ -68,6 +68,7 @@ def finish_checkpoint(workspace: Path, checkpoint_id: str, *, pending: bool) -> 
         updated=datetime.now().isoformat(timespec="seconds"),
     )
     _write_entry(root, entry)
+    _prune_checkpoints(root)
     return entry
 
 
@@ -129,6 +130,7 @@ def restore_checkpoint(
         if str(entry.get("id")) >= str(target["id"]):
             entry.update(state="undone", undone_at=datetime.now().isoformat(timespec="seconds"))
             _write_entry(root, entry)
+    _prune_checkpoints(root)
     return {
         **target,
         "messages": messages,
@@ -307,6 +309,51 @@ def _write_entry(workspace: Path, value: dict[str, Any]) -> None:
         json.dump(value, file, ensure_ascii=False)
         temporary = Path(file.name)
     temporary.replace(path)
+    _sync_entry_refs(workspace, value)
+
+
+def delete_session_checkpoints(workspace: Path, session_id: str) -> int:
+    root = workspace.resolve()
+    removed = [entry for entry in _entries(root) if str(entry.get("session_id") or "") == session_id]
+    if not removed:
+        return 0
+    _remove_entries(root, removed)
+    return len(removed)
+
+
+def _prune_checkpoints(workspace: Path) -> None:
+    entries = _entries(workspace)
+    active = [entry for entry in entries if entry.get("state") in ACTIVE_STATES]
+    keep_ids = {str(entry["id"]) for entry in active[-MAX_CHECKPOINTS:]}
+    removed = [
+        entry
+        for entry in entries
+        if entry.get("state") == "undone"
+        or (entry.get("state") in ACTIVE_STATES and str(entry["id"]) not in keep_ids)
+    ]
+    if removed:
+        _remove_entries(workspace, removed)
+
+
+def _remove_entries(workspace: Path, removed: list[dict[str, Any]]) -> None:
+    removed_ids = {str(entry["id"]) for entry in removed}
+    for entry in _entries(workspace):
+        if str(entry["id"]) not in removed_ids:
+            _sync_entry_refs(workspace, entry)
+    for entry in removed:
+        checkpoint_id = str(entry["id"])
+        (_entries_dir(workspace) / f"{checkpoint_id}.json").unlink(missing_ok=True)
+        _git(workspace, "update-ref", "-d", f"refs/friday/{checkpoint_id}/before")
+        _git(workspace, "update-ref", "-d", f"refs/friday/{checkpoint_id}/after")
+    _git(workspace, "gc", "--prune=now", "--quiet")
+
+
+def _sync_entry_refs(workspace: Path, entry: dict[str, Any]) -> None:
+    checkpoint_id = str(entry["id"])
+    for name, key in (("before", "before_tree"), ("after", "after_tree")):
+        tree = str(entry.get(key) or "")
+        if tree:
+            _git(workspace, "update-ref", f"refs/friday/{checkpoint_id}/{name}", tree)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -328,9 +375,7 @@ def _repo_dir(workspace: Path) -> Path:
 
 
 def _checkpoint_dir(workspace: Path) -> Path:
-    base = Path(os.getenv("FRIDAY_CHECKPOINT_DIR") or Path.home() / ".friday" / "checkpoints")
-    digest = hashlib.sha256(str(workspace.resolve()).casefold().encode("utf-8")).hexdigest()[:20]
-    return base.expanduser().resolve() / digest
+    return checkpoint_dir(workspace)
 
 
 def _preview(text: str, limit: int) -> str:

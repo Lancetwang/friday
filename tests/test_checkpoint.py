@@ -11,6 +11,8 @@ from agent_core import RunContext
 
 from friday.checkpoint import begin_checkpoint, checkpoint_choices, finish_checkpoint, restore_checkpoint
 from friday.app import undo_friday
+from friday.state import delete_session, save_turn
+from friday.storage import project_state_dir
 from friday.trace import begin_live_trace
 
 
@@ -21,6 +23,7 @@ class CheckpointTests(unittest.TestCase):
             os.environ,
             {
                 "FRIDAY_CHECKPOINT_DIR": str(Path(self.storage.name) / "checkpoints"),
+                "FRIDAY_HOME": str(Path(self.storage.name) / "home" / ".friday"),
                 "FRIDAY_OBSERVABILITY_DIR": str(Path(self.storage.name) / "traces"),
             },
         )
@@ -119,6 +122,52 @@ class CheckpointTests(unittest.TestCase):
             self.assertFalse((root / "changed.txt").exists())
             saved = json.loads(session_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["turns"], 1)
+
+    def test_checkpoint_history_is_bounded_and_remaining_trees_survive_gc(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch("friday.checkpoint.MAX_CHECKPOINTS", 2):
+            root = Path(tmp)
+            ids = []
+            for index in range(3):
+                (root / "work.txt").write_text(str(index), encoding="utf-8")
+                checkpoint_id = self._begin(root)
+                (root / "work.txt").write_text(f"done-{index}", encoding="utf-8")
+                finish_checkpoint(root, checkpoint_id, pending=False)
+                ids.append(checkpoint_id)
+
+            choices = checkpoint_choices(root)
+            self.assertEqual([choice["id"] for choice in choices], list(reversed(ids[-2:])))
+            restored = restore_checkpoint(root, checkpoint_id=ids[-2], force=True)
+            self.assertEqual(restored["id"], ids[-2])
+
+    def test_deleting_a_session_removes_its_recovery_and_tool_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_turn(root, "change", "done", "session-delete", [])
+            context = RunContext(metadata={"workspace": str(root), "session_id": "session-delete"})
+            path, turn_id = begin_live_trace(
+                root,
+                context=context,
+                mode="chat",
+                user="change",
+                prompt_messages=[],
+            )
+            checkpoint_id = begin_checkpoint(
+                root,
+                session_id="session-delete",
+                turn_id=turn_id,
+                user="change",
+                progress={},
+            )
+            finish_checkpoint(root, checkpoint_id, pending=False)
+            artifacts = project_state_dir(root) / "tool-results" / "session-delete"
+            artifacts.mkdir(parents=True)
+            (artifacts / "bash.txt").write_text("large output", encoding="utf-8")
+
+            delete_session(root, "session-delete")
+
+            self.assertFalse(path.parent.exists())
+            self.assertFalse(artifacts.exists())
+            self.assertEqual(checkpoint_choices(root), [])
 
     def _begin(self, root: Path) -> str:
         context = RunContext(metadata={"workspace": str(root), "session_id": "session-1"})

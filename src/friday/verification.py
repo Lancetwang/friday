@@ -12,6 +12,7 @@ from agent_core import Agent, RunContext
 from friday.agent_flow import GUARD_STOP_REASON, build_guarded_flow, inherit_guarded_run
 from friday.config import ModelConfig, build_model, load_model_config
 from friday.prompts import VERIFIER_NOTES
+from friday.storage import project_state_dir
 from friday.tools import build_tools, pending_approval
 
 VERIFIER_MAX_STEPS = 10000
@@ -19,7 +20,7 @@ VERIFIER_MAX_STEPS = 10000
 
 def build_verifier(workspace: Path, config: ModelConfig | None = None) -> tuple[Agent, RunContext]:
     root = workspace.resolve()
-    friday_dir = root / ".friday"
+    friday_dir = project_state_dir(root)
     config = config or load_model_config(root)
     system = platform.system()
     shell = "PowerShell" if system == "Windows" else "bash"
@@ -102,7 +103,8 @@ def needs_verification(events: list[dict[str, Any]]) -> bool:
 
 def bash_may_write(command: str) -> bool:
     lowered = command.lower()
-    return bool(re.search(r"\b(set-content|add-content|out-file|new-item|move-item|rename-item|rm|del|remove-item)\b|(^|[^><])>{1,2}(?![=>])", lowered))
+    checked = re.sub(r"(?:(?:&|\*|\d+)\s*)?>{1,2}\s*(?:\$null\b|/dev/null\b|nul\b|&\d+\b)", "", lowered)
+    return bool(re.search(r"\b(set-content|add-content|out-file|new-item|move-item|rename-item|rm|del|remove-item)\b|(^|[^><])>{1,2}(?![=>&])", checked))
 
 
 def verification_prompt(goal: str, events: list[dict[str, Any]]) -> str:

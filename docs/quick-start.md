@@ -25,7 +25,7 @@ Project initialization is optional:
 friday init
 ```
 
-It creates `AGENTS.md`, where you can record project commands and rules. Friday creates `.friday/` state lazily when memory, sessions, permissions, or traces are needed.
+It creates `AGENTS.md`, where you can record project commands and rules. Runtime state stays under `~/.friday/projects/`; opening a project does not create a `.friday/` directory in it.
 
 ## One-Shot And Plain Chat
 
@@ -103,4 +103,4 @@ friday reject --message "use another approach"
 
 Inside CLI chat, use `/approve`, `/approve session`, `/reject`, or `/reject <guidance>`. The TUI presents the same decisions as a vertical picker and accepts guidance inline.
 
-Project state is stored in `<workspace>/.friday/`. Global configuration, user profile, memory, rules, and user skills are stored in `~/.friday/`.
+Project state is isolated under `~/.friday/projects/<workspace-id>/`, where `workspace-id` is a deterministic hash of the resolved project path. Its `project.json` records the original path so hashed directories remain identifiable. Sessions, checkpoints, approvals, and large tool outputs share this project lifecycle. `friday prompt` prints the resolved project configuration path. Global configuration, user profile, memory, rules, and user skills are stored directly in `~/.friday/`.

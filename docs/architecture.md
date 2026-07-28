@@ -62,8 +62,14 @@ flowchart TD
 
 | Store | Path | Owner |
 | --- | --- | --- |
-| Session snapshots | `.friday/sessions/*.json` | `state.py` |
-| Turn checkpoints | checkpoint dir (see [Checkpoints](checkpoints.md)) | `checkpoint.py` |
-| Pending approval | `.friday/pending_approval.json` | `tools.py` |
+| Project identity | `~/.friday/projects/<workspace-id>/project.json` | `storage.py` |
+| Session snapshots | `~/.friday/projects/<workspace-id>/sessions/*.json` | `state.py` |
+| Turn checkpoints | `~/.friday/projects/<workspace-id>/checkpoints/` | `checkpoint.py` |
+| Large tool results | `~/.friday/projects/<workspace-id>/tool-results/<session-id>/` | `tools.py` |
+| Pending approval | `~/.friday/projects/<workspace-id>/pending_approval.json` | `tools.py` |
 | Traces | observability dir (see [Observability](observability.md)) | `trace.py` |
-| Memory | `~/.friday/…` and `.friday/MEMORY.md` (see [Memory](memory.md)) | `memory.py` |
+| Memory | `~/.friday/…` (see [Memory](memory.md)) | `memory.py` |
+
+Deleting a conversation removes its session snapshot, trace, checkpoints, and
+session-scoped large tool results together. Runtime events are persisted to the
+trace and released from the live context after each turn.

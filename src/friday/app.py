@@ -23,8 +23,10 @@ from friday.prompts import (
 )
 from friday.progress import current_progress
 from friday.skills import ensure_default_skill, skill_routing
+from friday.storage import friday_home, migrate_legacy_runtime, project_state_dir, record_project
 from friday.state import (
     SessionState,
+    USER_MESSAGE_TIMES_KEY,
     conversation_body,
     hydrate,
     load_session,
@@ -36,7 +38,7 @@ from friday.state import (
     write_session,
 )
 from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions
-from friday.trace import record_checkpoint_restore
+from friday.trace import delete_workspace_traces, record_checkpoint_restore
 
 __all__ = [
     "build_friday",
@@ -73,8 +75,9 @@ LEGACY_PROMPT_DEFAULT_HASHES = {
 def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
     load_model_environment(root)
-    ensure_user_home(Path.home())
-    friday_dir = root / ".friday"
+    ensure_user_home()
+    friday_dir = migrate_legacy_runtime(root)
+    record_project(root)
     config = load_model_config(root)
     instructions = build_instructions(root, friday_dir, config)
     tools = build_tools(root, friday_dir)
@@ -134,8 +137,9 @@ def _installed_core_version() -> str:
         return ""
 
 
-def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | None = None) -> str:
-    user_dir = Path.home() / ".friday"
+def build_instructions(workspace: Path, friday_dir: Path | None = None, config: ModelConfig | None = None) -> str:
+    friday_dir = friday_dir or project_state_dir(workspace)
+    user_dir = friday_home()
     config = config or load_model_config(workspace)
     parts = [
         # Global, code-owned prefix: identical across every workspace and only
@@ -151,7 +155,7 @@ def build_instructions(workspace: Path, friday_dir: Path, config: ModelConfig | 
         ("Skills", skill_routing()),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
         ("Environment", _embedded_markdown(environment(workspace, config))),
-        ("Project Memory", _embedded_markdown(_read_optional(friday_dir / "MEMORY.md"))),
+        ("Project Memory", _embedded_markdown(_read_optional(friday_dir / "MEMORY.md") or _read_optional(workspace / ".friday" / "MEMORY.md"))),
     ]
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
 
@@ -163,6 +167,7 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     recent_messages = recent_turns(context.get_messages())
     session_id = str(context.metadata.get("session_id") or "")
     progress = current_progress(context)
+    user_message_times = context.metadata.get(USER_MESSAGE_TIMES_KEY, [])
     summary = agent.chat(
         COMPACT_PROMPT,
         context=context,
@@ -184,6 +189,9 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
             session_id=session_id,
             body=[{"role": "assistant", "content": f"## Session Summary\n{summary.strip()}"}, *recent_messages],
             progress=progress,
+            user_message_times=[dict(item) for item in user_message_times if isinstance(item, dict)]
+            if isinstance(user_message_times, list)
+            else [],
         ),
     )
     if session_id:
@@ -193,7 +201,7 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
 
 def prepare_context_for_chat(agent: Agent, context: RunContext, *, stream: bool = True) -> tuple[Agent, RunContext, str]:
     root = Path(context.metadata["workspace"])
-    tools = build_tools(root, root / ".friday")
+    tools = build_tools(root)
     if should_compact_conversation(context, tools):
         agent, context, summary = compact_friday(agent, context, stream=stream)
         return agent, context, f"conversation compacted: {summary}"
@@ -236,10 +244,15 @@ def undo_friday(
             session_id=session_id,
             body=conversation_body(restored["messages"]),
             progress=before_progress if isinstance(before_progress, dict) else {},
+            user_message_times=[
+                dict(item)
+                for item in dict(restored.get("before_session") or {}).get("user_message_times", [])
+                if isinstance(item, dict)
+            ],
         ),
     )
 
-    session_path = root / ".friday" / "sessions" / f"{session_id}.json"
+    session_path = project_state_dir(root) / "sessions" / f"{session_id}.json"
     if restored.get("session_existed"):
         snapshot = {
             **dict(restored.get("before_session") or {}),
@@ -260,7 +273,7 @@ def ensure_user_home(home: Path | None = None) -> list[Path]:
     Idempotent and cheap, so it runs on startup to give a just-installed Friday a
     populated home without requiring an explicit init. Only missing files are created.
     """
-    user_dir = (home or Path.home()) / ".friday"
+    user_dir = friday_home(home)
     user_dir.mkdir(parents=True, exist_ok=True)
     created: list[Path] = []
     for old_name, new_name in (("soul.md", "SOUL.md"), ("user.md", "USER.md")):
@@ -312,19 +325,23 @@ def init_project(workspace: Path | None = None) -> list[Path]:
 
 def reset_friday(workspace: Path | None = None, *, user_home: Path | None = None, include_user: bool = True) -> list[Path]:
     root = (workspace or Path.cwd()).resolve()
-    home = user_home or Path.home()
     removed = []
-    project_state = root / ".friday"
-    user_state = home / ".friday"
-    project_config = _read_optional(project_state / "config.json")
+    project_state = project_state_dir(root, user_home)
+    legacy_project_state = root / ".friday"
+    user_state = friday_home(user_home)
+    project_config = _read_optional(project_state / "config.json") or _read_optional(legacy_project_state / "config.json")
     user_config = _read_optional(user_state / "config.json")
+    delete_workspace_traces(root)
     if project_state.exists():
         shutil.rmtree(project_state)
         removed.append(project_state)
+    if legacy_project_state.exists():
+        shutil.rmtree(legacy_project_state)
+        removed.append(legacy_project_state)
     if include_user and user_state.exists():
         shutil.rmtree(user_state)
         removed.append(user_state)
-    ensure_user_home(home)
+    ensure_user_home(user_home)
     if user_config:
         (user_state / "config.json").write_text(user_config, encoding="utf-8")
     if project_config:
@@ -369,7 +386,7 @@ def _exists_exact(path: Path) -> bool:
 
 def _project_instruction_files(workspace: Path) -> list[str]:
     documents = []
-    global_rules = (Path.home() / ".friday" / "AGENTS.md").resolve()
+    global_rules = (friday_home() / "AGENTS.md").resolve()
     for parent in reversed([workspace, *workspace.parents]):
         for name in INSTRUCTION_FILE_NAMES:
             path = parent / name

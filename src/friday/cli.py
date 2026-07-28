@@ -24,6 +24,7 @@ from friday.progress import progress_line
 from friday.session import FridaySession
 from friday.skills import discover_skills
 from friday.state import delete_session, rename_session
+from friday.storage import friday_home, project_state_dir
 from friday.tools import build_tools, permission_mode, set_permission_mode
 from friday.trace import behavior_events, list_traces, load_trace, trace_stats
 from friday.trace_web import serve_trace_ui, start_trace_server
@@ -155,8 +156,8 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "skill":
-        ensure_user_home(Path.home())
-        skills = discover_skills(Path.cwd(), Path.home() / ".friday")
+        ensure_user_home()
+        skills = discover_skills(Path.cwd(), friday_home())
         if args.json:
             print(json_dump({"skills": skills}))
         else:
@@ -166,7 +167,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "prompt":
-        print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
+        print(build_instructions(Path.cwd().resolve()))
         return
 
     if command == "memory":
@@ -235,7 +236,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "reset":
-        if _confirm_reset(args.yes):
+        if _confirm_reset(args.yes, include_user=True):
             _print_reset(reset_friday(include_user=True))
         return
 
@@ -348,7 +349,7 @@ def _slash(text: str, session: FridaySession) -> None:
         session.new()
         print("started a new conversation")
     elif command == "prompt":
-        print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
+        print(build_instructions(Path.cwd().resolve()))
     elif command.startswith("memory"):
         result = run_memory_command(raw_command[len("memory") :].strip(), Path.cwd().resolve())
         print(format_memory_result(result))
@@ -413,7 +414,7 @@ def _slash(text: str, session: FridaySession) -> None:
         elif not outcome["continued"]:
             _print_progress(session.progress())
     elif command == "reset":
-        if _confirm_reset(False):
+        if _confirm_reset(False, include_user=False):
             _print_reset(session.reset())
     elif command in {"exit", "quit", "q"}:
         raise SystemExit
@@ -421,12 +422,12 @@ def _slash(text: str, session: FridaySession) -> None:
         print(f"unknown slash command: /{command}")
 
 
-def _confirm_reset(yes: bool) -> bool:
-    targets = [
-        Path.cwd().resolve() / ".friday",
-        Path.home() / ".friday",
-    ]
-    print("This will delete Friday project state and global Friday user state:")
+def _confirm_reset(yes: bool, *, include_user: bool) -> bool:
+    targets = [project_state_dir(Path.cwd().resolve())]
+    if include_user:
+        targets.append(friday_home())
+    scope = "project state and global Friday user state" if include_user else "the current project's Friday state"
+    print(f"This will delete {scope}:")
     for path in targets:
         print(f"- {path}")
     if not yes:
@@ -552,7 +553,7 @@ def _memory_text(args, parser: argparse.ArgumentParser) -> str:
 
 def _context_report(context) -> str:
     root = Path(context.metadata["workspace"])
-    return context_report(context, build_tools(root, root / ".friday"))
+    return context_report(context, build_tools(root))
 
 
 def _approval_status(result: dict) -> str:

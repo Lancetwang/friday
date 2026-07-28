@@ -10,7 +10,7 @@ Friday records every new session under:
   analyses/
 ```
 
-`events.jsonl` is append-only. It records turn boundaries, exact model request
+`events.jsonl` is append-only while the conversation exists. It records turn boundaries, exact model request
 and response payloads, tool calls and results, context compaction, verification,
 progress, timing, and provider usage. Messages, tool schemas, and large results
 are stored once in `objects/`; events keep ordered references, so the exact
@@ -38,5 +38,10 @@ model. No event selection or tool loop is required; questions appear
 immediately and answers stream into the paper-style analysis pane. Analysis
 conversations are stored under `analyses/` and never enter the original
 session or its memory.
+
+Deleting a conversation removes its trace, analysis, checkpoints, and
+session-scoped large tool outputs as one lifecycle unit. Resetting the current
+project removes all traces belonging to that workspace.
+
 Trace content may include source code, prompts, command output, and personal
 data; keep the observability directory private.

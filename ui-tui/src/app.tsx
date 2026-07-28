@@ -47,7 +47,7 @@ const HELP_TEXT = `# Friday commands
 | \`/permission manual|bypass\` | Request approval for risky commands or grant full access. |
 | \`/approve\` | Open the pending approval choices. |
 | \`/reject\` | Open the pending approval choices with Reject selected. |
-| \`/reset\` | Clear Friday project state and global Friday user state. |
+| \`/reset\` | Clear Friday state for the current project. |
 | \`/exit\` | Close the TUI. \`/quit\` works too. |
 `
 
@@ -411,7 +411,7 @@ function runCommand(
   } else if (command.startsWith('/reset')) {
     void gateway.request('session.reset').then(() => {
       setProgress(null)
-      setMessages(items => [...items, { role: 'system', text: 'Reset Friday.' }])
+      setMessages(items => [...items, { role: 'system', text: 'Reset Friday for this project.' }])
     })
   } else {
     setMessages(items => [...items, { role: 'system', text: `Unknown command: ${command}. Try /help.` }])

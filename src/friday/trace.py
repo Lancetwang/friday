@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import threading
 from collections import Counter
@@ -14,6 +15,7 @@ from uuid import uuid4
 from agent_core import RunContext
 
 from friday.progress import current_progress
+from friday.storage import friday_home, project_state_dir
 
 SCHEMA_VERSION = 3
 _WRITE_LOCK = threading.Lock()
@@ -21,7 +23,7 @@ _WRITE_LOCK = threading.Lock()
 
 def trace_root() -> Path:
     override = os.getenv("FRIDAY_OBSERVABILITY_DIR")
-    return Path(override).expanduser().resolve() if override else Path.home() / ".friday" / "observability"
+    return Path(override).expanduser().resolve() if override else friday_home() / "observability"
 
 
 def begin_live_trace(
@@ -231,13 +233,37 @@ def load_trace(session_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     path = session_dir / "events.jsonl"
     rows = []
     if path.exists():
-        for seq, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            row["seq"] = seq
-            rows.append(row)
+        with path.open(encoding="utf-8") as file:
+            for seq, line in enumerate(file, start=1):
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                row["seq"] = seq
+                rows.append(row)
     return manifest, rows
+
+
+def delete_trace(session_id: str, workspace: Path | None = None) -> bool:
+    session_dir = _session_dir(session_id)
+    if not session_dir.exists():
+        return False
+    if workspace is not None:
+        manifest = _read_json(session_dir / "manifest.json")
+        if not manifest or Path(str(manifest.get("workspace") or "")).resolve() != workspace.resolve():
+            return False
+    shutil.rmtree(session_dir)
+    return True
+
+
+def delete_workspace_traces(workspace: Path) -> int:
+    root = workspace.resolve()
+    removed = 0
+    for manifest_path in (trace_root() / "sessions").glob("*/manifest.json"):
+        manifest = _read_json(manifest_path)
+        if manifest and Path(str(manifest.get("workspace") or "")).resolve() == root:
+            shutil.rmtree(manifest_path.parent)
+            removed += 1
+    return removed
 
 
 def load_trace_object(session_id: str, ref: str) -> Any:
@@ -467,8 +493,18 @@ def _tool_full_output(session_dir: Path, content: Any) -> str | None:
         return None
     manifest = _read_json(session_dir / "manifest.json") or {}
     workspace = Path(str(manifest.get("workspace") or "")).resolve()
-    path = (workspace / value["full_output_path"]).resolve()
-    if path != workspace and workspace not in path.parents:
+    raw = Path(value["full_output_path"])
+    state_dir = project_state_dir(workspace)
+    if not raw.is_absolute() and raw.parts[:2] == (".friday", "tool-results"):
+        migrated = state_dir.joinpath(*raw.parts[1:])
+        raw = migrated if migrated.exists() else workspace / raw
+    path = (workspace / raw).resolve()
+    if (
+        path != workspace
+        and workspace not in path.parents
+        and path != state_dir
+        and state_dir not in path.parents
+    ):
         return None
     try:
         return path.read_text(encoding="utf-8", errors="replace")

@@ -15,22 +15,25 @@ export class GatewayClient extends EventEmitter {
   private seq = 0
 
   start() {
+    if (this.proc) return
     const python = process.env.FRIDAY_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
     const env = { ...process.env }
     const root = process.env.FRIDAY_ROOT
     const cwd = process.env.FRIDAY_CWD || process.cwd()
 
-    this.proc = spawn(python, ['-m', 'friday.app_server'], {
+    const proc = spawn(python, ['-m', 'friday.app_server'], {
       cwd,
       env: root ? { ...env, PYTHONPATH: env.PYTHONPATH ? `${root}${process.platform === 'win32' ? ';' : ':'}${env.PYTHONPATH}` : root } : env,
       stdio: ['pipe', 'pipe', 'pipe']
     })
+    this.proc = proc
 
-    createInterface({ input: this.proc.stdout! }).on('line', line => this.dispatch(line))
-    createInterface({ input: this.proc.stderr! }).on('line', line =>
+    createInterface({ input: proc.stdout! }).on('line', line => this.dispatch(line))
+    createInterface({ input: proc.stderr! }).on('line', line =>
       this.emit('event', { type: 'gateway.stderr', payload: { line } } satisfies GatewayEvent)
     )
-    this.proc.on('exit', code => {
+    proc.on('exit', code => {
+      if (this.proc === proc) this.proc = null
       for (const pending of this.pending.values()) {
         pending.reject(new Error(`gateway exited${code === null ? '' : ` (${code})`}`))
       }
@@ -46,12 +49,16 @@ export class GatewayClient extends EventEmitter {
     const id = `r${++this.seq}`
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: value => resolve(value as T), reject })
-      this.proc!.stdin!.write(JSON.stringify({ id, jsonrpc: '2.0', method, params }) + '\n')
+      this.proc!.stdin!.write(JSON.stringify({ id, jsonrpc: '2.0', method, params }) + '\n', error => {
+        if (!error || !this.pending.delete(id)) return
+        reject(error)
+      })
     })
   }
 
   kill() {
     this.proc?.kill()
+    this.proc = null
   }
 
   private dispatch(line: string) {

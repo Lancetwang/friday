@@ -9,6 +9,8 @@ from typing import Any
 
 from agent_core import LLM
 
+from friday.storage import friday_home, project_state_dir
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -26,8 +28,12 @@ CONFIG_FIELDS = set(asdict(DEFAULT_MODEL_CONFIG))
 
 def load_model_config(workspace: Path, *, home: Path | None = None) -> ModelConfig:
     values = asdict(DEFAULT_MODEL_CONFIG)
-    user_dir = (home or Path.home()) / ".friday"
-    for path in (user_dir / "config.json", workspace.resolve() / ".friday" / "config.json"):
+    user_dir = friday_home(home)
+    for path in (
+        user_dir / "config.json",
+        workspace.resolve() / ".friday" / "config.json",
+        project_state_dir(workspace, home) / "config.json",
+    ):
         values.update(_read_config(path))
     return _validate(values)
 
@@ -39,7 +45,7 @@ def build_model(config: ModelConfig) -> LLM:
 
 
 def load_model_environment(workspace: Path, *, home: Path | None = None) -> None:
-    for path in (workspace.resolve() / ".env", (home or Path.home()) / ".friday" / ".env"):
+    for path in (workspace.resolve() / ".env", friday_home(home) / ".env"):
         if not path.exists():
             continue
         for raw_line in path.read_text(encoding="utf-8").splitlines():

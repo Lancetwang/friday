@@ -42,6 +42,10 @@ friday progress
 friday reset
 ```
 
+Top-level `friday reset` requires confirmation and clears global Friday state.
+Interactive `/reset` clears only the current project's sessions, checkpoints,
+tool artifacts, and traces.
+
 Top-level `goal`, `compact`, `context`, `progress`, `resume`, `approve`, and
 `reject` operate on persisted sessions, so they have the same behavior as their
 chat/TUI counterparts. Use `--session <id>` when the latest session is not the

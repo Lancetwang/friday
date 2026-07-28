@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,7 +16,7 @@ from friday.context import token_estimate
 from friday.loop import AGENT_MAX_STEPS, run_loop
 from friday.memory import capture_user_memory, relevant_memory
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress
-from friday.state import save_turn
+from friday.state import USER_MESSAGE_TIMES_KEY, save_turn
 from friday.tools import build_tools, pending_approval
 from friday.trace import begin_live_trace, finish_live_trace, record_context_transition, write_live_event, write_trace
 
@@ -103,7 +104,8 @@ def run_turn(
             mode="goal" if goal else "normal",
             continuation=continuation,
         )
-        append_progress_checkpoint(context)
+        if goal or continuation:
+            append_progress_checkpoint(context)
         if on_progress:
             on_progress(progress)
         recalled = relevant_memory(workspace, text)
@@ -115,8 +117,18 @@ def run_turn(
                 text,
                 session_id=str(context.metadata.get("session_id") or ""),
             )
+        user_message_times = context.metadata.setdefault(USER_MESSAGE_TIMES_KEY, [])
+        if not isinstance(user_message_times, list):
+            user_message_times = []
+            context.metadata[USER_MESSAGE_TIMES_KEY] = user_message_times
+        user_message_times.append(
+            {
+                "text": text,
+                "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+        )
         prompt_messages = [dict(message) for message in context.get_messages()]
-        input_estimate = token_estimate(context, build_tools(workspace, workspace / ".friday")) + _tokens(text)
+        input_estimate = token_estimate(context, build_tools(workspace)) + _tokens(text)
         start = time.perf_counter()
         loop_result = run_loop(
             agent,
@@ -146,6 +158,7 @@ def run_turn(
             finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
         except Exception as checkpoint_error:
             exc.add_note(f"Friday could not finalize the recovery checkpoint: {checkpoint_error}")
+        context.events.clear()
         raise
     finally:
         context.on_event = event_handler
@@ -160,30 +173,39 @@ def run_turn(
         "output_tokens": turn_usage["output_tokens"] if not estimated else _tokens(answer),
     }
     context.metadata["friday.last_usage"] = metrics
-    write_trace(
-        workspace,
-        mode=mode,
-        user=user,
-        assistant=answer,
-        context=context,
-        start_event=start_event,
-        prompt_messages=prompt_messages,
-        metrics=metrics,
-        verifications=verifications,
-        context_notice=notice,
-        turn_id=turn_id,
-    )
-    finish_live_trace(live_path, turn_id, status="done", metrics=metrics)
-    save_turn(
-        workspace,
-        user,
-        answer,
-        str(context.metadata.get("session_id") or ""),
-        context.get_messages(),
-        progress,
-        last_usage=metrics,
-    )
-    finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
+    try:
+        write_trace(
+            workspace,
+            mode=mode,
+            user=user,
+            assistant=answer,
+            context=context,
+            start_event=start_event,
+            prompt_messages=prompt_messages,
+            metrics=metrics,
+            verifications=verifications,
+            context_notice=notice,
+            turn_id=turn_id,
+        )
+        finish_live_trace(
+            live_path,
+            turn_id,
+            status=str(context.metadata.get("friday.loop_status") or "done"),
+            metrics=metrics,
+        )
+        save_turn(
+            workspace,
+            user,
+            answer,
+            str(context.metadata.get("session_id") or ""),
+            context.get_messages(),
+            progress,
+            last_usage=metrics,
+            user_message_times=context.metadata.get(USER_MESSAGE_TIMES_KEY),
+        )
+        finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
+    finally:
+        context.events.clear()
     return TurnResult(agent, context, answer, verifications, metrics, progress, notice)
 
 

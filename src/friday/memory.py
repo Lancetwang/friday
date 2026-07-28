@@ -9,6 +9,7 @@ from typing import Any
 
 from friday.config import build_model, load_model_config, load_model_environment
 from friday.prompts import MEMORY_CONSOLIDATE_PROMPT
+from friday.storage import friday_home, project_state_dir
 
 USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
@@ -401,12 +402,16 @@ def run_memory_command(command: str, workspace: Path, *, home: Path | None = Non
 
 
 def _scope_paths(workspace: Path, home: Path | None) -> dict[str, list[Path]]:
-    user_dir = (home or Path.home()) / ".friday"
+    user_dir = friday_home(home)
     episodes = user_dir / "memory"
+    project_paths = [project_state_dir(workspace, home) / "MEMORY.md"]
+    legacy_project = workspace / ".friday" / "MEMORY.md"
+    if legacy_project.exists():
+        project_paths.append(legacy_project)
     return {
         "user": [user_dir / "USER.md"],
         "global": [user_dir / "MEMORY.md"],
-        "project": [workspace / ".friday" / "MEMORY.md"],
+        "project": project_paths,
         "episode": sorted(episodes.glob("*.md")) if episodes.exists() else [],
     }
 
@@ -414,7 +419,7 @@ def _scope_paths(workspace: Path, home: Path | None) -> dict[str, list[Path]]:
 def _write_target(workspace: Path, scope: str, home: Path | None, now: datetime) -> tuple[Path, int | None]:
     paths = _scope_paths(workspace, home)
     if scope == "episode":
-        return (home or Path.home()) / ".friday" / "memory" / f"{now.date().isoformat()}.md", None
+        return friday_home(home) / "memory" / f"{now.date().isoformat()}.md", None
     limits = {"user": USER_LIMIT, "global": MEMORY_LIMIT, "project": MEMORY_LIMIT}
     return paths[scope][0], limits[scope]
 

@@ -2,7 +2,7 @@
 
 Friday keeps non-secret model settings in JSON and credentials in `.env`.
 
-The global file is `~/.friday/config.json`. An optional `<workspace>/.friday/config.json` overrides the global values for one project. Missing keys inherit from the preceding layer.
+The global file is `~/.friday/config.json`. An optional `~/.friday/projects/<workspace-id>/config.json` overrides the global values for one project. Missing keys inherit from the preceding layer. Existing `<workspace>/.friday/config.json` files remain readable for compatibility but are no longer created.
 
 ```json
 {

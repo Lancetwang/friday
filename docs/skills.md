@@ -5,7 +5,7 @@ Skills are reusable workflows stored as `SKILL.md` files.
 Friday discovers skills from:
 
 ```text
-<workspace>/.friday/FridaySkills/<skill>/SKILL.md
+~/.friday/projects/<workspace-id>/FridaySkills/<skill>/SKILL.md
 ~/.friday/FridaySkills/<skill>/SKILL.md
 ```
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,10 +28,14 @@ from typing import Any
 
 from agent_core import RunContext
 
+from friday.checkpoint import delete_session_checkpoints
 from friday.progress import append_progress_checkpoint, is_progress_checkpoint, restore_progress
+from friday.storage import migrate_legacy_runtime, project_state_dir
+from friday.trace import delete_trace
 
 RECENT_CONVERSATION_LIMIT = 10
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+USER_MESSAGE_TIMES_KEY = "friday.user_message_times"
 
 
 @dataclass
@@ -41,6 +46,7 @@ class SessionState:
     body: list[dict[str, Any]] = field(default_factory=list)
     progress: dict[str, Any] = field(default_factory=dict)
     last_usage: dict[str, Any] | None = None
+    user_message_times: list[dict[str, str]] = field(default_factory=list)
     turns: int = 0
 
 
@@ -48,11 +54,15 @@ def state_from_snapshot(snapshot: dict[str, Any]) -> SessionState:
     messages = snapshot.get("messages")
     progress = snapshot.get("progress")
     last_usage = snapshot.get("last_usage")
+    user_message_times = snapshot.get("user_message_times")
     return SessionState(
         session_id=str(snapshot.get("session_id") or ""),
         body=conversation_body(messages if isinstance(messages, list) else []),
         progress=dict(progress) if isinstance(progress, dict) else {},
         last_usage=dict(last_usage) if isinstance(last_usage, dict) else None,
+        user_message_times=[dict(item) for item in user_message_times if isinstance(item, dict)]
+        if isinstance(user_message_times, list)
+        else [],
         turns=int(snapshot.get("turns", 0) or 0),
     )
 
@@ -90,6 +100,7 @@ def hydrate(context: RunContext, state: SessionState) -> None:
     restore_progress(context, state.progress)
     if isinstance(state.last_usage, dict):
         context.metadata["friday.last_usage"] = dict(state.last_usage)
+    context.metadata[USER_MESSAGE_TIMES_KEY] = [dict(item) for item in state.user_message_times]
     append_progress_checkpoint(context)
 
 
@@ -101,6 +112,7 @@ def save_turn(
     messages: list[dict[str, Any]] | None = None,
     progress: dict[str, Any] | None = None,
     last_usage: dict[str, Any] | None = None,
+    user_message_times: list[dict[str, str]] | None = None,
 ) -> Path:
     """Persist one snapshot per session, overwritten in place (atomic).
 
@@ -108,7 +120,7 @@ def save_turn(
     a session's on-disk size tracks the live context (O(N)) instead of appending
     a full snapshot every turn (O(N^2)).
     """
-    sessions = workspace / ".friday" / "sessions"
+    sessions = project_state_dir(workspace) / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
     sid = session_id or datetime.now().strftime("%Y%m%d%H%M%S%f")
     path = sessions / f"{sid}.json"
@@ -125,13 +137,16 @@ def save_turn(
         "messages": messages or [],
         "progress": progress if isinstance(progress, dict) else existing.get("progress", {}),
         "last_usage": last_usage if isinstance(last_usage, dict) else existing.get("last_usage", {}),
+        "user_message_times": user_message_times
+        if isinstance(user_message_times, list)
+        else existing.get("user_message_times", []),
     }
     write_session(path, snapshot)
     return path
 
 
 def save_progress(workspace: Path, session_id: str, progress: dict[str, Any]) -> Path:
-    sessions = workspace / ".friday" / "sessions"
+    sessions = project_state_dir(workspace) / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
     path = sessions / f"{session_id}.json"
     existing = read_session(path) or {}
@@ -152,7 +167,7 @@ def save_progress(workspace: Path, session_id: str, progress: dict[str, Any]) ->
 
 
 def save_session_state(workspace: Path, session_id: str, messages: list[dict[str, Any]], progress: dict[str, Any]) -> Path | None:
-    path = workspace / ".friday" / "sessions" / f"{session_id}.json"
+    path = project_state_dir(workspace) / "sessions" / f"{session_id}.json"
     existing = read_session(path)
     if not existing:
         return None
@@ -216,17 +231,22 @@ def delete_session(workspace: Path, session_id: str) -> None:
     path = session_path(workspace, session_id)
     if not path.exists():
         raise FileNotFoundError(f"Session not found: {session_id}")
+    delete_session_checkpoints(workspace, session_id)
+    delete_trace(session_id, workspace)
+    tool_results = project_state_dir(workspace) / "tool-results" / session_id
+    if tool_results.exists():
+        shutil.rmtree(tool_results)
     path.unlink()
 
 
 def session_path(workspace: Path, session_id: str) -> Path:
     if not SESSION_ID_PATTERN.fullmatch(session_id):
         raise ValueError("Invalid session id.")
-    return workspace / ".friday" / "sessions" / f"{session_id}.json"
+    return migrate_legacy_runtime(workspace) / "sessions" / f"{session_id}.json"
 
 
 def session_files(workspace: Path) -> list[Path]:
-    sessions = workspace / ".friday" / "sessions"
+    sessions = migrate_legacy_runtime(workspace) / "sessions"
     if not sessions.exists():
         return []
     # Session ids are timestamps, so lexical filename order is chronological.

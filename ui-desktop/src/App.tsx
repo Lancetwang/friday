@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
-import { FormEvent, KeyboardEvent, MouseEvent, useEffect, useRef, useState } from 'react'
+import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -18,11 +18,29 @@ type Metrics = {
 type PermissionMode = 'accept-edits' | 'bypass' | 'dont-ask' | 'manual'
 type ProjectStatus = 'connecting' | 'error' | 'idle' | 'ready'
 
+const permissionOptions: ReadonlyArray<{
+  description: string
+  label: string
+  value: PermissionMode
+}> = [
+  { description: 'Ask before risky actions', label: 'Request approval', value: 'manual' },
+  { description: 'Allow workspace changes', label: 'Allow edits', value: 'accept-edits' },
+  { description: 'Reject risky actions', label: 'Deny risky commands', value: 'dont-ask' },
+  { description: 'Run without approval', label: 'Full access', value: 'bypass' }
+]
+
 type Approval = {
   approval_required?: boolean
   command?: string
   pending?: boolean
   reason?: string
+}
+
+type VerificationStatus = {
+  approval_required?: boolean
+  error?: boolean
+  passed?: boolean
+  verdict?: string
 }
 
 type SessionInfo = {
@@ -51,11 +69,13 @@ type HistoryItem = {
   name?: string
   status?: TimelineItem['status']
   text: string
+  timestamp?: string
   tool_call_id?: string
 }
 
 type TimelineItem = {
   arguments?: string
+  createdAt?: string
   id: string
   kind: 'assistant' | 'system' | 'tool' | 'user'
   metrics?: Metrics
@@ -96,6 +116,10 @@ type PendingRequest = {
 
 const PROJECTS_KEY = 'friday.desktop.projects'
 const ACTIVE_PROJECT_KEY = 'friday.desktop.activeProject'
+const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
+const DEFAULT_SIDEBAR_WIDTH = 252
+const MIN_SIDEBAR_WIDTH = 180
+const MAX_SIDEBAR_WIDTH = 520
 const welcome: TimelineItem = {
   id: 'welcome',
   kind: 'assistant',
@@ -145,16 +169,29 @@ function samePath(left: string, right: string) {
   return pathKey(left) === pathKey(right)
 }
 
+function loadSidebarWidth() {
+  return clampSidebarWidth(Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || DEFAULT_SIDEBAR_WIDTH)
+}
+
+function clampSidebarWidth(width: number) {
+  const available = Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 420)
+  return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH, available)
+}
+
 function App() {
   const initialProjects = useRef(loadProjects())
   const [projects, setProjects] = useState<string[]>(initialProjects.current)
   const [activeProject, setActiveProject] = useState(localStorage.getItem(ACTIVE_PROJECT_KEY) || '')
+  const [renaming, setRenaming] = useState<{ id: string; original: string; title: string } | null>(null)
+  const [resizingSidebar, setResizingSidebar] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
   const activeAssistants = useRef(new Map<string, string>())
   const bottom = useRef<HTMLDivElement | null>(null)
   const pendingRequests = useRef(new Map<string, PendingRequest>())
   const requestId = useRef(0)
+  const sidebarDrag = useRef<{ startWidth: number; startX: number } | null>(null)
   const startedProjects = useRef(new Set<string>())
   const openProjects = useRef(new Set(initialProjects.current.map(pathKey)))
 
@@ -232,10 +269,16 @@ function App() {
 
   useEffect(() => {
     if (activeProject) localStorage.setItem(ACTIVE_PROJECT_KEY, activeProject)
+    setRenaming(null)
   }, [activeProject])
 
   useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
+  }, [sidebarWidth])
+
+  useEffect(() => {
     let unlisten: UnlistenFn | undefined
+    let unlistenExit: UnlistenFn | undefined
     let disposed = false
 
     const handleLine = (workspace: string, line: string) => {
@@ -291,16 +334,23 @@ function App() {
         const text = String(payload.text || '')
         const metrics = (payload.metrics || {}) as Metrics
         const sessionId = String(payload.session_id || '')
+        const verification = payload.verification as VerificationStatus | undefined
         const id = activeAssistants.current.get(workspace)
         activeAssistants.current.delete(workspace)
-        updateView(workspace, current => ({
-          ...current,
-          activeSession: sessionId || current.activeSession,
-          busy: false,
-          items: id
+        updateView(workspace, current => {
+          let items: TimelineItem[] = id
             ? current.items.map(item => item.id === id ? { ...item, metrics, text: text || item.text } : item)
             : text ? [...current.items, { id: nextId('assistant'), kind: 'assistant', metrics, text }] : current.items
-        }))
+          items = verification
+            ? items.map(item => item.id === 'verification-status' ? { ...item, text: verificationLabel(verification) } : item)
+            : items.filter(item => item.id !== 'verification-status')
+          return {
+            ...current,
+            activeSession: sessionId || current.activeSession,
+            busy: false,
+            items
+          }
+        })
         void refreshSessions(workspace).catch(() => undefined)
       } else if (type === 'tool.start') {
         const assistantId = activeAssistants.current.get(workspace)
@@ -361,7 +411,7 @@ function App() {
           items: payload.approval_required
             ? current.items.filter(item => item.id !== 'verification-status')
             : current.items.map(item => item.id === 'verification-status'
-                ? { ...item, text: payload.passed ? '验证通过' : '验证未通过' }
+                ? { ...item, text: payload.passed ? '验证通过' : '正在根据验证反馈继续处理...' }
                 : item)
         }))
       }
@@ -369,6 +419,27 @@ function App() {
 
     void (async () => {
       unlisten = await listen<[string, string]>('gateway-line', event => handleLine(event.payload[0], event.payload[1]))
+      unlistenExit = await listen<string>('gateway-exit', event => {
+        const workspace = event.payload
+        const key = pathKey(workspace)
+        startedProjects.current.delete(key)
+        if (!openProjects.current.has(key)) return
+        for (const [id, pending] of pendingRequests.current) {
+          if (samePath(pending.workspace, workspace)) {
+            pending.reject(new Error('Friday gateway stopped.'))
+            pendingRequests.current.delete(id)
+          }
+        }
+        updateView(workspace, current => ({
+          ...current,
+          busy: false,
+          items: [
+            ...current.items,
+            { id: nextId('gateway-exit'), kind: 'system', text: 'Friday stopped. Select the project to restart it.' }
+          ],
+          status: 'error'
+        }))
+      })
       if (disposed) return
       const requested = localStorage.getItem(ACTIVE_PROJECT_KEY) || initialProjects.current[0] || undefined
       let workspace: string
@@ -397,6 +468,7 @@ function App() {
     return () => {
       disposed = true
       unlisten?.()
+      unlistenExit?.()
       for (const pending of pendingRequests.current.values()) {
         pending.reject(new Error('Friday window closed.'))
       }
@@ -422,7 +494,7 @@ function App() {
       ...current,
       busy: true,
       draft: '',
-      items: [...current.items, { id: nextId('user'), kind: 'user', text }]
+      items: [...current.items, { createdAt: new Date().toISOString(), id: nextId('user'), kind: 'user', text }]
     }))
     try {
       await sendGateway(activeProject, 'chat.send', { text })
@@ -572,11 +644,18 @@ function App() {
     }
   }
 
-  const renameConversation = (event: MouseEvent, session: ResumeChoice) => {
+  const beginRenameConversation = (event: MouseEvent, session: ResumeChoice) => {
     event.stopPropagation()
-    const title = window.prompt('Rename conversation', session.title || sessionLabel(session))
-    if (!title?.trim()) return
-    void sendGateway(activeProject, 'session.rename', { id: session.id, title: title.trim() })
+    const title = sessionLabel(session)
+    setRenaming({ id: session.id, original: title, title })
+  }
+
+  const commitRenameConversation = (session: ResumeChoice, value: string) => {
+    if (renaming?.id !== session.id) return
+    const title = value.trim()
+    setRenaming(null)
+    if (!title || title === renaming.original) return
+    void sendGateway(activeProject, 'session.rename', { id: session.id, title })
       .then(() => refreshSessions(activeProject))
       .catch(error => updateView(activeProject, current => ({
         ...current,
@@ -609,6 +688,7 @@ function App() {
   const selectedSession = sessions.find(session => session.id === activeSession)
   const conversationTitle = selectedSession ? sessionLabel(selectedSession) : 'New conversation'
   const project = projectLabel(activeProject)
+  const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions[0]
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -617,10 +697,31 @@ function App() {
     }
   }
 
+  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    sidebarDrag.current = { startWidth: sidebarWidth, startX: event.clientX }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setResizingSidebar(true)
+  }
+
+  const moveSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!sidebarDrag.current) return
+    setSidebarWidth(clampSidebarWidth(sidebarDrag.current.startWidth + event.clientX - sidebarDrag.current.startX))
+  }
+
+  const stopSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!sidebarDrag.current) return
+    sidebarDrag.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    setResizingSidebar(false)
+  }
+
   return (
     <div className="desktop-window">
       <WindowTitlebar />
-      <div className="app-shell">
+      <div
+        className={`app-shell ${resizingSidebar ? 'resizing' : ''}`}
+        style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      >
         <aside className="sidebar">
 
           <section className="sidebar-section projects">
@@ -664,18 +765,40 @@ function App() {
             </button>
           </div>
           {sessions.length ? sessions.map(session => (
-            <div className={`session-entry ${session.id === activeSession ? 'active' : ''}`} key={session.id}>
-              <button
-                className="session-main"
-                disabled={busy}
-                onClick={() => resumeSession(session)}
-                type="button"
-              >
-                <span>{sessionLabel(session)}</span>
-                <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
-              </button>
+            <div className={`session-entry ${session.id === activeSession ? 'active' : ''} ${renaming?.id === session.id ? 'renaming' : ''}`} key={session.id}>
+              {renaming?.id === session.id ? (
+                <div className="session-main">
+                  <input
+                    aria-label="Conversation name"
+                    autoFocus
+                    onBlur={event => commitRenameConversation(session, event.currentTarget.value)}
+                    onChange={event => setRenaming(current => current ? { ...current, title: event.target.value } : null)}
+                    onFocus={event => event.currentTarget.select()}
+                    onKeyDown={event => {
+                      if (event.nativeEvent.isComposing) return
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                      if (event.key === 'Escape') {
+                        event.currentTarget.value = renaming.original
+                        event.currentTarget.blur()
+                      }
+                    }}
+                    value={renaming.title}
+                  />
+                  <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
+                </div>
+              ) : (
+                <button
+                  className="session-main"
+                  disabled={busy}
+                  onClick={() => resumeSession(session)}
+                  type="button"
+                >
+                  <span>{sessionLabel(session)}</span>
+                  <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
+                </button>
+              )}
               <div className="session-actions">
-                <button aria-label="Rename conversation" disabled={busy} onClick={event => renameConversation(event, session)} title="Rename" type="button">
+                <button aria-label="Rename conversation" disabled={busy} onClick={event => beginRenameConversation(event, session)} title="Rename" type="button">
                   <span aria-hidden="true">✎</span>
                 </button>
                 <button aria-label="Delete conversation" disabled={busy} onClick={event => deleteConversation(event, session)} title="Delete" type="button">
@@ -695,6 +818,26 @@ function App() {
           </div>
         </aside>
 
+        <div
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuenow={sidebarWidth}
+          className="sidebar-resizer"
+          onKeyDown={event => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+            event.preventDefault()
+            setSidebarWidth(current => clampSidebarWidth(current + (event.key === 'ArrowRight' ? 12 : -12)))
+          }}
+          onPointerCancel={stopSidebarResize}
+          onPointerDown={startSidebarResize}
+          onPointerMove={moveSidebarResize}
+          onPointerUp={stopSidebarResize}
+          role="separator"
+          tabIndex={0}
+        />
+
         <main className="workspace">
         <header className="topbar">
           <div className="topbar-spacer" aria-hidden="true" />
@@ -706,7 +849,11 @@ function App() {
         </header>
 
         <section className="timeline" aria-live="polite">
-          {items.map(item => <TimelineRow item={item} key={item.id} />)}
+          {groupToolItems(items).map(item => Array.isArray(item)
+            ? item.length === 1
+              ? <TimelineRow item={item[0]!} key={item[0]!.id} />
+              : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
+            : <TimelineRow item={item} key={item.id} />)}
           {pendingApproval && (
             <section className="approval-panel">
               <strong>Approval required</strong>
@@ -753,18 +900,45 @@ function App() {
           <div className="composer-footer">
             <span>Enter to send · Shift+Enter for a new line</span>
             <div className="composer-actions">
-              <select
-                aria-label="Permission mode"
-                disabled={busy}
-                onChange={event => changePermission(event.target.value as PermissionMode)}
-                title="Choose how Friday handles risky commands"
-                value={info.permission_mode}
+              <details
+                className={`permission-picker ${busy ? 'disabled' : ''}`}
+                key={`${activeProject}-permissions`}
+                onBlur={event => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute('open')
+                }}
               >
-                <option value="manual">Request approval</option>
-                <option value="accept-edits">Allow edits</option>
-                <option value="dont-ask">Deny risky commands</option>
-                <option value="bypass">Full access</option>
-              </select>
+                <summary
+                  aria-disabled={busy}
+                  aria-label="Permission mode"
+                  onClick={event => {
+                    if (busy) event.preventDefault()
+                  }}
+                  tabIndex={busy ? -1 : 0}
+                  title="Choose how Friday handles risky commands"
+                >
+                  <span>{permission.label}</span>
+                  <i aria-hidden="true" />
+                </summary>
+                <div className="permission-menu">
+                  {permissionOptions.map(option => (
+                    <button
+                      className={option.value === info.permission_mode ? 'active' : ''}
+                      key={option.value}
+                      onClick={event => {
+                        event.currentTarget.closest('details')?.removeAttribute('open')
+                        changePermission(option.value)
+                      }}
+                      type="button"
+                    >
+                      <span className="permission-indicator" />
+                      <span>
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </details>
               <button
                 aria-label="Send message"
                 className="send-button"
@@ -835,6 +1009,28 @@ function WindowTitlebar() {
   )
 }
 
+function verificationLabel(verification: VerificationStatus) {
+  if (verification.passed || verification.verdict === 'pass') return '验证通过'
+  if (verification.error) return '验证异常'
+  if (verification.verdict === 'blocked') return '验证受阻'
+  if (verification.verdict === 'inconclusive') return '验证结果不确定'
+  return '验证未通过'
+}
+
+function groupToolItems(items: TimelineItem[]) {
+  const rows: Array<TimelineItem | TimelineItem[]> = []
+  for (const item of items) {
+    if (item.kind !== 'tool') {
+      rows.push(item)
+      continue
+    }
+    const previous = rows.at(-1)
+    if (Array.isArray(previous)) previous.push(item)
+    else rows.push([item])
+  }
+  return rows
+}
+
 function timelineFromHistory(history: HistoryItem[]) {
   return history.length
     ? history.map((item, index): TimelineItem => ({
@@ -844,12 +1040,15 @@ function timelineFromHistory(history: HistoryItem[]) {
         name: item.name,
         status: item.status,
         text: item.text,
+        createdAt: item.timestamp,
         toolCallId: item.tool_call_id
       }))
     : [welcome]
 }
 
 function TimelineRow({ item }: { item: TimelineItem }) {
+  const [copied, setCopied] = useState(false)
+
   if (item.kind === 'system') {
     return <div className="system-row">{item.text}</div>
   }
@@ -859,20 +1058,11 @@ function TimelineRow({ item }: { item: TimelineItem }) {
       <details className={`tool-row ${item.status}`}>
         <summary>
           <span className="tool-status">
-            {item.status === 'running' ? 'Running' : item.status === 'approval' ? 'Approval required' : item.status === 'error' ? 'Failed' : 'Done'}
+            {toolStatusLabel(item.status)}
           </span>
           <strong>{item.name}</strong>
         </summary>
-        <div className="tool-details">
-          <strong>Arguments</strong>
-          <pre>{item.arguments}</pre>
-          {item.text && (
-            <>
-              <strong>Result</strong>
-              <pre>{item.text}</pre>
-            </>
-          )}
-        </div>
+        <ToolDetails item={item} />
       </details>
     )
   }
@@ -884,9 +1074,80 @@ function TimelineRow({ item }: { item: TimelineItem }) {
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
         </div>
         {item.metrics && <MetricsLine metrics={item.metrics} />}
+        {item.kind === 'user' && (
+          <div className="message-meta">
+            {item.createdAt && (
+              <time dateTime={item.createdAt}>
+                {formatMessageTime(item.createdAt)}
+              </time>
+            )}
+            <button
+              aria-label={copied ? 'Copied' : 'Copy message'}
+              className={copied ? 'copied' : ''}
+              onClick={() => {
+                void navigator.clipboard.writeText(item.text).then(() => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1200)
+                }).catch(() => setCopied(false))
+              }}
+              title={copied ? 'Copied' : 'Copy message'}
+              type="button"
+            >
+              <span className="copy-icon" />
+            </button>
+          </div>
+        )}
       </div>
     </article>
   )
+}
+
+function ToolGroup({ items }: { items: TimelineItem[] }) {
+  const status: NonNullable<TimelineItem['status']> = items.some(item => item.status === 'approval')
+    ? 'approval'
+    : items.some(item => item.status === 'running')
+      ? 'running'
+      : items.some(item => item.status === 'error')
+        ? 'error'
+        : 'done'
+  return (
+    <details className={`tool-row tool-group ${status}`}>
+      <summary>
+        <span className="tool-status">{toolStatusLabel(status)}</span>
+        <strong>{status === 'running' ? `Running ${items.length} tools` : `Ran ${items.length} tools`}</strong>
+      </summary>
+      <div className="tool-group-list">
+        {items.map(item => (
+          <details className={`tool-subrow ${item.status}`} key={item.id}>
+            <summary>
+              <span className="tool-status">{toolStatusLabel(item.status)}</span>
+              <strong>{item.name}</strong>
+            </summary>
+            <ToolDetails item={item} />
+          </details>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function ToolDetails({ item }: { item: TimelineItem }) {
+  return (
+    <div className="tool-details">
+      <strong>Arguments</strong>
+      <pre>{item.arguments}</pre>
+      {item.text && (
+        <>
+          <strong>Result</strong>
+          <pre>{item.text}</pre>
+        </>
+      )}
+    </div>
+  )
+}
+
+function toolStatusLabel(status: TimelineItem['status']) {
+  return status === 'running' ? 'Running' : status === 'approval' ? 'Approval required' : status === 'error' ? 'Failed' : 'Done'
 }
 
 function MetricsLine({ metrics }: { metrics: Metrics }) {
@@ -908,6 +1169,13 @@ function projectLabel(path: string) {
 
 function formatSessionTime(value: string) {
   return value ? value.replace('T', ' ').slice(0, 16) : 'Saved'
+}
+
+function formatMessageTime(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value))
 }
 
 export default App

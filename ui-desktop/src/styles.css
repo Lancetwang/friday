@@ -185,8 +185,9 @@ summary:focus-visible {
 }
 
 .app-shell {
+  position: relative;
   display: grid;
-  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 252px) minmax(0, 1fr);
   gap: 0;
   width: 100%;
   height: 100%;
@@ -213,6 +214,39 @@ summary:focus-visible {
   border-right: 1px solid var(--line);
   background: var(--chrome);
   backdrop-filter: blur(24px) saturate(125%);
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sidebar-width, 252px) - 3px);
+  z-index: 10;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebar-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  content: "";
+  transition: background-color 120ms ease-out;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.app-shell.resizing .sidebar-resizer::after {
+  background: rgba(45, 45, 43, 0.28);
+}
+
+.app-shell.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .brand {
@@ -419,6 +453,25 @@ summary:focus-visible {
   font-weight: 600;
 }
 
+.session-main input {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid rgba(45, 45, 43, 0.16);
+  border-radius: 6px;
+  outline: 0;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.82);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.session-main input:focus {
+  border-color: rgba(45, 45, 43, 0.34);
+  box-shadow: 0 0 0 2px rgba(45, 45, 43, 0.04);
+}
+
 .session-main small {
   overflow: hidden;
   color: var(--muted);
@@ -448,6 +501,10 @@ summary:focus-visible {
   display: flex;
 }
 
+.session-entry.renaming .session-actions {
+  display: none;
+}
+
 .session-actions button {
   display: grid;
   width: 24px;
@@ -457,13 +514,13 @@ summary:focus-visible {
   border: 0;
   border-radius: 6px;
   color: var(--muted);
-  background: rgba(249, 249, 247, 0.86);
+  background: transparent;
   font: 16px/1 Arial, sans-serif;
 }
 
 .session-actions button:hover {
   color: var(--ink);
-  background: #fff;
+  background: rgba(255, 255, 255, 0.82);
 }
 
 .empty-sessions {
@@ -586,13 +643,89 @@ summary:focus-visible {
 }
 
 .message.user .message-body {
+  position: relative;
   width: fit-content;
   max-width: min(78%, 720px);
   padding: 10px 16px;
   border-radius: 20px 20px 6px 20px;
-  color: #fff;
-  background: var(--accent);
-  box-shadow: 0 5px 15px rgba(110, 70, 54, 0.1);
+  color: var(--ink);
+  background: #e8e8e5;
+  box-shadow: 0 4px 14px rgba(45, 45, 43, 0.06);
+}
+
+.message.user .message-body::after {
+  position: absolute;
+  top: 100%;
+  right: -8px;
+  width: 120px;
+  height: 34px;
+  content: "";
+}
+
+.message-meta {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.message.user .message-body:hover .message-meta,
+.message.user .message-body:focus-within .message-meta {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.message-meta button {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.message-meta button:hover,
+.message-meta button:focus-visible {
+  color: var(--ink);
+  background: var(--selection);
+}
+
+.copy-icon::before,
+.copy-icon::after {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  content: "";
+}
+
+.copy-icon::before {
+  top: 7px;
+  left: 7px;
+}
+
+.copy-icon::after {
+  top: 10px;
+  left: 10px;
+  background: var(--canvas);
+}
+
+.message-meta button.copied .copy-icon::before,
+.message-meta button.copied .copy-icon::after {
+  border-color: var(--success);
 }
 
 .message-body {
@@ -608,7 +741,7 @@ summary:focus-visible {
 }
 
 .message.user .message-text {
-  color: #fff;
+  color: var(--ink);
   font-size: 14px;
   font-weight: 450;
   line-height: 1.55;
@@ -623,8 +756,8 @@ summary:focus-visible {
 }
 
 .message.user .message-text code {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.16);
+  color: var(--ink);
+  background: rgba(45, 45, 43, 0.08);
 }
 
 .message-text > :first-child {
@@ -730,29 +863,31 @@ summary:focus-visible {
 }
 
 .tool-row {
-  margin: 22px 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: rgba(240, 240, 238, 0.88);
+  margin: 18px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
 }
 
-.tool-row.error {
-  border-color: rgba(255, 95, 56, 0.25);
-  background: rgba(255, 95, 56, 0.08);
+.tool-row.error,
+.tool-subrow.error {
+  background: transparent;
 }
 
-.tool-row summary {
+.tool-row > summary,
+.tool-subrow > summary {
   display: flex;
   align-items: center;
   gap: 9px;
-  min-height: 36px;
-  padding: 8px 11px;
+  min-height: 28px;
+  padding: 3px 0;
   cursor: pointer;
   font-size: 11px;
   list-style: none;
 }
 
-.tool-row summary::-webkit-details-marker {
+.tool-row > summary::-webkit-details-marker,
+.tool-subrow > summary::-webkit-details-marker {
   display: none;
 }
 
@@ -763,22 +898,45 @@ summary:focus-visible {
   text-transform: uppercase;
 }
 
-.tool-row.running .tool-status {
+.tool-row.running > summary .tool-status,
+.tool-subrow.running > summary .tool-status {
   color: var(--accent);
 }
 
-.tool-row.approval .tool-status {
+.tool-row.approval > summary .tool-status,
+.tool-subrow.approval > summary .tool-status {
   color: var(--accent);
 }
 
-.tool-row.error .tool-status {
+.tool-row.error > summary .tool-status,
+.tool-subrow.error > summary .tool-status {
   color: var(--danger);
 }
 
+.tool-group-list {
+  display: grid;
+  gap: 2px;
+  padding: 4px 0 0 16px;
+}
+
+.tool-subrow {
+  border: 0;
+  background: transparent;
+}
+
+.tool-subrow > summary {
+  min-height: 26px;
+  padding: 2px 0;
+}
+
+.tool-subrow .tool-details {
+  margin: 0 0 5px;
+}
+
 .tool-details {
-  padding: 10px 12px;
-  border-top: 1px solid var(--line);
-  background: rgba(249, 249, 247, 0.68);
+  padding: 7px 0 7px 16px;
+  border: 0;
+  background: transparent;
 }
 
 .tool-details > strong {
@@ -897,18 +1055,17 @@ summary:focus-visible {
 .composer {
   z-index: 2;
   margin: 0 max(24px, calc((100% - 930px) / 2)) 18px;
-  padding: 11px 13px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(249, 249, 247, 0.9);
-  box-shadow: 0 9px 30px rgba(48, 42, 34, 0.08);
-  backdrop-filter: blur(22px) saturate(120%);
+  padding: 13px 14px 11px;
+  border: 1px solid rgba(45, 45, 43, 0.13);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 10px 32px rgba(45, 45, 43, 0.07);
   transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
 }
 
 .composer:focus-within {
-  border-color: rgba(204, 125, 94, 0.58);
-  box-shadow: 0 0 0 3px rgba(204, 125, 94, 0.08), 0 12px 34px rgba(45, 45, 43, 0.08);
+  border-color: rgba(45, 45, 43, 0.26);
+  box-shadow: 0 0 0 3px rgba(45, 45, 43, 0.035), 0 12px 36px rgba(45, 45, 43, 0.09);
 }
 
 .composer textarea {
@@ -926,7 +1083,7 @@ summary:focus-visible {
 }
 
 .composer textarea::placeholder {
-  color: #a19b93;
+  color: rgba(45, 45, 43, 0.45);
 }
 
 .composer-footer {
@@ -941,15 +1098,113 @@ summary:focus-visible {
   font-size: 9px;
 }
 
-.composer-actions select {
-  max-width: 170px;
-  padding: 6px 25px 6px 8px;
-  border: 0;
-  border-radius: 6px;
+.permission-picker {
+  position: relative;
+}
+
+.permission-picker summary {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px 6px 11px;
+  border-radius: 9px;
   color: var(--muted);
-  background: rgba(45, 45, 43, 0.06);
+  background: transparent;
   font-size: 10px;
   font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+  transition: color 120ms ease-out, background-color 120ms ease-out;
+}
+
+.permission-picker summary::-webkit-details-marker {
+  display: none;
+}
+
+.permission-picker summary:hover,
+.permission-picker[open] summary {
+  color: var(--ink);
+  background: var(--selection);
+}
+
+.permission-picker summary i {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+  transition: transform 120ms ease-out;
+}
+
+.permission-picker[open] summary i {
+  transform: translateY(2px) rotate(225deg);
+}
+
+.permission-picker.disabled {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+.permission-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: grid;
+  width: 230px;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid rgba(45, 45, 43, 0.12);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 16px 45px rgba(45, 45, 43, 0.14);
+}
+
+.permission-menu button {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.permission-menu button:hover,
+.permission-menu button.active {
+  background: var(--selection);
+}
+
+.permission-menu button > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.permission-menu strong {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.permission-menu small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.permission-indicator {
+  width: 7px;
+  height: 7px;
+  border: 1px solid rgba(45, 45, 43, 0.32);
+  border-radius: 50%;
+}
+
+.permission-menu button.active .permission-indicator {
+  border-color: var(--ink);
+  background: var(--ink);
 }
 
 .composer-footer .send-button {
@@ -960,16 +1215,16 @@ summary:focus-visible {
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 50%;
   color: #fff;
-  background: var(--accent);
+  background: var(--ink);
   font-size: 20px;
   font-weight: 600;
   line-height: 1;
 }
 
 .composer-footer .send-button:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: #000;
 }
 
 .composer-footer .send-button:disabled {
@@ -999,7 +1254,6 @@ summary:focus-visible {
 
 @media (max-width: 860px) {
   .app-shell {
-    grid-template-columns: 218px minmax(0, 1fr);
     gap: 0;
     padding: 0;
   }

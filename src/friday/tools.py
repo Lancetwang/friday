@@ -18,6 +18,7 @@ from typing import Annotated, Literal
 from agent_core import RunContext, get_current_context, tool
 
 from friday.progress import update_plan
+from friday.storage import friday_home, migrate_legacy_runtime, project_state_dir
 
 CONTEXT_FILE_LIMIT = 8000
 APPROVAL_FILE = "pending_approval.json"
@@ -30,16 +31,24 @@ INSTRUCTION_FILE_NAMES = (
 )
 
 
-def build_tools(workspace: Path, friday_dir: Path):
+def build_tools(workspace: Path, friday_dir: Path | None = None):
     workspace = workspace.resolve()
-    friday_dir.mkdir(parents=True, exist_ok=True)
-    user_dir = Path.home() / ".friday"
+    friday_dir = (friday_dir or migrate_legacy_runtime(workspace)).resolve()
+    user_dir = friday_home()
     user_dir.mkdir(parents=True, exist_ok=True)
     loaded_context_files: set[Path] = set()
 
     def in_workspace(path: str) -> Path:
-        resolved = (workspace / path).resolve()
-        if resolved != workspace and workspace not in resolved.parents:
+        raw = Path(path)
+        if not raw.is_absolute() and raw.parts[:2] == (".friday", "tool-results"):
+            raw = friday_dir.joinpath(*raw.parts[1:])
+        resolved = (workspace / raw).resolve()
+        if (
+            resolved != workspace
+            and workspace not in resolved.parents
+            and resolved != friday_dir
+            and friday_dir not in resolved.parents
+        ):
             raise ValueError(f"Path escapes workspace: {path}")
         return resolved
 
@@ -62,7 +71,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         start = max(1, start_line)
         selected = lines[start - 1 : start - 1 + max(1, line_count)]
         content = "\n".join(f"{number}: {line}" for number, line in enumerate(selected, start=start))
-        preview, artifact = _bounded_tool_output(workspace, "read", content, max_chars, ".txt")
+        preview, artifact = _bounded_tool_output(friday_dir, "read", content, max_chars, ".txt")
         end = start + len(selected) - 1 if selected else start - 1
         result = {
             "path": str(file_path),
@@ -131,7 +140,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         if decision == "approval":
             approval = _write_approval(friday_dir, command, timeout_seconds, max_chars, reason)
             return {**approval, "approval_required": True, "message": "Execution paused for human approval."}
-        return _run_shell(workspace, command, timeout_seconds, max_chars)
+        return _run_shell(workspace, command, timeout_seconds, max_chars, friday_dir)
 
     @tool(description="Find files and directories by glob pattern inside the current workspace.", name="Glob")
     def glob_files(
@@ -202,7 +211,7 @@ def build_tools(workspace: Path, friday_dir: Path):
         url: Annotated[str, "HTTP or HTTPS URL to fetch."],
         max_chars: Annotated[int, "Maximum characters to return."] = 8000,
     ) -> dict:
-        return _jina_fetch(workspace, url, max_chars)
+        return _jina_fetch(workspace, url, max_chars, friday_dir)
 
     @tool(description="Create or update the visible plan for the current non-trivial session goal.", name="UpdatePlan")
     def update_session_plan(
@@ -227,7 +236,8 @@ def build_tools(workspace: Path, friday_dir: Path):
 
 def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> dict:
     root = (workspace or Path.cwd()).resolve()
-    path = root / ".friday" / APPROVAL_FILE
+    friday_dir = migrate_legacy_runtime(root)
+    path = friday_dir / APPROVAL_FILE
     if not path.exists():
         return {"approved": False, "message": "No pending approval."}
     approval = json.loads(path.read_text(encoding="utf-8"))
@@ -239,13 +249,14 @@ def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> d
         str(approval.get("command", "")),
         int(approval.get("timeout_seconds", 60)),
         int(approval.get("max_chars", 8000)),
+        friday_dir,
     )
     return {"approved": True, "approval": approval, "result": result}
 
 
 def pending_approval(workspace: Path | None = None) -> dict:
     root = (workspace or Path.cwd()).resolve()
-    path = root / ".friday" / APPROVAL_FILE
+    path = migrate_legacy_runtime(root) / APPROVAL_FILE
     if not path.exists():
         return {"pending": False, "message": "No pending approval."}
     try:
@@ -396,7 +407,7 @@ def _anysearch_results(text: str) -> list[dict]:
     return results
 
 
-def _jina_fetch(workspace: Path, url: str, max_chars: int) -> dict:
+def _jina_fetch(workspace: Path, url: str, max_chars: int, friday_dir: Path | None = None) -> dict:
     target = url.strip()
     if urllib.parse.urlsplit(target).scheme not in {"http", "https"}:
         return {"error": "WebFetch URL must start with http:// or https://."}
@@ -413,7 +424,7 @@ def _jina_fetch(workspace: Path, url: str, max_chars: int) -> dict:
     except (urllib.error.URLError, TimeoutError) as error:
         return {"error": f"Jina fetch failed: {error}"}
     limit = min(50000, max(1, int(max_chars)))
-    preview, artifact = _bounded_tool_output(workspace, "webfetch", content, limit, ".md")
+    preview, artifact = _bounded_tool_output(friday_dir or project_state_dir(workspace), "webfetch", content, limit, ".md")
     return {
         "url": target,
         "content": preview,
@@ -438,7 +449,7 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _bounded_tool_output(
-    workspace: Path,
+    friday_dir: Path,
     kind: str,
     content: str,
     max_chars: int,
@@ -448,15 +459,20 @@ def _bounded_tool_output(
     if len(content) <= limit:
         return content, {}
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    path = workspace / ".friday" / "tool-results" / f"{kind}-{digest[:16]}{suffix}"
+    context = get_current_context()
+    session_id = str(context.metadata.get("session_id") or "") if context is not None else ""
+    artifact_dir = friday_dir / "tool-results"
+    if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+        artifact_dir /= session_id
+    path = artifact_dir / f"{kind}-{digest[:16]}{suffix}"
     if not path.exists():
         _write_text(path, content)
-    relative_path = path.relative_to(workspace).as_posix()
-    return _head_tail_preview(content, limit, relative_path), {"full_output_path": relative_path}
+    output_path = str(path.resolve())
+    return _head_tail_preview(content, limit, output_path), {"full_output_path": output_path}
 
 
 def _head_tail_preview(content: str, limit: int, full_output_path: str) -> str:
-    marker = f"\n\n[Truncated; full output: {full_output_path}. Inspect with Read/Grep.]\n\n"
+    marker = f"\n\n[Full output: {full_output_path}]\n\n"
     if limit <= len(marker) + 2:
         return content[:limit]
     room = limit - len(marker)
@@ -479,7 +495,13 @@ def _write_text(path: Path, content: str) -> None:
     temp_path.replace(path)
 
 
-def _run_shell(workspace: Path, command: str, timeout_seconds: int = 60, max_chars: int = 8000) -> dict:
+def _run_shell(
+    workspace: Path,
+    command: str,
+    timeout_seconds: int = 60,
+    max_chars: int = 8000,
+    friday_dir: Path | None = None,
+) -> dict:
     if platform.system() == "Windows":
         utf8_command = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;" + command
         cmd = ["powershell", "-NoProfile", "-Command", utf8_command]
@@ -505,8 +527,15 @@ def _run_shell(workspace: Path, command: str, timeout_seconds: int = 60, max_cha
         except subprocess.TimeoutExpired:
             process.kill()
             output = _timeout_output(error)
-        return _shell_result(workspace, output, max_chars, exit_code=None, timed_out=True)
-    return _shell_result(workspace, output, max_chars, exit_code=process.returncode, timed_out=False)
+        return _shell_result(workspace, output, max_chars, exit_code=None, timed_out=True, friday_dir=friday_dir)
+    return _shell_result(
+        workspace,
+        output,
+        max_chars,
+        exit_code=process.returncode,
+        timed_out=False,
+        friday_dir=friday_dir,
+    )
 
 
 def _shell_result(
@@ -516,9 +545,10 @@ def _shell_result(
     *,
     exit_code: int | None,
     timed_out: bool,
+    friday_dir: Path | None,
 ) -> dict:
     content = output or ""
-    preview, artifact = _bounded_tool_output(workspace, "bash", content, max_chars, ".txt")
+    preview, artifact = _bounded_tool_output(friday_dir or project_state_dir(workspace), "bash", content, max_chars, ".txt")
     result = {"exit_code": exit_code, "timed_out": timed_out, "output": preview}
     if artifact:
         result.update({"chars": len(content), "truncated": True, **artifact})

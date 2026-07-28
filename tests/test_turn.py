@@ -21,6 +21,7 @@ class TurnTests(unittest.TestCase):
             {
                 "FRIDAY_OBSERVABILITY_DIR": self.trace_tmp.name,
                 "FRIDAY_CHECKPOINT_DIR": str(Path(self.trace_tmp.name) / "checkpoints"),
+                "FRIDAY_HOME": str(Path(self.trace_tmp.name) / "friday-home"),
             },
         )
         self.trace_env.start()
@@ -52,6 +53,25 @@ class TurnTests(unittest.TestCase):
         self.assertFalse(result.metrics["estimated_tokens"])
         write_trace.assert_called_once()
         save_turn.assert_called_once()
+        self.assertEqual(save_turn.call_args.kwargs["user_message_times"][0]["text"], "hello")
+        self.assertEqual(result.context.events, [])
+
+    def test_trace_manifest_keeps_the_actual_loop_stop_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = RunContext(metadata={"workspace": tmp, "session_id": "stopped"})
+            agent = type("Agent", (), {"instructions": "test"})()
+
+            def stop(*args, **kwargs):
+                context.metadata["friday.loop_status"] = "no_progress"
+                return LoopResult(answer="stopped", status="no_progress", agent=agent, context=context)
+
+            with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
+                with patch("friday.turn.build_tools", return_value=[]), patch("friday.turn.run_loop", side_effect=stop):
+                    with patch("friday.turn.capture_user_memory"), patch("friday.turn.relevant_memory", return_value=""):
+                        run_turn(agent, context, "repeat", stream=False)
+
+        manifest, _events = load_trace("stopped")
+        self.assertEqual(manifest["status"], "no_progress")
 
     def test_run_turn_records_actual_model_request(self) -> None:
         class Model:
@@ -69,6 +89,7 @@ class TurnTests(unittest.TestCase):
         _, events = load_trace("observed")
         request = expand_event("observed", next(event for event in events if event["type"] == "model.request"))
         self.assertEqual(request["data"]["messages"][-1]["content"], "hello")
+        self.assertFalse(any("## Current Session Progress" in message["content"] for message in request["data"]["messages"]))
 
     def test_run_turn_keeps_event_handler_after_context_rebuild(self) -> None:
         old_context = RunContext(metadata={"workspace": str(Path.cwd())})

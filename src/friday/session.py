@@ -190,7 +190,7 @@ class FridaySession:
         self.suspended = None
         return restored
 
-    def reset(self, *, include_user: bool = True) -> list[Path]:
+    def reset(self, *, include_user: bool = False) -> list[Path]:
         removed = reset_friday(self.workspace, include_user=include_user)
         self.agent = None
         self.context = None

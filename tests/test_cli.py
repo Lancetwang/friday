@@ -166,12 +166,13 @@ class CliTests(unittest.TestCase):
     def test_session_cli_renames_and_deletes_saved_conversations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            save_turn(root, "hello", "hi", "s1", [])
-            with patch("friday.cli.Path.cwd", return_value=root), patch.object(sys, "stdout", StringIO()):
-                cli.main(["session", "rename", "s1", "First", "chat"])
-                cli.main(["session", "delete", "s1"])
+            with patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home" / ".friday")}):
+                save_turn(root, "hello", "hi", "s1", [])
+                with patch("friday.cli.Path.cwd", return_value=root), patch.object(sys, "stdout", StringIO()):
+                    cli.main(["session", "rename", "s1", "First", "chat"])
+                    cli.main(["session", "delete", "s1"])
 
-            self.assertFalse((root / ".friday" / "sessions" / "s1.json").exists())
+                self.assertFalse((root / ".friday").exists())
 
     def test_skill_list_json_does_not_build_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -27,9 +27,12 @@ is linear.
 ## Storage And Safety
 
 File snapshots use a separate content-addressed Git object store under
-`~/.friday/checkpoints/`; Friday never changes the workspace's `.git` index,
-branch, commits, or stash. Conversation content is reused from the append-only
-trace object store instead of being copied into every checkpoint.
+`~/.friday/projects/<workspace-id>/checkpoints/`; Friday never changes the
+workspace's `.git` index, branch, commits, or stash. Conversation content is
+reused from the trace object store instead of being copied into every
+checkpoint. Friday retains the latest 50 restorable checkpoints per project;
+older and superseded entries are removed and the private Git object store is
+garbage-collected.
 
 Before restoring, Friday compares the workspace with the state recorded after
 its latest turn. If files changed afterward, restore stops instead of
@@ -39,3 +42,5 @@ Checkpoints do not include ignored files, `.git/`, `.friday/`, global Friday
 state, paths outside the workspace, or external side effects such as pushes,
 network requests, database writes, and deployed resources. Those operations
 remain subject to approval and require their own compensating action.
+
+Deleting a saved conversation also removes its associated checkpoints.

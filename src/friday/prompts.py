@@ -9,6 +9,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from friday.config import ModelConfig
+from friday.storage import friday_home, project_state_dir
 
 
 def prompt_template(name: str) -> str:
@@ -24,16 +25,17 @@ def environment(workspace: Path, config: ModelConfig) -> str:
     system = platform.system()
     shell = "PowerShell" if system == "Windows" else "bash"
     mode = os.getenv("FRIDAY_PERMISSION_MODE", "manual").strip() or "manual"
+    user_dir = friday_home()
     return prompt_template("ENVIRONMENT.md").format(
         workspace=workspace,
         current_date=date.today().isoformat(),
         system=system,
         release=platform.release(),
         shell=shell,
-        friday_home=Path.home() / ".friday",
+        friday_home=user_dir,
         friday_install=Path(__file__).resolve().parent,
-        global_config=Path.home() / ".friday" / "config.json",
-        project_config=workspace / ".friday" / "config.json",
+        global_config=user_dir / "config.json",
+        project_config=project_state_dir(workspace) / "config.json",
         provider=config.provider,
         model=config.model,
         context_window=config.context_window,
