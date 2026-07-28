@@ -18,6 +18,7 @@ so compact, resume, and undo are just different ways to compute ``state``.
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,6 +30,7 @@ from agent_core import RunContext
 from friday.progress import append_progress_checkpoint, is_progress_checkpoint, restore_progress
 
 RECENT_CONVERSATION_LIMIT = 10
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
 
 @dataclass
@@ -116,6 +118,7 @@ def save_turn(
         "session_id": sid,
         "created": existing.get("created") or now,
         "updated": now,
+        "title": existing.get("title") or "",
         "turns": int(existing.get("turns", 0) or 0) + 1,
         "user": existing.get("user") or preview(user, 180),
         "assistant": preview(assistant, 220),
@@ -167,7 +170,7 @@ def load_session(workspace: Path, resume_id: str | None = None) -> dict[str, Any
     if not files:
         return None
     if resume_id:
-        return read_session(workspace / ".friday" / "sessions" / f"{resume_id}.json")
+        return read_session(session_path(workspace, resume_id))
     return read_session(files[-1])
 
 
@@ -186,11 +189,40 @@ def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dic
                 "objective": preview(str(progress.get("objective", ""))),
                 "status": str(progress.get("status", "")),
                 "time": str(data.get("updated") or ""),
+                "title": preview(str(data.get("title", "")), 120),
                 "turns": str(data.get("turns", 0)),
                 "user": preview(str(data.get("user", ""))),
             }
         )
     return choices
+
+
+def rename_session(workspace: Path, session_id: str, title: str) -> dict[str, Any]:
+    title = " ".join(title.split())
+    if not title:
+        raise ValueError("Session title cannot be empty.")
+    if len(title) > 120:
+        raise ValueError("Session title cannot exceed 120 characters.")
+    path = session_path(workspace, session_id)
+    data = read_session(path)
+    if data is None:
+        raise FileNotFoundError(f"Session not found: {session_id}")
+    data.update(title=title, updated=datetime.now().isoformat(timespec="seconds"))
+    write_session(path, data)
+    return data
+
+
+def delete_session(workspace: Path, session_id: str) -> None:
+    path = session_path(workspace, session_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Session not found: {session_id}")
+    path.unlink()
+
+
+def session_path(workspace: Path, session_id: str) -> Path:
+    if not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError("Invalid session id.")
+    return workspace / ".friday" / "sessions" / f"{session_id}.json"
 
 
 def session_files(workspace: Path) -> list[Path]:

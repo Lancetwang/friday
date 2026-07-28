@@ -23,7 +23,8 @@ from friday.memory import (
 from friday.progress import progress_line
 from friday.session import FridaySession
 from friday.skills import discover_skills
-from friday.tools import build_tools
+from friday.state import delete_session, rename_session
+from friday.tools import build_tools, permission_mode, set_permission_mode
 from friday.trace import behavior_events, list_traces, load_trace, trace_stats
 from friday.trace_web import serve_trace_ui, start_trace_server
 from friday.tui_node import run_tui
@@ -37,6 +38,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="friday", description="Friday general-purpose local CLI agent.")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output.")
     parser.add_argument("--permission-mode", choices=["manual", "accept-edits", "dont-ask", "bypass"], default=None)
+    parser.add_argument("--cwd", type=Path, help="Use this directory as the Friday workspace.")
     parser.add_argument("--dangerously-skip-permissions", action="store_true", help="Bypass command approvals for sandboxed runs.")
     parser.add_argument("--permission-allow", "--permission_allow", action="store_true", help="Alias for --dangerously-skip-permissions.")
     parser.add_argument("--allowed-tools", "--allowedTools", action="append", default=[])
@@ -56,6 +58,7 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("tui", help="Start a simple terminal UI.")
+    sub.add_parser("app-server", help="Run the JSONL app server for rich clients.")
     sub.add_parser("prompt", help="Print the effective instruction context.")
     memory = sub.add_parser("memory", help="Inspect and manage Friday memory.", description="Inspect and manage Friday memory.")
     memory_sub = memory.add_subparsers(dest="memory_command")
@@ -117,6 +120,14 @@ def main(argv: list[str] | None = None) -> None:
     resume = sub.add_parser("resume", help="Resume saved Friday session context.")
     resume.add_argument("--list", action="store_true", help="List recent resumable sessions.")
     resume.add_argument("--session", help="Resume a specific session id.")
+    sessions_cli = sub.add_parser("session", help="List, rename, or delete saved conversations.")
+    sessions_sub = sessions_cli.add_subparsers(dest="session_command", required=True)
+    sessions_sub.add_parser("list", help="List saved conversations.")
+    session_rename = sessions_sub.add_parser("rename", help="Rename a saved conversation.")
+    session_rename.add_argument("id")
+    session_rename.add_argument("title", nargs="+")
+    session_delete = sessions_sub.add_parser("delete", help="Delete a saved conversation.")
+    session_delete.add_argument("id")
     approve = sub.add_parser("approve", help="Approve one pending dangerous shell command.")
     approve.add_argument("--session", help="Continue a specific session after approval.")
     approve.add_argument("--for-session", action="store_true", help="Do not ask again during the active session.")
@@ -127,6 +138,11 @@ def main(argv: list[str] | None = None) -> None:
     reset.add_argument("-y", "--yes", action="store_true", help="Skip reset confirmation.")
 
     args = parser.parse_args(argv)
+    if args.cwd:
+        workspace = args.cwd.expanduser().resolve()
+        if not workspace.is_dir():
+            parser.error(f"workspace is not a directory: {workspace}")
+        os.chdir(workspace)
     _configure_permissions(args)
     command = args.command or "tui"
     stream = not args.no_stream
@@ -223,8 +239,25 @@ def main(argv: list[str] | None = None) -> None:
             _print_reset(reset_friday(include_user=True))
         return
 
+    if command == "session":
+        if args.session_command == "list":
+            _print_resume_choices()
+        elif args.session_command == "rename":
+            data = rename_session(Path.cwd().resolve(), args.id, " ".join(args.title))
+            print(f"Renamed {args.id}: {data['title']}")
+        else:
+            delete_session(Path.cwd().resolve(), args.id)
+            print(f"Deleted session {args.id}.")
+        return
+
     if command == "tui":
         run_tui()
+        return
+
+    if command == "app-server":
+        from friday.app_server import main as run_app_server
+
+        run_app_server()
         return
 
     session = _session(stream)
@@ -278,7 +311,7 @@ def _configure_stdio() -> None:
 def _help_alias(argv: list[str]) -> list[str]:
     if argv == ["help"]:
         return ["--help"]
-    if len(argv) == 2 and argv[1] == "help" and argv[0] in {"skill", "memory", "trace"}:
+    if len(argv) == 2 and argv[1] == "help" and argv[0] in {"skill", "memory", "session", "trace"}:
         return [argv[0], "--help"]
     return argv
 
@@ -287,7 +320,7 @@ def _configure_permissions(args) -> None:
     mode = args.permission_mode or "manual"
     if args.dangerously_skip_permissions or args.permission_allow:
         mode = "bypass"
-    os.environ["FRIDAY_PERMISSION_MODE"] = mode
+    set_permission_mode(mode)
     if args.allowed_tools:
         os.environ["FRIDAY_ALLOWED_TOOLS"] = json.dumps(args.allowed_tools, ensure_ascii=False)
     if args.disallowed_tools:
@@ -310,7 +343,10 @@ def _slash(text: str, session: FridaySession) -> None:
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /prompt, /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /undo [checkpoint], /approve [session], /reject [guidance], /reset, /exit")
+        print("/help, /new, /prompt, /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|bypass], /approve [session], /reject [guidance], /reset, /exit")
+    elif command == "new":
+        session.new()
+        print("started a new conversation")
     elif command == "prompt":
         print(build_instructions(Path.cwd().resolve(), Path.cwd().resolve() / ".friday"))
     elif command.startswith("memory"):
@@ -332,9 +368,34 @@ def _slash(text: str, session: FridaySession) -> None:
         count = session.resume()
         print(f"resumed {count} turns")
         print(f"[progress] {progress_line(session.progress())}")
+    elif command == "session list":
+        _print_resume_choices()
+    elif command.startswith("session rename "):
+        parts = raw_command.split(maxsplit=3)
+        if len(parts) < 4:
+            print("usage: /session rename <id> <title>")
+        else:
+            data = rename_session(Path.cwd().resolve(), parts[2], parts[3])
+            print(f"renamed {parts[2]}: {data['title']}")
+    elif command.startswith("session delete "):
+        parts = raw_command.split(maxsplit=2)
+        delete_session(Path.cwd().resolve(), parts[2])
+        if session.context is not None and session.context.metadata.get("session_id") == parts[2]:
+            session.new()
+        print(f"deleted session {parts[2]}")
     elif command.startswith("undo"):
         checkpoint_id = raw_command[len("undo") :].strip() or None
         _print_undo(session.undo(checkpoint_id))
+    elif command.startswith("permission"):
+        requested = raw_command[len("permission") :].strip()
+        aliases = {"ask": "manual", "full": "bypass"}
+        if requested:
+            try:
+                set_permission_mode(aliases.get(requested, requested))
+            except ValueError:
+                print("usage: /permission manual|bypass")
+                return
+        print(f"permission mode: {permission_mode()}")
     elif command.startswith("goal"):
         goal = text.split(" ", 1)[1].strip() if " " in text else ""
         if not goal:
@@ -515,10 +576,10 @@ def _print_resume_choices() -> None:
     if not choices:
         print("No recent sessions.")
         return
-    print("SESSION\tUPDATED\tSTATUS\tTURNS\tOBJECTIVE")
+    print("SESSION\tUPDATED\tSTATUS\tTURNS\tTITLE")
     for item in choices:
-        objective = item.get("objective") or item.get("user") or item.get("assistant") or "-"
-        print(f"{item['id']}\t{item['time']}\t{item['status'] or '-'}\t{item['turns']}\t{objective}")
+        title = item.get("title") or item.get("objective") or item.get("user") or item.get("assistant") or "-"
+        print(f"{item['id']}\t{item['time']}\t{item['status'] or '-'}\t{item['turns']}\t{title}")
 
 
 if __name__ == "__main__":

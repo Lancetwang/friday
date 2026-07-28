@@ -1,0 +1,14 @@
+[package]
+name = "friday-desktop"
+version = "0.1.0"
+description = "Friday desktop client"
+authors = ["Friday contributors"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.5.4", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2.3.5"

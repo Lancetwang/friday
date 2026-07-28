@@ -4,8 +4,10 @@ export type GatewayEvent =
   | { type: 'message.start'; payload: { text: string } }
   | { type: 'message.delta'; payload: { text: string } }
   | { type: 'message.complete'; payload: { metrics?: MessageMetrics; progress?: ProgressState; text: string } }
-  | { type: 'tool.start'; payload: { name: string; arguments?: unknown } }
-  | { type: 'tool.complete'; payload: { name: string; error?: boolean; content?: string } }
+  | { type: 'tool.start'; payload: { tool_call_id: string; name: string; arguments?: unknown } }
+  | { type: 'tool.complete'; payload: { tool_call_id: string; name: string; error?: boolean; content?: string } }
+  | { type: 'approval.pending'; payload: { command?: string; reason?: string } }
+  | { type: 'approval.resolved'; payload: { decision: string; continued?: boolean } }
   | { type: 'verification.start'; payload: Record<string, never> }
   | { type: 'verification.complete'; payload: VerificationResult }
   | { type: 'progress.update'; payload: ProgressState }
@@ -15,7 +17,9 @@ export type GatewayEvent =
 export interface SessionInfo {
   cwd: string
   model: string
+  permission_mode: 'accept-edits' | 'bypass' | 'dont-ask' | 'manual'
   progress?: ProgressState
+  session_id?: string
   tools: string[]
 }
 

@@ -23,6 +23,7 @@ CONTEXT_FILE_LIMIT = 8000
 APPROVAL_FILE = "pending_approval.json"
 PERMISSIONS_FILE = "permissions.json"
 SESSION_PERMISSIONS_ALLOWED = "friday.permissions_allowed"
+PERMISSION_MODES = {"manual", "accept-edits", "dont-ask", "bypass"}
 INSTRUCTION_FILE_NAMES = (
     "AGENTS.md",
     ".friday/AGENTS.md",
@@ -553,17 +554,32 @@ def _dangerous_shell(command: str) -> str:
         (r"\b(remove-item|rm|del|erase|rmdir|rd)\b", "deletes files or directories"),
         (r"\b(git\s+(reset|clean))\b", "can discard git state"),
         (r"\b(set-content|add-content|out-file|new-item|move-item|rename-item)\b", "writes or moves files"),
-        (r"(^|[^><])>{1,2}(?![=>])", "redirects output to a file"),
         (r"\b(format-volume|format|mkfs|dd|shutdown|restart-computer|stop-computer)\b", "can damage the system"),
     ]
     for pattern, reason in checks:
         if re.search(pattern, lowered):
             return reason
+    for match in re.finditer(r"(?<![><])>{1,2}\s*([^|;&\s]+)", lowered):
+        if match.group(1) not in {"$null", "nul", "/dev/null"}:
+            return "redirects output to a file"
     return ""
 
 
-def _permission_decision(friday_dir: Path, command: str) -> tuple[str, str]:
+def permission_mode() -> str:
     mode = os.getenv("FRIDAY_PERMISSION_MODE", "manual").strip().lower()
+    return mode if mode in PERMISSION_MODES else "manual"
+
+
+def set_permission_mode(mode: str) -> str:
+    normalized = mode.strip().lower()
+    if normalized not in PERMISSION_MODES:
+        raise ValueError(f"Unknown permission mode: {mode}")
+    os.environ["FRIDAY_PERMISSION_MODE"] = normalized
+    return normalized
+
+
+def _permission_decision(friday_dir: Path, command: str) -> tuple[str, str]:
+    mode = permission_mode()
     if mode == "bypass":
         return "allow", "permission mode bypass"
     permissions = _read_permissions(friday_dir)

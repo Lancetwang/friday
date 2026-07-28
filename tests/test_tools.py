@@ -21,6 +21,7 @@ from friday.memory import add_memory, list_memories, remove_memory, update_memor
 from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.skills import discover_skills, skill_routing
+from friday.state import delete_session, rename_session
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, _permission_decision, allow_permissions_for_session, approve_pending, build_tools, pending_approval
 from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt
 
@@ -191,6 +192,19 @@ class ToolTests(unittest.TestCase):
             self.assertTrue(denied["blocked"])
             self.assertEqual(edit["exit_code"], 0)
             self.assertTrue(delete["approval_required"])
+
+    def test_safe_stream_redirections_do_not_require_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            friday_dir = Path(tmp) / ".friday"
+
+            with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "manual"}, clear=False):
+                null_redirect = _permission_decision(friday_dir, "friday skill list --json 2>$null")
+                stream_redirect = _permission_decision(friday_dir, "python task.py 2>&1")
+                file_redirect = _permission_decision(friday_dir, "python task.py > output.txt")
+
+        self.assertEqual(null_redirect[0], "allow")
+        self.assertEqual(stream_redirect[0], "allow")
+        self.assertEqual(file_redirect[0], "approval")
 
     def test_session_approval_skips_prompts_but_preserves_deny_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -923,6 +937,25 @@ class ProgressTests(unittest.TestCase):
 
 
 class CompactTests(unittest.TestCase):
+    def test_session_title_survives_future_turns_and_session_can_be_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_turn(root, "hi", "hello", "s1", [])
+
+            rename_session(root, "s1", "  Research   notes  ")
+            save_turn(root, "next", "done", "s1", [])
+            saved = json.loads((root / ".friday" / "sessions" / "s1.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(saved["title"], "Research notes")
+            self.assertEqual(resume_choices(root)[0]["title"], "Research notes")
+            delete_session(root, "s1")
+            self.assertFalse((root / ".friday" / "sessions" / "s1.json").exists())
+
+    def test_session_id_rejects_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                rename_session(Path(tmp), "../other", "No")
+
     def test_save_turn_writes_one_snapshot_per_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

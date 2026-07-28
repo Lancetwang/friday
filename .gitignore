@@ -3,6 +3,13 @@
 node_modules/
 node_cache/
 ui-tui/dist/
+ui-desktop/dist/
+ui-desktop/app-icon.png
+ui-desktop/.sidecar-build/
+ui-desktop/src-tauri/binaries/
+ui-desktop/src-tauri/target/
+ui-desktop/src-tauri/gen/
+ui-desktop/.dev-*.log
 __pycache__/
 *.pyc
 .friday/

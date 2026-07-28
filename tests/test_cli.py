@@ -14,6 +14,7 @@ from agent_core import RunContext
 from friday import cli
 from friday import tui_node
 from friday.session import FridaySession
+from friday.state import save_turn
 
 
 class CliTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class CliTests(unittest.TestCase):
         with patch.object(sys, "stdout", output), self.assertRaises(SystemExit):
             cli.main(["--help"])
 
-        for command in ("memory", "context", "progress", "compact", "goal", "resume", "undo", "checkpoint", "approve", "reject", "reset"):
+        for command in ("memory", "context", "progress", "compact", "goal", "resume", "session", "undo", "checkpoint", "approve", "reject", "reset"):
             self.assertIn(command, output.getvalue())
 
     def test_progressive_help_aliases_work(self) -> None:
@@ -161,6 +162,16 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(resumed, ["session-1"])
         compact.assert_called_once_with()
+
+    def test_session_cli_renames_and_deletes_saved_conversations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_turn(root, "hello", "hi", "s1", [])
+            with patch("friday.cli.Path.cwd", return_value=root), patch.object(sys, "stdout", StringIO()):
+                cli.main(["session", "rename", "s1", "First", "chat"])
+                cli.main(["session", "delete", "s1"])
+
+            self.assertFalse((root / ".friday" / "sessions" / "s1.json").exists())
 
     def test_skill_list_json_does_not_build_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

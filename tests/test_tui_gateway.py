@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import tempfile
 import unittest
@@ -9,7 +10,8 @@ from unittest.mock import patch
 from agent_core import AgentEvent, RunContext
 
 from friday.session import FridaySession
-from friday.tui_gateway import Gateway, verification_status
+from friday.app_server import Gateway, session_history, verification_status
+from friday.state import save_turn
 from friday.turn import TurnResult
 
 
@@ -25,6 +27,13 @@ def _turn_result(answer: str) -> TurnResult:
 
 
 class TuiGatewayTests(unittest.TestCase):
+    def test_gateway_writes_unicode_json_without_escaping(self) -> None:
+        output = io.StringIO()
+
+        Gateway(output=output).event("message.delta", {"text": "你好，Friday"})
+
+        self.assertIn("你好，Friday", output.getvalue())
+
     def test_verification_status_omits_trace_details(self) -> None:
         result = verification_status(
             {
@@ -54,9 +63,31 @@ class TuiGatewayTests(unittest.TestCase):
 
         event.assert_called_once_with("progress.update", progress)
 
+    def test_gateway_correlates_tool_events_by_call_id(self) -> None:
+        gateway = Gateway()
+
+        with patch.object(gateway, "event") as event:
+            gateway.on_agent_event(
+                AgentEvent(
+                    "tool.call",
+                    category="tool",
+                    data={"tool_call_id": "call-1", "name": "Read", "arguments": {"path": "README.md"}},
+                )
+            )
+            gateway.on_agent_event(
+                AgentEvent(
+                    "tool.result",
+                    category="tool",
+                    data={"tool_call_id": "call-1", "content": "Friday", "is_error": False},
+                )
+            )
+
+        self.assertEqual(event.call_args_list[0].args[1]["tool_call_id"], "call-1")
+        self.assertEqual(event.call_args_list[1].args[1]["tool_call_id"], "call-1")
+
     def test_gateway_routes_memory_commands_without_building_an_agent(self) -> None:
         gateway = Gateway()
-        with patch("friday.tui_gateway.run_memory_command", return_value={"counts": {scope: 0 for scope in ("user", "global", "project", "episode")}, "chars": {scope: 0 for scope in ("user", "global", "project", "episode")}}):
+        with patch("friday.app_server.run_memory_command", return_value={"counts": {scope: 0 for scope in ("user", "global", "project", "episode")}, "chars": {scope: 0 for scope in ("user", "global", "project", "episode")}}):
             with patch.object(gateway, "ok") as ok, patch.object(FridaySession, "ensure") as ensure:
                 gateway.handle({"id": "1", "method": "memory.command", "params": {"command": "status"}})
 
@@ -88,6 +119,61 @@ class TuiGatewayTests(unittest.TestCase):
 
         self.assertEqual(info["cwd"], str(Path(tmp).resolve()))
         self.assertIn("Read", info["tools"])
+
+    def test_gateway_sets_permission_mode_for_the_live_process(self) -> None:
+        gateway = Gateway()
+
+        with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "manual"}, clear=False):
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle({"id": "1", "method": "permission.set", "params": {"mode": "bypass"}})
+
+            self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "bypass")
+            ok.assert_called_once_with("1", {"permission_mode": "bypass"})
+
+    def test_gateway_renames_and_deletes_saved_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_turn(root, "hello", "hi", "s1", [])
+            cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                gateway = Gateway()
+                with patch.object(gateway, "ok") as ok:
+                    gateway.handle({"id": "1", "method": "session.rename", "params": {"id": "s1", "title": "First chat"}})
+                    self.assertEqual(ok.call_args.args[1]["title"], "First chat")
+                    gateway.handle({"id": "2", "method": "session.delete", "params": {"id": "s1"}})
+            finally:
+                os.chdir(cwd)
+            self.assertFalse((root / ".friday" / "sessions" / "s1.json").exists())
+
+    def test_session_history_restores_conversation_and_tools_only(self) -> None:
+        gateway = Gateway()
+        context = RunContext(metadata={"workspace": str(Path.cwd())})
+        context.add_message("system", "hidden prefix")
+        context.add_message("user", "Inspect skills")
+        context.add_message(
+            "assistant",
+            "I will inspect.",
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "Bash", "arguments": '{"command":"friday skill list --json"}'},
+                }
+            ],
+        )
+        context.add_message("tool", '{"skills":[]}', tool_call_id="call-1")
+        context.add_message("assistant", "No extra skills are installed.")
+        gateway.session.context = context
+
+        history = session_history(gateway.session)
+
+        self.assertEqual([item["kind"] for item in history], ["user", "tool", "assistant"])
+        self.assertEqual(history[1]["name"], "Bash")
+        self.assertEqual(history[1]["status"], "done")
+        self.assertEqual(history[1]["arguments"]["command"], "friday skill list --json")
+        self.assertIn("No extra skills", history[2]["text"])
+        self.assertNotIn("hidden prefix", str(history))
 
     def test_gateway_continues_pending_goal_after_approval(self) -> None:
         gateway = Gateway()

@@ -33,6 +33,7 @@ const HELP_TEXT = `# Friday commands
 | Command | What it does |
 | --- | --- |
 | \`/help\` | Show this command reference. |
+| \`/new\` | Start a new conversation in the current workspace. |
 | \`/prompt\` | Print the effective prompt. |
 | \`/memory [help]\` | Inspect or manage persistent memory. |
 | \`/context\` | Print current context usage. |
@@ -41,7 +42,9 @@ const HELP_TEXT = `# Friday commands
 | \`/compact\` | Summarize the live conversation into a fresh context. |
 | \`/goal <text>\` | Loop until the verifier passes, blocks, needs approval, or is cancelled. |
 | \`/resume\` | Resume recent Friday session context. |
+| \`/session list|rename|delete\` | Manage saved conversations. |
 | \`/undo\` | Restore the workspace and conversation to before the latest Friday turn. |
+| \`/permission manual|bypass\` | Request approval for risky commands or grant full access. |
 | \`/approve\` | Open the pending approval choices. |
 | \`/reject\` | Open the pending approval choices with Reject selected. |
 | \`/reset\` | Clear Friday project state and global Friday user state. |
@@ -82,16 +85,22 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setBusy(false)
       } else if (event.type === 'tool.start') {
         const startMs = Date.now()
-        setMessages(items => addToolRun(items, activeTurn.current, { arguments: event.payload.arguments, id: `${startMs}-${items.length}`, name: event.payload.name, startMs }))
+        setMessages(items => addToolRun(items, activeTurn.current, { arguments: event.payload.arguments, id: event.payload.tool_call_id || `${startMs}-${items.length}`, name: event.payload.name, startMs }))
         setActivity(`tool ${event.payload.name}`)
       } else if (event.type === 'tool.complete') {
         const endMs = Date.now()
-        setMessages(items => updateToolRun(items, activeTurn.current, event.payload.name, { content: event.payload.content, endMs, error: event.payload.error }))
+        setMessages(items => updateToolRun(items, activeTurn.current, event.payload.tool_call_id, { content: event.payload.content, endMs, error: event.payload.error }))
         const approval = approvalFromContent(event.payload.content)
         if (approval) {
           setApprovalPicker(current => current ?? { approval, index: approvalIndex('once'), instruction: '' })
         }
         setActivity(event.payload.error ? `tool ${event.payload.name} failed` : '')
+      } else if (event.type === 'approval.pending') {
+        setApprovalPicker(current => current ?? { approval: { ...event.payload, pending: true }, index: approvalIndex('once'), instruction: '' })
+        setBusy(false)
+      } else if (event.type === 'approval.resolved') {
+        setApprovalPicker(null)
+        setBusy(false)
       } else if (event.type === 'verification.start') {
         setActivity('verifying')
         setMessages(items => updateVerification(items, activeTurn.current, { running: true }))
@@ -170,7 +179,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   })
 
   const commandContext = useMemo(
-    () => ({ app, gateway, setApprovalPicker, setMessages, setProgress, setResumePicker }),
+    () => ({ app, gateway, setApprovalPicker, setInfo, setMessages, setProgress, setResumePicker }),
     [app, gateway]
   )
 
@@ -287,6 +296,7 @@ function runCommand(
     app,
     gateway,
     setApprovalPicker,
+    setInfo,
     setMessages,
     setProgress,
     setResumePicker,
@@ -294,6 +304,7 @@ function runCommand(
     app: ReturnType<typeof useApp>
     gateway: GatewayClient
     setApprovalPicker: React.Dispatch<React.SetStateAction<ApprovalPicker | null>>
+    setInfo: React.Dispatch<React.SetStateAction<SessionInfo | null>>
     setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>
     setProgress: React.Dispatch<React.SetStateAction<ProgressState | null>>
     setResumePicker: React.Dispatch<React.SetStateAction<ResumePicker | null>>
@@ -308,6 +319,11 @@ function runCommand(
     app.exit()
   } else if (command.startsWith('/help')) {
     setMessages(items => [...items, { role: 'system', text: HELP_TEXT }])
+  } else if (command === '/new') {
+    void gateway.request('session.new').then(() => {
+      setProgress(null)
+      setMessages([])
+    })
   } else if (command.startsWith('/prompt')) {
     void gateway.request<{ text: string }>('prompt.get').then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
@@ -341,6 +357,28 @@ function runCommand(
         setMessages(items => [...items, { role: 'system', text: 'No recent sessions to resume.' }])
       }
     })
+  } else if (command === '/session list') {
+    void gateway.request<{ choices: ResumeChoice[] }>('session.resume_choices').then(result => {
+      const lines = result.choices.map(choice =>
+        `${choice.id}\t${choice.title || choice.objective || choice.user || 'Conversation'}`
+      )
+      setMessages(items => [...items, { role: 'system', text: lines.length ? lines.join('\n') : 'No saved conversations.' }])
+    })
+  } else if (command.startsWith('/session rename ')) {
+    const parts = text.trim().split(/\s+/, 4)
+    const title = text.trim().split(/\s+/).slice(3).join(' ')
+    if (parts.length < 4 || !title) {
+      setMessages(items => [...items, { role: 'system', text: 'Usage: /session rename <id> <title>' }])
+    } else {
+      void gateway.request<{ title: string }>('session.rename', { id: parts[2], title }).then(result =>
+        setMessages(items => [...items, { role: 'system', text: `Renamed ${parts[2]}: ${result.title}` }])
+      )
+    }
+  } else if (command.startsWith('/session delete ')) {
+    const id = text.slice('/session delete '.length).trim()
+    void gateway.request('session.delete', { id }).then(() =>
+      setMessages(items => [...items, { role: 'system', text: `Deleted session ${id}.` }])
+    )
   } else if (command.startsWith('/undo')) {
     const id = text.slice('/undo'.length).trim() || undefined
     void gateway.request<{ changed_paths: string[]; progress: ProgressState; user: string }>('checkpoint.undo', { id }).then(result => {
@@ -355,6 +393,17 @@ function runCommand(
     }).catch(error =>
       setMessages(items => [...items, { role: 'system', text: error.message }])
     )
+  } else if (command.startsWith('/permission')) {
+    const requested = text.slice('/permission'.length).trim().toLowerCase()
+    const mode = requested === 'full' ? 'bypass' : requested === 'ask' ? 'manual' : requested
+    if (!['manual', 'accept-edits', 'dont-ask', 'bypass'].includes(mode)) {
+      setMessages(items => [...items, { role: 'system', text: 'Usage: /permission manual|bypass' }])
+    } else {
+      void gateway.request<{ permission_mode: SessionInfo['permission_mode'] }>('permission.set', { mode }).then(result => {
+        setInfo(current => current && { ...current, permission_mode: result.permission_mode })
+        setMessages(items => [...items, { role: 'system', text: `Permission mode: ${result.permission_mode}` }])
+      })
+    }
   } else if (command.startsWith('/approve')) {
     openApprovalPicker(gateway, setApprovalPicker, setMessages, 'once')
   } else if (command.startsWith('/reject')) {
@@ -386,6 +435,7 @@ type ResumeChoice = {
   objective: string
   status: string
   time: string
+  title: string
   turns: string
   user: string
 }
@@ -432,7 +482,7 @@ function addToolRun(messages: UiMessage[], turnId: string | null, run: ToolRun) 
   return next
 }
 
-function updateToolRun(messages: UiMessage[], turnId: string | null, name: string, patch: Partial<ToolRun>) {
+function updateToolRun(messages: UiMessage[], turnId: string | null, id: string, patch: Partial<ToolRun>) {
   const index = turnIndex(messages, turnId)
   if (index === -1) {
     return messages
@@ -440,7 +490,7 @@ function updateToolRun(messages: UiMessage[], turnId: string | null, name: strin
   const next = [...messages]
   const message = next[index]!
   const tools = [...(message.tools ?? [])]
-  const toolIndex = tools.map(run => !run.endMs && (!name || run.name === name)).lastIndexOf(true)
+  const toolIndex = tools.findIndex(run => run.id === id)
   if (toolIndex === -1) {
     return messages
   }
@@ -474,6 +524,7 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
   const left = activity || (busy ? 'thinking' : 'ready')
   const model = info?.model ?? 'loading model'
   const tools = info?.tools.length ?? 0
+  const permissions = info?.permission_mode === 'bypass' ? 'full access' : 'request approval'
   return (
     <Box borderColor={theme.accent} borderStyle="round" flexDirection="column" paddingX={2} paddingY={1}>
       <Box>
@@ -486,7 +537,7 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
       <Text color={theme.dim}> </Text>
       <Box>
         <Text color={busy ? theme.warn : theme.ok}>{left}</Text>
-        <Text color={theme.dim}> | {shortModel(model)} | {tools} tools</Text>
+        <Text color={theme.dim}> | {shortModel(model)} | {tools} tools | {permissions}</Text>
       </Box>
     </Box>
   )
@@ -594,7 +645,7 @@ function ResumePickerView({ picker }: { picker: ResumePicker }) {
       {picker.choices.map((choice, index) => (
         <Box flexDirection="column" key={choice.id}>
           <Text color={index === picker.index ? theme.warn : theme.text}>
-            {index === picker.index ? '> ' : '  '}{choice.time || choice.id}  {choice.turns} turns  {choice.status || 'unknown'}  {choice.objective || choice.user}
+            {index === picker.index ? '> ' : '  '}{choice.time || choice.id}  {choice.turns} turns  {choice.status || 'unknown'}  {choice.title || choice.objective || choice.user}
           </Text>
           {choice.assistant ? <Text color={theme.dim}>    {choice.assistant}</Text> : null}
         </Box>

@@ -174,6 +174,11 @@ class FridaySession:
         self.suspended = None
         return count
 
+    def new(self) -> None:
+        self.agent = None
+        self.context = None
+        self.suspended = None
+
     def undo(self, checkpoint_id: str | None = None, *, force: bool = False) -> dict[str, Any]:
         agent, context, restored = undo_friday(
             self.workspace,
