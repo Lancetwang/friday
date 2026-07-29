@@ -14,10 +14,8 @@ const INLINE_RE = /(`[^`]+`|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\
 export interface Theme {
   accent: string
   dim: string
-  text: string
-  panelBg: string
-  panelText: string
-  code: string
+  text?: string
+  code?: string
   ok: string
   warn: string
   error: string
@@ -83,7 +81,7 @@ export function Markdown({ text, theme }: { text: string; theme: Theme }) {
     }
 
     if (HR_RE.test(line)) {
-      nodes.push(<Text color={theme.dim} key={key}>------------------------------------</Text>)
+      nodes.push(<Text color={theme.dim} key={key}>{'─'.repeat(36)}</Text>)
       i++
       continue
     }
@@ -92,7 +90,7 @@ export function Markdown({ text, theme }: { text: string; theme: Theme }) {
     if (quote != null) {
       nodes.push(
         <Text color={theme.dim} key={key} wrap="wrap">
-          | {renderInline(quote, theme)}
+          ▌ {renderInline(quote, theme)}
         </Text>
       )
       i++
@@ -140,7 +138,7 @@ export function Markdown({ text, theme }: { text: string; theme: Theme }) {
 }
 
 function CodeLine({ line, theme }: { line: string; theme: Theme }) {
-  const color = line.startsWith('+') ? theme.ok : line.startsWith('-') ? theme.error : line.startsWith('@@') ? theme.warn : theme.code
+  const color = line.startsWith('+') ? theme.ok : line.startsWith('-') ? theme.error : line.startsWith('@@') ? theme.warn : theme.text
   return <Text color={color}>{line || ' '}</Text>
 }
 
@@ -196,7 +194,7 @@ function pad(value: string, width: number) {
 function listItem(text: string) {
   const task = text.match(/^\[([ xX])\]\s+(.*)$/)
   if (!task) {
-    return { marker: '-', text }
+    return { marker: '•', text }
   }
   return { marker: task[1]?.toLowerCase() === 'x' ? '[x]' : '[ ]', text: task[2] ?? '' }
 }

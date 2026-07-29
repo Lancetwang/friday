@@ -7,18 +7,28 @@ import { Markdown, type Theme } from './markdown.js'
 import type { GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
 
 const theme: Theme = {
-  accent: '#2F81F7',
-  code: '#93C5FD',
-  dim: '#7AA2D6',
-  error: '#F85149',
+  accent: '#C97B5A',
+  code: '#C97B5A',
+  dim: '#8A857D',
+  error: '#E5534B',
   ok: '#3FB950',
-  panelBg: '#E5E7EB',
-  panelText: '#111827',
-  text: '#DBEAFE',
   warn: '#D29922'
 }
 
-const primary = '#1D4ED8'
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+function useSpinner(active: boolean) {
+  const [frame, setFrame] = useState(0)
+  useEffect(() => {
+    if (!active) {
+      return
+    }
+    const timer = setInterval(() => setFrame(value => (value + 1) % SPINNER_FRAMES.length), 80)
+    return () => clearInterval(timer)
+  }, [active])
+  return active ? SPINNER_FRAMES[frame]! : ''
+}
+
 const APPROVAL_OPTIONS = [
   { id: 'once', label: 'Approve once' },
   { id: 'session', label: 'Approve for this session' },
@@ -228,9 +238,9 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Header activity={activity} busy={busy} info={info} progress={progress} />
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" gap={1} marginTop={1}>
         {messages.slice(-10).map((message, index) => <MessageLine toolsExpanded={toolsExpanded} key={index} message={message} now={now} />)}
-        {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} streaming /> : null}
+        {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} /> : null}
       </Box>
       {resumePicker ? <ResumePickerView picker={resumePicker} /> : null}
       {approvalPicker ? (
@@ -535,24 +545,25 @@ function turnIndex(messages: UiMessage[], turnId: string | null) {
 }
 
 function Header({ activity, busy, info, progress }: { activity: string; busy: boolean; info: SessionInfo | null; progress: ProgressState | null }) {
+  const spinner = useSpinner(busy)
   const cwd = info?.cwd ?? process.cwd()
-  const left = activity || (busy ? 'thinking' : 'ready')
-  const model = info?.model ?? 'loading model'
+  const status = activity || (busy ? 'thinking' : 'ready')
+  const model = info?.model_name || info?.model || 'loading model'
   const tools = info?.tools.length ?? 0
   const permissions = info?.permission_mode === 'bypass' ? 'full access' : 'request approval'
   return (
-    <Box borderColor={theme.accent} borderStyle="round" flexDirection="column" paddingX={2} paddingY={1}>
+    <Box flexDirection="column">
       <Box>
-        <Text bold color={primary}>Friday</Text>
-        <Text color={theme.dim}> agent </Text>
-        <Text color={theme.dim}>/help commands | Ctrl+O tools</Text>
+        <Text color={theme.accent}>●</Text>
+        <Text bold> Friday</Text>
+        <Text color={theme.dim}>  agent · /help for commands · Ctrl+O tools</Text>
       </Box>
       <Text color={theme.dim} wrap="truncate-end">{cwd}</Text>
       {progress?.objective ? <ProgressLine progress={progress} /> : null}
-      <Text color={theme.dim}> </Text>
       <Box>
-        <Text color={busy ? theme.warn : theme.ok}>{left}</Text>
-        <Text color={theme.dim}> | {shortModel(model)} | {tools} tools | {permissions}</Text>
+        {busy ? <Text color={theme.warn}>{spinner} </Text> : <Text color={theme.ok}>● </Text>}
+        <Text color={busy ? theme.warn : theme.ok}>{status}</Text>
+        <Text color={theme.dim}> · {shortModel(model)} · {tools} tools · {permissions}</Text>
       </Box>
     </Box>
   )
@@ -566,69 +577,47 @@ function removeLastTurn(messages: UiMessage[]) {
 function ProgressLine({ progress }: { progress: ProgressState }) {
   const steps = progress.steps ?? []
   const completed = steps.filter(step => step.status === 'completed').length
-  const count = steps.length ? ` | ${completed}/${steps.length}` : ''
-  const next = progress.next_action ? ` | next: ${shortText(progress.next_action, 60)}` : ''
-  const color = progress.status === 'done' ? theme.ok : progress.status === 'blocked' ? theme.error : progress.status === 'waiting' ? theme.warn : primary
-  return <Text color={color} wrap="truncate-end">task {progress.status ?? 'working'} | {shortText(progress.objective ?? '', 90)}{count}{next}</Text>
+  const count = steps.length ? ` · ${completed}/${steps.length}` : ''
+  const next = progress.next_action ? ` · next: ${shortText(progress.next_action, 60)}` : ''
+  const color = progress.status === 'done' ? theme.ok : progress.status === 'blocked' ? theme.error : progress.status === 'waiting' ? theme.warn : theme.accent
+  return <Text color={color} wrap="truncate-end">task {progress.status ?? 'working'} · {shortText(progress.objective ?? '', 90)}{count}{next}</Text>
 }
 
-function MessageLine({ toolsExpanded = false, message, now = Date.now(), streaming = false }: { toolsExpanded?: boolean; message: UiMessage; now?: number; streaming?: boolean }) {
-  const role = roleMeta(message.role)
-  const assistantTheme = message.role === 'assistant'
-    ? { ...theme, accent: primary, code: primary, dim: '#4B5563', text: theme.panelText }
-    : theme
-  return (
-    <Box flexDirection="column" marginBottom={message.role === 'user' ? 1 : 0} marginTop={message.role === 'user' ? 1 : 0}>
+function MessageLine({ toolsExpanded = false, message, now = Date.now() }: { toolsExpanded?: boolean; message: UiMessage; now?: number; streaming?: boolean }) {
+  if (message.role === 'user') {
+    return (
       <Box>
-        <Box width={4}>
-          <Text bold={message.role === 'user'} color={role.color}>{role.glyph}</Text>
-        </Box>
+        <Text color={theme.accent}>❯ </Text>
         <Box flexDirection="column">
-          {streaming ? <Text color={theme.dim}>streaming...</Text> : null}
-          {message.role === 'user' ? (
-            <>
-              <Text color={role.color}>{message.text}</Text>
-              <ToolPanel toolsExpanded={toolsExpanded} now={now} runs={message.tools ?? []} />
-              {message.verification ? <VerificationLine verification={message.verification} /> : null}
-            </>
-          ) : (
-            <>
-              {message.role === 'assistant' ? (
-                <Box backgroundColor={theme.panelBg} flexDirection="column" paddingX={1}>
-                  <Markdown text={message.text} theme={assistantTheme} />
-                </Box>
-              ) : (
-                <Markdown text={message.text} theme={assistantTheme} />
-              )}
-              {message.metrics ? <Metrics metrics={message.metrics} /> : null}
-            </>
-          )}
+          <Text bold wrap="wrap">{message.text}</Text>
+          <ToolPanel toolsExpanded={toolsExpanded} now={now} runs={message.tools ?? []} />
+          {message.verification ? <VerificationLine verification={message.verification} /> : null}
         </Box>
       </Box>
-    </Box>
-  )
+    )
+  }
+  if (message.role === 'assistant') {
+    return (
+      <Box>
+        <Text color={theme.accent}>● </Text>
+        <Box flexDirection="column">
+          <Markdown text={message.text} theme={theme} />
+          {message.metrics ? <Metrics metrics={message.metrics} /> : null}
+        </Box>
+      </Box>
+    )
+  }
+  return <Markdown text={message.text} theme={{ ...theme, text: theme.dim }} />
 }
 
 function VerificationLine({ verification }: { verification: VerificationStatus }) {
   if (verification.running) {
-    return <Text color={theme.warn}>verifying...</Text>
+    return <Text color={theme.warn}>● verifying…</Text>
   }
   const status = verification.approval_required ? 'approval pending' : verification.error ? 'error' : verification.verdict ?? (verification.passed ? 'pass' : 'failed')
-  const color = status === 'pass' ? theme.ok : status === 'repair' || status === 'inconclusive' || status === 'approval pending' ? theme.warn : theme.error
-  return <Text color={color}>verification: {status}</Text>
-}
-
-function roleMeta(role: Message['role']) {
-  if (role === 'user') {
-    return { color: primary, glyph: 'YOU' }
-  }
-  if (role === 'assistant') {
-    return { color: theme.text, glyph: 'FRI' }
-  }
-  if (role === 'tool') {
-    return { color: theme.warn, glyph: 'TOO' }
-  }
-  return { color: theme.dim, glyph: 'SYS' }
+  const passing = status === 'pass'
+  const color = passing ? theme.ok : status === 'repair' || status === 'inconclusive' || status === 'approval pending' ? theme.warn : theme.error
+  return <Text color={color}>{passing ? '✓' : color === theme.warn ? '!' : '✗'} verification: {status}</Text>
 }
 
 function ToolPanel({ toolsExpanded, now, runs }: { toolsExpanded: boolean; now: number; runs: ToolRun[] }) {
@@ -636,15 +625,20 @@ function ToolPanel({ toolsExpanded, now, runs }: { toolsExpanded: boolean; now: 
     return null
   }
   return (
-    <Box backgroundColor="#EAF2FF" flexDirection="column" marginTop={1} paddingX={1}>
-      <Text color="#315A8A">tools (Ctrl+O)</Text>
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={theme.dim}>tools (Ctrl+O)</Text>
       {runs.slice(-6).map(run => {
         const done = Boolean(run.endMs)
         const color = !done ? theme.warn : run.error ? theme.error : theme.ok
         const seconds = formatSeconds(((run.endMs ?? now) - run.startMs) / 1000)
+        const brief = toolBrief(run)
         return (
           <Box flexDirection="column" key={run.id}>
-            <Text color={color}>{done ? (run.error ? 'failed' : 'done') : 'running'} {run.name} {seconds} {toolBrief(run)}</Text>
+            <Text wrap="truncate-end">
+              <Text color={color}>●</Text>
+              <Text> {run.name} </Text>
+              <Text color={theme.dim}>{done ? (run.error ? 'failed' : 'done') : 'running'} {seconds}{brief ? ` ${brief}` : ''}</Text>
+            </Text>
             {toolsExpanded ? <ToolDetails run={run} /> : null}
           </Box>
         )
@@ -655,16 +649,23 @@ function ToolPanel({ toolsExpanded, now, runs }: { toolsExpanded: boolean; now: 
 
 function ResumePickerView({ picker }: { picker: ResumePicker }) {
   return (
-    <Box borderColor={theme.accent} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
-      <Text color={primary}>Resume session - Up/Down, Enter</Text>
-      {picker.choices.map((choice, index) => (
-        <Box flexDirection="column" key={choice.id}>
-          <Text color={index === picker.index ? theme.warn : theme.text}>
-            {index === picker.index ? '> ' : '  '}{choice.time || choice.id}  {choice.turns} turns  {choice.status || 'unknown'}  {choice.title || choice.objective || choice.user}
-          </Text>
-          {choice.assistant ? <Text color={theme.dim}>    {choice.assistant}</Text> : null}
-        </Box>
-      ))}
+    <Box borderColor={theme.dim} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
+      <Text>
+        <Text bold color={theme.accent}>Resume session</Text>
+        <Text color={theme.dim}>  ↑↓ choose · enter confirm · esc cancel</Text>
+      </Text>
+      {picker.choices.map((choice, index) => {
+        const selected = index === picker.index
+        return (
+          <Box flexDirection="column" key={choice.id}>
+            <Text wrap="truncate-end">
+              <Text color={selected ? theme.accent : theme.dim}>{selected ? '❯ ' : '  '}</Text>
+              <Text color={selected ? undefined : theme.dim}>{choice.time || choice.id} · {choice.turns} turns · {choice.status || 'unknown'} · {choice.title || choice.objective || choice.user}</Text>
+            </Text>
+            {selected && choice.assistant ? <Text color={theme.dim} wrap="truncate-end">    {choice.assistant}</Text> : null}
+          </Box>
+        )
+      })}
     </Box>
   )
 }
@@ -673,17 +674,20 @@ function ApprovalPickerView({ onInstructionChange, picker }: { onInstructionChan
   const decision = APPROVAL_OPTIONS[picker.index]?.id
   return (
     <Box borderColor={theme.warn} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
-      <Text color={theme.warn}>Approval required - Up/Down, Enter</Text>
-      <Text color={theme.text}>{shortText(picker.approval.command || 'unknown command', 160)}</Text>
+      <Text>
+        <Text bold color={theme.warn}>Approval required</Text>
+        <Text color={theme.dim}>  ↑↓ choose · enter confirm · esc dismiss</Text>
+      </Text>
+      <Text wrap="wrap">{shortText(picker.approval.command || 'unknown command', 160)}</Text>
       {picker.approval.reason ? <Text color={theme.dim}>reason: {picker.approval.reason}</Text> : null}
       <Box flexDirection="column" marginTop={1}>
         {APPROVAL_OPTIONS.map((option, index) => {
           const selected = index === picker.index
-          const color = option.id === 'reject' ? theme.error : selected ? theme.ok : theme.dim
-          return <Text color={color} key={option.id}>{selected ? '[x]' : '[ ]'} {option.label}</Text>
+          const color = selected ? (option.id === 'reject' ? theme.error : theme.accent) : theme.dim
+          return <Text color={color} key={option.id}>{selected ? '◉ ' : '○ '}{option.label}</Text>
         })}
         <Box>
-          <Text color={decision === 'instruct' ? theme.accent : theme.dim}>    &gt; </Text>
+          <Text color={decision === 'instruct' ? theme.accent : theme.dim}>  ❯ </Text>
           <TextInput
             focus={decision === 'instruct'}
             onChange={onInstructionChange}
@@ -700,8 +704,8 @@ function ToolDetails({ run }: { run: ToolRun }) {
   const output = formatToolOutput(run)
   return (
     <Box flexDirection="column" paddingLeft={2}>
-      {run.arguments == null ? null : <Text color={theme.dim}>args {shortText(JSON.stringify(run.arguments), 500)}</Text>}
-      {output ? <Text color={run.error ? theme.error : theme.text}>out {shortText(output, 900)}</Text> : null}
+      {run.arguments == null ? null : <Text color={theme.dim} wrap="truncate-end">args {shortText(JSON.stringify(run.arguments), 500)}</Text>}
+      {output ? <Text color={run.error ? theme.error : undefined} wrap="truncate-end">out {shortText(output, 900)}</Text> : null}
     </Box>
   )
 }
@@ -786,15 +790,14 @@ function formatProgress(progress: ProgressState) {
 }
 
 function Composer({ busy, input, onChange, onSubmit }: { busy: boolean; input: string; onChange: (value: string) => void; onSubmit: (value: string) => void }) {
-  const rule = '━'.repeat(Math.max(20, (process.stdout.columns ?? 80) - 2))
+  const rule = '─'.repeat(Math.max(20, (process.stdout.columns ?? 80) - 2))
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text color={theme.dim}>{rule}</Text>
       <Box>
-        <Text color={busy ? theme.warn : theme.accent}>{busy ? '...' : '>'} </Text>
-        <TextInput focus={!busy} onChange={onChange} onSubmit={onSubmit} placeholder="Ask Friday or type /help" value={input} />
+        <Text color={busy ? theme.dim : theme.accent}>{busy ? '…' : '❯'} </Text>
+        <TextInput focus={!busy} onChange={onChange} onSubmit={onSubmit} placeholder="Ask Friday or /help" value={input} />
       </Box>
-      <Text color={theme.dim}>{rule}</Text>
     </Box>
   )
 }
@@ -806,7 +809,7 @@ function Metrics({ metrics }: { metrics: NonNullable<Message['metrics']> }) {
   const seconds = metrics.elapsed_ms == null ? 'n/a' : `${(metrics.elapsed_ms / 1000).toFixed(1)}s`
   return (
     <Text color={theme.dim}>
-      in {input} | out {output} | {seconds}
+      in {input} · out {output} · {seconds}
     </Text>
   )
 }
