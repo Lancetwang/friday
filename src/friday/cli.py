@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from friday.app import build_instructions, ensure_user_home, init_project, reset_friday, resume_choices
+from friday.app import ensure_user_home, init_project, reset_friday, resume_choices
 from friday.checkpoint import checkpoint_choices
 from friday.context import context_report
 from friday.config import (
@@ -84,7 +84,6 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("tui", help="Start a simple terminal UI.")
     sub.add_parser("app-server", help="Run the JSONL app server for rich clients.")
-    sub.add_parser("prompt", help="Print the effective instruction context.")
     memory = sub.add_parser("memory", help="Inspect and manage Friday memory.", description="Inspect and manage Friday memory.")
     memory_sub = memory.add_subparsers(dest="memory_command")
     memory_status_parser = memory_sub.add_parser("status", help="Show memory counts, sizes, and paths.")
@@ -192,10 +191,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "model":
         _model_cli(args)
-        return
-
-    if command == "prompt":
-        print(build_instructions(Path.cwd().resolve()))
         return
 
     if command == "memory":
@@ -372,12 +367,10 @@ def _slash(text: str, session: FridaySession) -> None:
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /new, /model [id], /prompt, /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|bypass], /approve [session], /reject [guidance], /reset, /exit")
+        print("/help, /new, /model [id], /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|bypass], /approve [session], /reject [guidance], /reset, /exit")
     elif command == "new":
         session.new()
         print("started a new conversation")
-    elif command == "prompt":
-        print(build_instructions(Path.cwd().resolve()))
     elif command.startswith("memory"):
         result = run_memory_command(raw_command[len("memory") :].strip(), Path.cwd().resolve())
         print(format_memory_result(result))

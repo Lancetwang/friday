@@ -144,6 +144,7 @@ def build_instructions(workspace: Path, friday_dir: Path | None = None, config: 
         # Global, code-owned prefix: identical across every workspace and only
         # changes on upgrade, so it stays at the front for provider prefix caching.
         ("Soul", _embedded_markdown(_read_optional(user_dir / "SOUL.md") or _read_optional(user_dir / "soul.md") or prompt_template("SOUL.md"))),
+        ("Security", _embedded_markdown(prompt_template("SECURITY.md"))),
         ("Runtime", _embedded_markdown(prompt_template("RUNTIME.md"))),
         ("Tool Guidance", _embedded_markdown(prompt_template("TOOL_GUIDANCE.md"))),
         # Global, user-editable layers: rules, profile, and cross-project memory.

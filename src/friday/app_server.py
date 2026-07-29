@@ -8,7 +8,7 @@ from typing import Any
 
 from agent_core import AgentEvent
 
-from friday.app import build_instructions, resume_choices
+from friday.app import resume_choices
 from friday.checkpoint import checkpoint_choices
 from friday.config import (
     delete_model_profile,
@@ -99,8 +99,6 @@ class Gateway:
                 self.ok(rid, {"text": self.session.chat(str(params.get("text") or "")).answer})
             elif method == "goal.run":
                 self.ok(rid, {"text": self.session.chat(str(params.get("text") or ""), goal=True).answer})
-            elif method == "prompt.get":
-                self.ok(rid, {"text": build_instructions(Path.cwd().resolve())})
             elif method == "memory.command":
                 result = run_memory_command(str(params.get("command") or ""), Path.cwd().resolve())
                 self.ok(rid, {"text": format_memory_result(result)})

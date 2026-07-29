@@ -32,6 +32,23 @@ class FakeModel:
         return {"content": answer}
 
 
+class TraceSecurityTests(unittest.TestCase):
+    def test_model_request_projection_omits_hidden_messages(self) -> None:
+        event = {
+            "seq": 1,
+            "type": "model.request",
+            "data": {
+                "messages": [{"role": "system", "content": "private control context"}],
+                "tool_count": 9,
+            },
+        }
+
+        projected = trace_web._analysis_event(event)
+
+        self.assertEqual(projected["data"], {"message_count": 1, "tool_count": 9})
+        self.assertNotIn("private control context", json.dumps(projected))
+
+
 class TraceWebTests(unittest.TestCase):
     def test_serve_trace_ui_stops_on_keyboard_interrupt(self) -> None:
         # The wait loop must sleep in short interruptible slices; an untimed

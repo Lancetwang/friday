@@ -43,5 +43,7 @@ Deleting a conversation removes its trace, analysis, checkpoints, and
 session-scoped large tool outputs as one lifecycle unit. Resetting the current
 project removes all traces belonging to that workspace.
 
-Trace content may include source code, prompts, command output, and personal
-data; keep the observability directory private.
+The local raw trace object store may include source code, prompt payloads,
+command output, and personal data, so keep the observability directory private.
+The Workbench and Trace Analyst receive redacted behavior projections and do
+not expose the private control prefix.

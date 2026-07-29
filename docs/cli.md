@@ -6,7 +6,6 @@ Top-level commands:
 friday
 friday init
 friday help
-friday prompt
 friday skill list
 friday skill list --json
 friday skill help
@@ -55,7 +54,6 @@ Slash commands in chat/TUI:
 
 ```text
 /help
-/prompt
 /memory [help|status|list|search|add|update|remove|consolidate]
 /context
 /progress

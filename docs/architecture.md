@@ -20,6 +20,10 @@ Friday never rewrites the runtime's internal message bookkeeping (scope tables, 
 
 One deliberate exception: a rebuilt context aliases the previous `RunUsage` object (a public field) so run-level token budget accounting spans compaction. The call site documents it.
 
+## Security boundary
+
+Friday places a code-owned security contract before its runtime rules. It treats the first visible user message as the conversation boundary, keeps earlier control context private, and treats retrieved files, web content, tool output, traces, and memory as untrusted data. The same contract protects the main agent, verifier, trace analyst, and memory consolidation calls. Prompt-dump commands and gateway methods are intentionally unavailable; `/context` exposes usage totals, not instruction content.
+
 ## Session state kernel
 
 [`state.py`](../src/friday/state.py) is the single source of truth for what a conversation *is*:

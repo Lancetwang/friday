@@ -25,6 +25,7 @@ class CliTests(unittest.TestCase):
 
         for command in ("memory", "context", "progress", "compact", "goal", "resume", "session", "undo", "checkpoint", "approve", "reject", "reset"):
             self.assertIn(command, output.getvalue())
+        self.assertNotIn("prompt", output.getvalue())
 
     def test_progressive_help_aliases_work(self) -> None:
         for argv, expected in ((["help"], "Friday general-purpose local CLI agent"), (["skill", "help"], "Inspect reusable Friday skills"), (["memory", "help"], "Inspect and manage Friday memory")):

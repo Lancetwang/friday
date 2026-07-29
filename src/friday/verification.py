@@ -11,7 +11,7 @@ from agent_core import Agent, RunContext
 
 from friday.agent_flow import GUARD_STOP_REASON, build_guarded_flow, inherit_guarded_run
 from friday.config import ModelConfig, build_model, load_model_config, output_token_limit
-from friday.prompts import VERIFIER_NOTES
+from friday.prompts import SECURITY_NOTES, VERIFIER_NOTES
 from friday.storage import project_state_dir
 from friday.tools import build_tools, pending_approval
 
@@ -31,7 +31,7 @@ def build_verifier(workspace: Path, config: ModelConfig | None = None) -> tuple[
             tools,
             chat_kwargs={"stream": False, **output_token_limit(config, 900), "tool_choice": "auto"},
         ),
-        instructions=f"{VERIFIER_NOTES}\n\nWorkspace: {root}\nOS: {system}\nShell: {shell}",
+        instructions=f"{SECURITY_NOTES}\n\n{VERIFIER_NOTES}\n\nWorkspace: {root}\nOS: {system}\nShell: {shell}",
     )
     context = agent.new_context()
     context.metadata["workspace"] = str(root)

@@ -31,6 +31,7 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Long-running task control: explicit objectives, plans, next actions, verifier state, semantic stop conditions, and session resume keep work on track.
 - Turn checkpoints: `/undo` restores workspace files, conversation, and progress to the state before the latest Friday turn without touching the project's Git history.
 - Program-enforced permissions: dangerous Bash commands stop before execution and require explicit approval.
+- Prompt-injection boundary: private control context is protected across the main agent and auxiliary model calls, while retrieved content is treated as untrusted data.
 - Bounded web research: search continues only for missing evidence, with retrieved sources separated from model inference.
 - Exact accounting and traces: provider usage, model calls, tool activity, compaction, verification, and results are recorded for inspection and analysis.
 - Runtime compatibility: Friday pins a tested [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) version and checks the installed environment before execution.

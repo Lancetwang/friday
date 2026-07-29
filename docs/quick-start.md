@@ -90,7 +90,7 @@ friday memory help
 friday memory status
 ```
 
-Inside chat or the TUI, use `/memory help`, `/memory list`, and `/memory search <query>`. Use `/prompt` to print the effective prompt.
+Inside chat or the TUI, use `/memory help`, `/memory list`, and `/memory search <query>`. Internal instruction content is not exposed by any chat or CLI command.
 
 Approve or reject a pending dangerous Bash command:
 
@@ -103,4 +103,4 @@ friday reject --message "use another approach"
 
 Inside CLI chat, use `/approve`, `/approve session`, `/reject`, or `/reject <guidance>`. The TUI presents the same decisions as a vertical picker and accepts guidance inline.
 
-Project state is isolated under `~/.friday/projects/<workspace-id>/`, where `workspace-id` is a deterministic hash of the resolved project path. Its `project.json` records the original path so hashed directories remain identifiable. Sessions, checkpoints, approvals, and large tool outputs share this project lifecycle. `friday prompt` prints the resolved project configuration path. Global configuration, user profile, memory, rules, and user skills are stored directly in `~/.friday/`.
+Project state is isolated under `~/.friday/projects/<workspace-id>/`, where `workspace-id` is a deterministic hash of the resolved project path. Its `project.json` records the original path so hashed directories remain identifiable. Sessions, checkpoints, approvals, and large tool outputs share this project lifecycle. Global configuration, user profile, memory, rules, and user skills are stored directly in `~/.friday/`.

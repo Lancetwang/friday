@@ -43,6 +43,14 @@ class TuiGatewayTests(unittest.TestCase):
 
         self.assertIn("你好，Friday", output.getvalue())
 
+    def test_gateway_does_not_expose_effective_prompt(self) -> None:
+        gateway = Gateway()
+
+        with patch.object(gateway, "err") as error:
+            gateway.handle({"id": "1", "method": "prompt.get"})
+
+        error.assert_called_once_with("1", "unknown method: prompt.get")
+
     def test_verification_status_omits_trace_details(self) -> None:
         result = verification_status(
             {

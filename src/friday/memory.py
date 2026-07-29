@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from friday.config import build_model, load_model_config, load_model_environment, output_token_limit
-from friday.prompts import MEMORY_CONSOLIDATE_PROMPT
+from friday.prompts import MEMORY_CONSOLIDATE_PROMPT, SECURITY_NOTES
 from friday.storage import friday_home, project_state_dir
 
 USER_LIMIT = 1500
@@ -307,7 +307,7 @@ def _review_memory(workspace: Path, episodes: list[dict[str, Any]], home: Path |
     }
     response = build_model(config).chat_message(
         [
-            {"role": "system", "content": MEMORY_CONSOLIDATE_PROMPT},
+            {"role": "system", "content": f"{SECURITY_NOTES}\n\n{MEMORY_CONSOLIDATE_PROMPT}"},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         stream=False,

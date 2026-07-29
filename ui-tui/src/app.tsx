@@ -34,7 +34,6 @@ const HELP_TEXT = `# Friday commands
 | --- | --- |
 | \`/help\` | Show this command reference. |
 | \`/new\` | Start a new conversation in the current workspace. |
-| \`/prompt\` | Print the effective prompt. |
 | \`/memory [help]\` | Inspect or manage persistent memory. |
 | \`/model [id]\` | List configured models or switch the active model. |
 | \`/context\` | Print current context usage. |
@@ -325,10 +324,6 @@ function runCommand(
       setProgress(null)
       setMessages([])
     })
-  } else if (command.startsWith('/prompt')) {
-    void gateway.request<{ text: string }>('prompt.get').then(result =>
-      setMessages(items => [...items, { role: 'system', text: result.text }])
-    )
   } else if (command.startsWith('/memory')) {
     void gateway.request<{ text: string }>('memory.command', { command: text.slice('/memory'.length).trim() }).then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
