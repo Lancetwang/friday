@@ -1059,6 +1059,7 @@ summary:focus-visible {
 .timeline {
   min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 36px max(34px, calc((100% - 900px) / 2)) 38px;
   background: var(--canvas);
   overscroll-behavior: contain;

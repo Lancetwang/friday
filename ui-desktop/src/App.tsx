@@ -256,7 +256,7 @@ function App() {
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
   const activeAssistants = useRef(new Map<string, string>())
-  const bottom = useRef<HTMLDivElement | null>(null)
+  const timeline = useRef<HTMLElement | null>(null)
   const followOutput = useRef(true)
   const pendingRequests = useRef(new Map<string, PendingRequest>())
   const requestId = useRef(0)
@@ -596,7 +596,9 @@ function App() {
   }, [activeProject, activeSession])
 
   useEffect(() => {
-    if (followOutput.current) bottom.current?.scrollIntoView()
+    if (followOutput.current && timeline.current) {
+      timeline.current.scrollTop = timeline.current.scrollHeight
+    }
   }, [activeProject, items])
 
   const submit = async (event?: FormEvent) => {
@@ -1177,10 +1179,14 @@ function App() {
         <section
           className={`timeline ${showWelcome ? 'empty' : ''}`}
           aria-live="polite"
-          onScroll={event => {
-            const timeline = event.currentTarget
-            followOutput.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 96
+          onWheel={event => {
+            if (event.deltaY < 0) followOutput.current = false
           }}
+          onScroll={event => {
+            const viewport = event.currentTarget
+            followOutput.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 12
+          }}
+          ref={timeline}
         >
           {showWelcome && <WelcomePrompt key={activeProject} />}
           {!showWelcome && groupToolItems(timelineItems).map(item => Array.isArray(item)
@@ -1218,7 +1224,6 @@ function App() {
           {busy && !activeAssistants.current.get(activeProject) && (
             <div className="thinking"><span /><span /><span /> Friday is working</div>
           )}
-          <div ref={bottom} />
         </section>
 
         <form className="composer" onSubmit={submit}>
