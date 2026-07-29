@@ -14,7 +14,7 @@ from agent_core import Agent, RunContext, reset_current_context, set_current_con
 
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
-from friday.config import DEFAULT_MODEL_CONFIG, load_model_config
+from friday.config import DEFAULT_MODEL_CONFIG, load_model_catalog, load_model_config, model_api_key, save_model_profile
 from friday.context import compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
@@ -723,6 +723,32 @@ class ResetTests(unittest.TestCase):
         self.assertEqual(DEFAULT_MODEL_CONFIG.context_window, 353000)
         self.assertEqual(DEFAULT_MODEL_CONFIG.max_output_tokens, 65536)
         self.assertEqual(DEFAULT_MODEL_CONFIG.run_token_budget, 2824000)
+
+    def test_model_profiles_keep_credentials_out_of_the_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+
+            catalog = save_model_profile(
+                root,
+                {
+                    "name": "MiMo Vision",
+                    "provider": "mimo",
+                    "model": "mimo-v2.5",
+                    "base_url": "https://api.xiaomimimo.com/v1",
+                },
+                api_key="private-key",
+                home=home,
+            )
+            profile_id = catalog["active"]
+            config = load_model_config(root, home=home, profile_id=profile_id)
+
+            self.assertTrue(config.vision)
+            self.assertTrue(catalog["profiles"][-1]["api_key_configured"])
+            self.assertEqual(model_api_key(config, home=home), "private-key")
+            self.assertNotIn("private-key", json.dumps(load_model_catalog(root, home=home)))
+            self.assertNotIn("private-key", (home / ".friday" / "models.json").read_text(encoding="utf-8"))
 
     def test_build_friday_passes_configured_output_budget_to_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

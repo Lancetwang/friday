@@ -10,7 +10,13 @@ from agent_core import AgentEvent
 
 from friday.app import build_instructions, resume_choices
 from friday.checkpoint import checkpoint_choices
-from friday.config import load_model_config
+from friday.config import (
+    delete_model_profile,
+    load_model_catalog,
+    load_model_config,
+    save_model_profile,
+    select_model_profile,
+)
 from friday.context import context_report
 from friday.memory import format_memory_result, run_memory_command
 from friday.session import FridaySession
@@ -121,8 +127,34 @@ class Gateway:
                 self.ok(rid, {"skill": skill, "content": skill_body(Path(path).read_text(encoding="utf-8"))})
             elif method == "permission.set":
                 self.ok(rid, {"permission_mode": set_permission_mode(str(params.get("mode") or ""))})
+            elif method == "model.list":
+                self.ok(rid, load_model_catalog(Path.cwd().resolve()))
+            elif method == "model.save":
+                profile = params.get("profile")
+                if not isinstance(profile, dict):
+                    raise ValueError("Model configuration must be an object.")
+                catalog = save_model_profile(
+                    Path.cwd().resolve(),
+                    profile,
+                    api_key=str(params["api_key"]) if "api_key" in params else None,
+                    clear_api_key=bool(params.get("clear_api_key")),
+                    activate=bool(params.get("activate", True)),
+                )
+                if bool(params.get("activate", True)):
+                    self.session.select_model(catalog["active"])
+                self.ok(rid, {"catalog": catalog, "info": self.session_info()})
+            elif method == "model.select":
+                profile_id = str(params.get("id") or "")
+                catalog = select_model_profile(Path.cwd().resolve(), profile_id)
+                self.session.select_model(profile_id)
+                self.ok(rid, {"catalog": catalog, "info": self.session_info()})
+            elif method == "model.delete":
+                catalog = delete_model_profile(Path.cwd().resolve(), str(params.get("id") or ""))
+                if self.session.model_profile not in {profile["id"] for profile in catalog["profiles"]}:
+                    self.session.select_model(catalog["active"])
+                self.ok(rid, {"catalog": catalog, "info": self.session_info()})
             elif method == "trace.serve":
-                _server, url = start_trace_server()
+                _server, url = start_trace_server(port=0)
                 self.ok(rid, {"url": url})
             elif method == "session.reset":
                 removed = self.session.reset(include_user=bool(params.get("global")))
@@ -225,13 +257,22 @@ class Gateway:
             self.err(rid, str(exc))
 
     def session_info(self) -> dict[str, Any]:
-        config = load_model_config(Path.cwd().resolve())
+        catalog = load_model_catalog(Path.cwd().resolve())
+        config = load_model_config(Path.cwd().resolve(), profile_id=self.session.model_profile)
+        profile = next(
+            (item for item in catalog["profiles"] if item["id"] == config.profile_id),
+            {},
+        )
         session_id = ""
         if self.session.context is not None:
             session_id = str(self.session.context.metadata.get("session_id") or "")
         return {
             "cwd": str(Path.cwd().resolve()),
             "model": f"{config.provider}/{config.model}",
+            "model_configured": bool(profile.get("api_key_configured")),
+            "model_name": config.profile_name,
+            "model_profile": config.profile_id,
+            "model_vision": config.vision,
             "permission_mode": permission_mode(),
             "progress": self.session.progress(),
             "approval": pending_approval(),

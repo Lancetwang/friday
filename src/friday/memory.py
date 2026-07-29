@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from friday.config import build_model, load_model_config, load_model_environment
+from friday.config import build_model, load_model_config, load_model_environment, output_token_limit
 from friday.prompts import MEMORY_CONSOLIDATE_PROMPT
 from friday.storage import friday_home, project_state_dir
 
@@ -310,9 +310,8 @@ def _review_memory(workspace: Path, episodes: list[dict[str, Any]], home: Path |
             {"role": "system", "content": MEMORY_CONSOLIDATE_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
-        temperature=0,
-        max_tokens=min(4000, config.max_output_tokens),
         stream=False,
+        **output_token_limit(config, 4000),
     )
     content = str(response.get("content") or "")
     start, end = content.find("{"), content.rfind("}")

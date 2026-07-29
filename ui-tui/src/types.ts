@@ -17,6 +17,10 @@ export type GatewayEvent =
 export interface SessionInfo {
   cwd: string
   model: string
+  model_configured?: boolean
+  model_name?: string
+  model_profile?: string
+  model_vision?: boolean
   permission_mode: 'accept-edits' | 'bypass' | 'dont-ask' | 'manual'
   progress?: ProgressState
   session_id?: string

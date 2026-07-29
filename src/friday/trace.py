@@ -218,11 +218,34 @@ def record_checkpoint_restore(session_id: str, checkpoint_id: str, changed_paths
 
 
 def list_traces() -> list[dict[str, Any]]:
+    _prune_orphan_traces()
     sessions = trace_root() / "sessions"
     if not sessions.exists():
         return []
     items = [_read_json(path) for path in sessions.glob("*/manifest.json")]
     return sorted((item for item in items if isinstance(item, dict)), key=lambda item: str(item.get("updated_at", "")), reverse=True)
+
+
+def _prune_orphan_traces() -> int:
+    sessions = trace_root() / "sessions"
+    if not sessions.exists():
+        return 0
+    removed = 0
+    for manifest_path in sessions.glob("*/manifest.json"):
+        manifest = _read_json(manifest_path)
+        if not manifest or manifest.get("status") == "running":
+            continue
+        workspace = Path(str(manifest.get("workspace") or "")).resolve()
+        session_id = str(manifest.get("session_id") or "")
+        session_name = f"{session_id}.json"
+        if (
+            (project_state_dir(workspace) / "sessions" / session_name).exists()
+            or (workspace / ".friday" / "sessions" / session_name).exists()
+        ):
+            continue
+        shutil.rmtree(manifest_path.parent)
+        removed += 1
+    return removed
 
 
 def load_trace(session_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -369,6 +392,145 @@ def behavior_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if text:
                 behaviors.append({**common, "kind": "assistant", "label": "FRI", "text": text, "seqs": [seq]})
     return behaviors
+
+
+def trace_turns(session_id: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group lossless trace events into user turns and inspectable agent activity."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        turn_id = str(event.get("turn_id") or "")
+        if turn_id:
+            grouped.setdefault(turn_id, []).append(event)
+
+    turns = []
+    for turn_id, rows in grouped.items():
+        start = next((row for row in rows if row.get("type") == "turn.start"), None)
+        if start is None:
+            continue
+        result = next((row for row in reversed(rows) if row.get("type") == "turn.result"), None)
+        finish = next((row for row in reversed(rows) if row.get("type") == "turn.finish"), None)
+        start_data = start.get("data", {})
+        result_data = result.get("data", {}) if result else {}
+        finish_data = finish.get("data", {}) if finish else {}
+        start_data = start_data if isinstance(start_data, dict) else {}
+        result_data = result_data if isinstance(result_data, dict) else {}
+        finish_data = finish_data if isinstance(finish_data, dict) else {}
+
+        requests: dict[tuple[Any, Any], dict[str, Any]] = {}
+        tool_results: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            data = row.get("data", {})
+            data = data if isinstance(data, dict) else {}
+            if row.get("type") == "model.request":
+                requests[(row.get("run_id"), row.get("step"))] = row
+            elif row.get("type") == "tool.result":
+                tool_results[str(data.get("tool_call_id") or "")] = row
+
+        activities = []
+        for row in rows:
+            data = row.get("data", {})
+            data = data if isinstance(data, dict) else {}
+            event_type = str(row.get("type") or "")
+            if event_type == "model.response":
+                request = requests.get((row.get("run_id"), row.get("step")))
+                message = _resolve_descriptor(session_id, data.get("message"))
+                message = message if isinstance(message, dict) else {"content": str(message or "")}
+                usage = data.get("usage", {})
+                tool_calls = message.get("tool_calls", [])
+                content = str(message.get("content") or "").strip()
+                tool_names = [
+                    str((call.get("function") or {}).get("name") or "")
+                    for call in tool_calls
+                    if isinstance(call, dict)
+                ] if isinstance(tool_calls, list) else []
+                activities.append(
+                    {
+                        "kind": "model",
+                        "label": "Model response",
+                        "summary": _preview(content, 240) if content else (
+                            f"Requested {', '.join(name for name in tool_names if name)}" if tool_names else "Empty response"
+                        ),
+                        "content": content,
+                        "status": "done",
+                        "time": row.get("time"),
+                        "duration_ms": _elapsed_ms(request, row),
+                        "input_tokens": _usage_int(usage, "prompt_tokens", "input_tokens"),
+                        "output_tokens": _usage_int(usage, "completion_tokens", "output_tokens"),
+                        "cached_tokens": _cached_tokens(usage),
+                        "agent_role": str(data.get("agent_role") or "agent"),
+                        "seqs": [item["seq"] for item in (request, row) if item and item.get("seq")],
+                    }
+                )
+            elif event_type == "tool.call":
+                call_id = str(data.get("tool_call_id") or "")
+                tool_result = tool_results.get(call_id)
+                tool_data = tool_result.get("data", {}) if tool_result else {}
+                tool_data = tool_data if isinstance(tool_data, dict) else {}
+                content = tool_data.get("content", {})
+                preview = str(content.get("preview") or "") if isinstance(content, dict) else str(content or "")
+                activities.append(
+                    {
+                        "kind": "tool",
+                        "label": str(data.get("name") or "Tool"),
+                        "summary": _preview(preview, 240) if preview else "Waiting for result",
+                        "arguments": data.get("arguments", {}),
+                        "result": preview,
+                        "status": "failed" if _tool_result_failed(tool_data) else ("done" if tool_result else "running"),
+                        "time": row.get("time"),
+                        "duration_ms": _elapsed_ms(row, tool_result),
+                        "input_tokens": None,
+                        "output_tokens": None,
+                        "cached_tokens": None,
+                        "agent_role": str(data.get("agent_role") or "agent"),
+                        "seqs": [item["seq"] for item in (row, tool_result) if item and item.get("seq")],
+                    }
+                )
+            elif event_type in {"verification.result", "context.compacted"} or event_type.startswith("approval."):
+                activities.append(
+                    {
+                        "kind": "verification" if event_type == "verification.result" else (
+                            "context" if event_type == "context.compacted" else "approval"
+                        ),
+                        "label": event_type.replace(".", " ").title(),
+                        "summary": _preview(event_summary(row), 240),
+                        "details": data,
+                        "status": str(data.get("verdict") or data.get("status") or "done").lower(),
+                        "time": row.get("time"),
+                        "duration_ms": None,
+                        "input_tokens": None,
+                        "output_tokens": None,
+                        "cached_tokens": None,
+                        "agent_role": str(data.get("agent_role") or "agent"),
+                        "seqs": [row["seq"]] if row.get("seq") else [],
+                    }
+                )
+
+        metrics = result_data.get("metrics") or finish_data.get("metrics") or {}
+        metrics = metrics if isinstance(metrics, dict) else {}
+        assistant = _resolve_descriptor(session_id, result_data.get("assistant"))
+        if not isinstance(assistant, str):
+            assistant = str(assistant.get("content") or "") if isinstance(assistant, dict) else ""
+        if not assistant:
+            assistant = next(
+                (str(activity.get("content") or "") for activity in reversed(activities) if activity["kind"] == "model"),
+                "",
+            )
+        turns.append(
+            {
+                "turn_id": turn_id,
+                "mode": str(start_data.get("mode") or result_data.get("mode") or "chat"),
+                "status": str(finish_data.get("status") or "running"),
+                "time": start.get("time"),
+                "user": str(start_data.get("user") or result_data.get("user") or ""),
+                "assistant": assistant,
+                "duration_ms": metrics.get("elapsed_ms") if isinstance(metrics.get("elapsed_ms"), int) else _elapsed_ms(start, finish),
+                "input_tokens": metrics.get("input_tokens"),
+                "output_tokens": metrics.get("output_tokens"),
+                "estimated_tokens": bool(metrics.get("estimated_tokens")),
+                "activities": activities,
+            }
+        )
+    return turns
 
 
 def _tool_result_failed(data: dict[str, Any]) -> bool:
@@ -563,6 +725,36 @@ def _usage_int(usage: Any, *names: str) -> int | None:
         if isinstance(value, int):
             return value
     return None
+
+
+def _cached_tokens(usage: Any) -> int | None:
+    direct = _usage_int(usage, "prompt_cache_hit_tokens")
+    if direct is not None:
+        return direct
+    details = usage.get("prompt_tokens_details", {}) if isinstance(usage, dict) else {}
+    return _usage_int(details, "cached_tokens")
+
+
+def _resolve_descriptor(session_id: str, value: Any) -> Any:
+    if not isinstance(value, dict) or not isinstance(value.get("ref"), str):
+        return value
+    try:
+        return load_trace_object(session_id, value["ref"])
+    except (FileNotFoundError, json.JSONDecodeError):
+        return value.get("preview", "")
+
+
+def _elapsed_ms(start: dict[str, Any] | None, end: dict[str, Any] | None) -> int | None:
+    if not start or not end:
+        return None
+    start_stamp = start.get("timestamp")
+    end_stamp = end.get("timestamp")
+    if isinstance(start_stamp, (int, float)) and isinstance(end_stamp, (int, float)):
+        return max(0, round((end_stamp - start_stamp) * 1000))
+    try:
+        return max(0, round((datetime.fromisoformat(str(end["time"])) - datetime.fromisoformat(str(start["time"]))).total_seconds() * 1000))
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _preview(text: str, limit: int) -> str:

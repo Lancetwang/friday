@@ -5,6 +5,7 @@ import re
 import shutil
 import tomllib
 from datetime import datetime
+from dataclasses import asdict
 from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from agent_core import Agent, RunContext
 
 from friday.agent_flow import build_guarded_flow
 from friday.checkpoint import restore_checkpoint
-from friday.config import ModelConfig, build_model, default_config_text, load_model_config, load_model_environment
+from friday.config import ModelConfig, build_model, default_config_text, load_model_config, load_model_environment, output_token_limit
 from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
 from friday.prompts import (
     COMPACT_PROMPT,
@@ -72,20 +73,25 @@ LEGACY_PROMPT_DEFAULT_HASHES = {
 }
 
 
-def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple[Agent, RunContext]:
+def build_friday(
+    workspace: Path | None = None,
+    *,
+    stream: bool = True,
+    profile_id: str | None = None,
+) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
     load_model_environment(root)
     ensure_user_home()
     friday_dir = migrate_legacy_runtime(root)
     record_project(root)
-    config = load_model_config(root)
+    config = load_model_config(root, profile_id=profile_id)
     instructions = build_instructions(root, friday_dir, config)
     tools = build_tools(root, friday_dir)
     agent = Agent(
         flow=build_guarded_flow(
             build_model(config),
             tools,
-            chat_kwargs={"stream": stream, "temperature": 0.2, "max_tokens": config.max_output_tokens, "tool_choice": "auto"},
+            chat_kwargs={"stream": stream, **output_token_limit(config, config.max_output_tokens), "tool_choice": "auto"},
         ),
         instructions=instructions,
     )
@@ -93,14 +99,7 @@ def build_friday(workspace: Path | None = None, *, stream: bool = True) -> tuple
     _require_runtime(context)
     context.metadata["workspace"] = str(root)
     context.metadata["session_id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    context.metadata["friday.model_config"] = {
-        "provider": config.provider,
-        "model": config.model,
-        "base_url": config.base_url,
-        "context_window": config.context_window,
-        "max_output_tokens": config.max_output_tokens,
-        "run_token_budget": config.run_token_budget,
-    }
+    context.metadata["friday.model_config"] = asdict(config)
     return agent, context
 
 
@@ -176,7 +175,10 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
         on_delta=on_delta,
     )
     workspace = Path(context.metadata["workspace"])
-    new_agent, new_context = build_friday(workspace, stream=stream)
+    config = context.metadata.get("friday.model_config")
+    profile_id = str(config.get("profile_id") or "") if isinstance(config, dict) else None
+    build_kwargs = {"stream": stream, **({"profile_id": profile_id} if profile_id else {})}
+    new_agent, new_context = build_friday(workspace, **build_kwargs)
     if hasattr(context, "usage") and hasattr(new_context, "usage"):
         # Deliberate aliasing: the rebuilt context accumulates into the same RunUsage
         # so run-level budget accounting survives compaction.
@@ -211,9 +213,16 @@ def prepare_context_for_chat(agent: Agent, context: RunContext, *, stream: bool 
     return agent, context, ""
 
 
-def resume_friday(workspace: Path | None = None, *, stream: bool = True, resume_id: str | None = None) -> tuple[Agent, RunContext, int]:
+def resume_friday(
+    workspace: Path | None = None,
+    *,
+    stream: bool = True,
+    resume_id: str | None = None,
+    profile_id: str | None = None,
+) -> tuple[Agent, RunContext, int]:
     root = (workspace or Path.cwd()).resolve()
-    agent, context = build_friday(root, stream=stream)
+    build_kwargs = {"stream": stream, **({"profile_id": profile_id} if profile_id else {})}
+    agent, context = build_friday(root, **build_kwargs)
     snapshot = load_session(root, resume_id)
     if not snapshot:
         return agent, context, 0
@@ -232,10 +241,12 @@ def undo_friday(
     checkpoint_id: str | None = None,
     stream: bool = True,
     force: bool = False,
+    profile_id: str | None = None,
 ) -> tuple[Agent, RunContext, dict[str, Any]]:
     root = (workspace or Path.cwd()).resolve()
     restored = restore_checkpoint(root, checkpoint_id=checkpoint_id, force=force)
-    agent, context = build_friday(root, stream=stream)
+    build_kwargs = {"stream": stream, **({"profile_id": profile_id} if profile_id else {})}
+    agent, context = build_friday(root, **build_kwargs)
     session_id = str(restored.get("session_id") or context.metadata.get("session_id") or "")
     before_progress = restored.get("before_progress")
     hydrate(

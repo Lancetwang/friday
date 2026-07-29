@@ -14,9 +14,11 @@ from friday.trace import (
     begin_live_trace,
     expand_event,
     finish_live_trace,
+    list_traces,
     load_trace,
     record_context_transition,
     trace_stats,
+    trace_turns,
     write_live_event,
     write_trace,
 )
@@ -118,6 +120,16 @@ class TraceTests(unittest.TestCase):
             object_files = list((path.parent / "objects").glob("*.json"))
             self.assertEqual(len(object_files), 1)
 
+    def test_trace_listing_prunes_sessions_that_no_longer_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": tmp}):
+            root = Path(tmp) / "workspace"
+            context = RunContext(metadata={"workspace": str(root), "session_id": "orphan"})
+            path, turn_id = begin_live_trace(root, context=context, mode="chat", user="hello", prompt_messages=[])
+            finish_live_trace(path, turn_id, status="done")
+
+            self.assertEqual(list_traces(), [])
+            self.assertFalse(path.parent.exists())
+
     def test_behavior_view_only_exposes_user_assistant_and_grouped_tools(self) -> None:
         events = [
             {"seq": 1, "type": "turn.start", "turn_id": "t1", "data": {"user": "inspect"}},
@@ -159,6 +171,58 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(projected[1]["result"], '{"exit_code": 1}')
         self.assertTrue(projected[1]["is_error"])
         self.assertTrue(all("node" not in item for item in projected))
+
+    def test_trace_turns_pairs_model_and_tool_activity_with_exact_metrics(self) -> None:
+        events = [
+            {"seq": 1, "time": "2026-01-01T00:00:00.000", "type": "turn.start", "turn_id": "t1", "data": {"user": "inspect"}},
+            {"seq": 2, "time": "2026-01-01T00:00:00.100", "timestamp": 1.0, "type": "model.request", "turn_id": "t1", "run_id": "r1", "step": 1, "data": {}},
+            {
+                "seq": 3,
+                "time": "2026-01-01T00:00:00.300",
+                "timestamp": 1.2,
+                "type": "model.response",
+                "turn_id": "t1",
+                "run_id": "r1",
+                "step": 1,
+                "data": {
+                    "message": {"content": ""},
+                    "usage": {"prompt_tokens": 120, "completion_tokens": 8, "prompt_cache_hit_tokens": 80},
+                },
+            },
+            {
+                "seq": 4,
+                "time": "2026-01-01T00:00:00.400",
+                "timestamp": 1.3,
+                "type": "tool.call",
+                "turn_id": "t1",
+                "data": {"tool_call_id": "call-1", "name": "Read", "arguments": {"path": "a.py"}},
+            },
+            {
+                "seq": 5,
+                "time": "2026-01-01T00:00:00.450",
+                "timestamp": 1.35,
+                "type": "tool.result",
+                "turn_id": "t1",
+                "data": {"tool_call_id": "call-1", "content": {"preview": "ok"}},
+            },
+            {
+                "seq": 6,
+                "time": "2026-01-01T00:00:00.500",
+                "type": "turn.result",
+                "turn_id": "t1",
+                "data": {"assistant": "done", "metrics": {"elapsed_ms": 500, "input_tokens": 120, "output_tokens": 8}},
+            },
+            {"seq": 7, "time": "2026-01-01T00:00:00.500", "type": "turn.finish", "turn_id": "t1", "data": {"status": "done"}},
+        ]
+
+        turns = trace_turns("s1", events)
+
+        self.assertEqual(turns[0]["user"], "inspect")
+        self.assertEqual(turns[0]["assistant"], "done")
+        self.assertEqual(turns[0]["input_tokens"], 120)
+        self.assertEqual(turns[0]["activities"][0]["duration_ms"], 200)
+        self.assertEqual(turns[0]["activities"][0]["cached_tokens"], 80)
+        self.assertEqual(turns[0]["activities"][1]["duration_ms"], 50)
 
 
 if __name__ == "__main__":

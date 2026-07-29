@@ -16,7 +16,9 @@ from agent_core import Agent, AgentEvent, RunContext
 
 from friday.app import build_friday, compact_friday, reset_friday, resume_friday, undo_friday
 from friday.checkpoint import finish_pending_checkpoint
+from friday.config import load_model_config
 from friday.progress import current_progress, finish_progress
+from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, conversation_body, hydrate
 from friday.tools import allow_permissions_for_session, approve_pending, pending_approval
 from friday.turn import TurnResult, run_turn
 
@@ -56,11 +58,13 @@ class FridaySession:
         self.on_rejection = on_rejection
         self.agent: Agent | None = None
         self.context: RunContext | None = None
+        self.model_profile: str | None = None
         self.suspended: dict[str, Any] | None = None
 
     def ensure(self) -> tuple[Agent, RunContext]:
         if self.agent is None or self.context is None:
-            self._adopt(*build_friday(self.workspace, stream=self.stream))
+            kwargs = {"stream": self.stream, **({"profile_id": self.model_profile} if self.model_profile else {})}
+            self._adopt(*build_friday(self.workspace, **kwargs))
         return self.agent, self.context
 
     def progress(self) -> dict[str, Any]:
@@ -169,7 +173,12 @@ class FridaySession:
         return summary
 
     def resume(self, resume_id: str | None = None) -> int:
-        agent, context, count = resume_friday(self.workspace, stream=self.stream, resume_id=resume_id)
+        agent, context, count = resume_friday(
+            self.workspace,
+            stream=self.stream,
+            resume_id=resume_id,
+            profile_id=self.model_profile,
+        )
         self._adopt(agent, context)
         self.suspended = None
         return count
@@ -185,10 +194,39 @@ class FridaySession:
             checkpoint_id=checkpoint_id,
             stream=self.stream,
             force=force,
+            profile_id=self.model_profile,
         )
         self._adopt(agent, context)
         self.suspended = None
         return restored
+
+    def select_model(self, profile_id: str) -> None:
+        """Change providers without losing the live conversation."""
+        config = load_model_config(self.workspace, profile_id=profile_id)
+        self.model_profile = config.profile_id
+        if self.context is None:
+            self.agent = None
+            return
+        previous = self.context
+        state = SessionState(
+            session_id=str(previous.metadata.get("session_id") or ""),
+            body=conversation_body(previous.get_messages()),
+            progress=current_progress(previous),
+            last_usage=dict(previous.metadata.get("friday.last_usage") or {}),
+            user_message_times=[
+                dict(item)
+                for item in previous.metadata.get(USER_MESSAGE_TIMES_KEY, [])
+                if isinstance(item, dict)
+            ],
+        )
+        agent, context = build_friday(
+            self.workspace,
+            stream=self.stream,
+            profile_id=self.model_profile,
+        )
+        context.usage = previous.usage
+        hydrate(context, state)
+        self._adopt(agent, context)
 
     def reset(self, *, include_user: bool = False) -> list[Path]:
         removed = reset_friday(self.workspace, include_user=include_user)
@@ -200,6 +238,9 @@ class FridaySession:
     def _adopt(self, agent: Agent, context: RunContext) -> None:
         self.agent = agent
         self.context = context
+        config = context.metadata.get("friday.model_config")
+        if isinstance(config, dict) and config.get("profile_id"):
+            self.model_profile = str(config["profile_id"])
         if self.on_event is not None:
             context.on_event = self.on_event
 

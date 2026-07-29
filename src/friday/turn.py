@@ -187,12 +187,6 @@ def run_turn(
             context_notice=notice,
             turn_id=turn_id,
         )
-        finish_live_trace(
-            live_path,
-            turn_id,
-            status=str(context.metadata.get("friday.loop_status") or "done"),
-            metrics=metrics,
-        )
         save_turn(
             workspace,
             user,
@@ -202,6 +196,12 @@ def run_turn(
             progress,
             last_usage=metrics,
             user_message_times=context.metadata.get(USER_MESSAGE_TIMES_KEY),
+        )
+        finish_live_trace(
+            live_path,
+            turn_id,
+            status=str(context.metadata.get("friday.loop_status") or "done"),
+            metrics=metrics,
         )
         finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
     finally:

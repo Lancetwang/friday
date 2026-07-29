@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -9,6 +10,13 @@ from pathlib import Path
 from friday.app import build_instructions, ensure_user_home, init_project, reset_friday, resume_choices
 from friday.checkpoint import checkpoint_choices
 from friday.context import context_report
+from friday.config import (
+    PROVIDERS,
+    delete_model_profile,
+    load_model_catalog,
+    save_model_profile,
+    select_model_profile,
+)
 from friday.memory import (
     add_memory,
     consolidate_memory,
@@ -52,6 +60,22 @@ def main(argv: list[str] | None = None) -> None:
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)
     skill_list = skill_sub.add_parser("list", help="List skill metadata and SKILL.md paths.")
     skill_list.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    model = sub.add_parser("model", help="Configure and select model providers.")
+    model_sub = model.add_subparsers(dest="model_command", required=True)
+    model_list = model_sub.add_parser("list", help="List configured models.")
+    model_list.add_argument("--json", action="store_true")
+    model_add = model_sub.add_parser("add", help="Add or update a model configuration.")
+    model_add.add_argument("name")
+    model_add.add_argument("--id")
+    model_add.add_argument("--provider", choices=[item["id"] for item in PROVIDERS], required=True)
+    model_add.add_argument("--model", required=True)
+    model_add.add_argument("--base-url")
+    model_add.add_argument("--no-key", action="store_true", help="Keep the existing key or configure it through an environment variable.")
+    model_use = model_sub.add_parser("use", help="Select a configured model.")
+    model_use.add_argument("id")
+    model_remove = model_sub.add_parser("remove", help="Remove a configured model.")
+    model_remove.add_argument("id")
 
     ask = sub.add_parser("ask", help="Ask once.")
     ask.add_argument("--stdin", action="store_true", help="Read the request from standard input.")
@@ -164,6 +188,10 @@ def main(argv: list[str] | None = None) -> None:
             print("NAME\tSCOPE\tDESCRIPTION\tPATH")
             for item in skills:
                 print(f"{item['name']}\t{item['scope']}\t{item['description']}\t{item['path']}")
+        return
+
+    if command == "model":
+        _model_cli(args)
         return
 
     if command == "prompt":
@@ -312,7 +340,7 @@ def _configure_stdio() -> None:
 def _help_alias(argv: list[str]) -> list[str]:
     if argv == ["help"]:
         return ["--help"]
-    if len(argv) == 2 and argv[1] == "help" and argv[0] in {"skill", "memory", "session", "trace"}:
+    if len(argv) == 2 and argv[1] == "help" and argv[0] in {"skill", "memory", "model", "session", "trace"}:
         return [argv[0], "--help"]
     return argv
 
@@ -344,7 +372,7 @@ def _slash(text: str, session: FridaySession) -> None:
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /new, /prompt, /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|bypass], /approve [session], /reject [guidance], /reset, /exit")
+        print("/help, /new, /model [id], /prompt, /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|bypass], /approve [session], /reject [guidance], /reset, /exit")
     elif command == "new":
         session.new()
         print("started a new conversation")
@@ -353,6 +381,13 @@ def _slash(text: str, session: FridaySession) -> None:
     elif command.startswith("memory"):
         result = run_memory_command(raw_command[len("memory") :].strip(), Path.cwd().resolve())
         print(format_memory_result(result))
+    elif command == "model":
+        _print_models(load_model_catalog(Path.cwd().resolve()))
+    elif command.startswith("model "):
+        profile_id = raw_command[len("model") :].strip()
+        select_model_profile(Path.cwd().resolve(), profile_id)
+        session.select_model(profile_id)
+        print(f"model: {profile_id}")
     elif command == "context":
         _agent, context = session.ensure()
         print(_context_report(context))
@@ -470,6 +505,50 @@ def _print_progress(progress: dict) -> None:
 
 def json_dump(value) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _model_cli(args) -> None:
+    root = Path.cwd().resolve()
+    if args.model_command == "list":
+        catalog = load_model_catalog(root)
+        print(json_dump(catalog) if args.json else _format_models(catalog))
+        return
+    if args.model_command == "use":
+        select_model_profile(root, args.id)
+        print(f"Selected model configuration: {args.id}")
+        return
+    if args.model_command == "remove":
+        delete_model_profile(root, args.id)
+        print(f"Removed model configuration: {args.id}")
+        return
+    provider = next(item for item in PROVIDERS if item["id"] == args.provider)
+    api_key = None if args.no_key else getpass.getpass(f"{provider['label']} API key (hidden): ")
+    catalog = save_model_profile(
+        root,
+        {
+            "id": args.id,
+            "name": args.name,
+            "provider": args.provider,
+            "model": args.model,
+            "base_url": args.base_url or provider["base_url"],
+        },
+        api_key=api_key,
+    )
+    print(f"Saved and selected: {catalog['active']}")
+
+
+def _format_models(catalog: dict) -> str:
+    lines = []
+    for profile in catalog["profiles"]:
+        active = "*" if profile["id"] == catalog["active"] else " "
+        vision = " [vision]" if profile["vision"] else ""
+        key = "key configured" if profile["api_key_configured"] else "key missing"
+        lines.append(f"{active} {profile['id']}: {profile['name']} ({profile['provider']}/{profile['model']}){vision} - {key}")
+    return "\n".join(lines)
+
+
+def _print_models(catalog: dict) -> None:
+    print(_format_models(catalog))
 
 
 def _memory_cli(args, parser: argparse.ArgumentParser) -> None:

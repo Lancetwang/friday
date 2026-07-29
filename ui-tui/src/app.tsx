@@ -36,6 +36,7 @@ const HELP_TEXT = `# Friday commands
 | \`/new\` | Start a new conversation in the current workspace. |
 | \`/prompt\` | Print the effective prompt. |
 | \`/memory [help]\` | Inspect or manage persistent memory. |
+| \`/model [id]\` | List configured models or switch the active model. |
 | \`/context\` | Print current context usage. |
 | \`/progress\` | Show the current objective and plan. |
 | \`/trace\` | Open the local Trace Workbench. |
@@ -332,6 +333,25 @@ function runCommand(
     void gateway.request<{ text: string }>('memory.command', { command: text.slice('/memory'.length).trim() }).then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
     )
+  } else if (text.trim().toLowerCase() === '/model') {
+    void gateway.request<{
+      active: string
+      profiles: Array<{ api_key_configured: boolean; id: string; model: string; name: string; provider: string; vision: boolean }>
+    }>('model.list').then(result => {
+      const lines = result.profiles.map(profile => {
+        const active = profile.id === result.active ? '*' : ' '
+        const vision = profile.vision ? ' [vision]' : ''
+        const key = profile.api_key_configured ? 'key configured' : 'key missing'
+        return `${active} ${profile.id}: ${profile.name} (${profile.provider}/${profile.model})${vision} - ${key}`
+      })
+      setMessages(items => [...items, { role: 'system', text: lines.join('\n') }])
+    })
+  } else if (command === '/model') {
+    const id = text.slice('/model'.length).trim()
+    void gateway.request<{ info: SessionInfo }>('model.select', { id }).then(result => {
+      setInfo(result.info)
+      setMessages(items => [...items, { role: 'system', text: `Model: ${result.info.model}` }])
+    })
   } else if (command.startsWith('/context')) {
     void gateway.request<{ text: string }>('context.get').then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])

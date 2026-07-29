@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import threading
+import time
 import unittest
 import json
 from pathlib import Path
@@ -12,8 +13,10 @@ from http.server import ThreadingHTTPServer
 
 from agent_core import RunContext
 
+import friday.trace_web as trace_web
+from friday.state import save_turn
 from friday.trace import begin_live_trace, finish_live_trace
-from friday.trace_web import TraceRequestHandler, analyze_trace, list_analyses, serve_trace_ui
+from friday.trace_web import TraceRequestHandler, analyze_trace, list_analyses, serve_trace_ui, start_trace_server
 
 
 class FakeModel:
@@ -35,11 +38,22 @@ class TraceWebTests(unittest.TestCase):
         # Event.wait() here would swallow Ctrl+C on Windows forever.
         server = MagicMock()
         with patch("friday.trace_web.start_trace_server", return_value=(server, "http://127.0.0.1:1")):
-            with patch("friday.trace_web.time.sleep", side_effect=KeyboardInterrupt):
-                with patch("builtins.print"):
-                    serve_trace_ui(open_browser=False)
+            with patch("friday.trace_web._trace_server_active", return_value=True):
+                with patch("friday.trace_web.time.sleep", side_effect=KeyboardInterrupt):
+                    with patch("friday.trace_web._close_trace_server") as close:
+                        with patch("builtins.print"):
+                            serve_trace_ui(open_browser=False)
 
-        server.shutdown.assert_called_once_with()
+        close.assert_called_once_with(server)
+
+    def test_trace_server_releases_its_port_after_browser_heartbeat_stops(self) -> None:
+        with patch("friday.trace_web._SERVER_IDLE_SECONDS", 0.02), patch("friday.trace_web._SERVER_POLL_SECONDS", 0.01):
+            server, _url = start_trace_server(port=0, open_browser=False)
+            deadline = time.time() + 1
+            while trace_web._trace_server_active(server) and time.time() < deadline:
+                time.sleep(0.01)
+
+        self.assertFalse(trace_web._trace_server_active(server))
 
     def test_analysis_chat_is_persisted_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": tmp}):
@@ -64,6 +78,7 @@ class TraceWebTests(unittest.TestCase):
             workspace = Path(tmp) / "workspace"
             context = RunContext(metadata={"workspace": str(workspace), "session_id": "s2"})
             path, turn_id = begin_live_trace(workspace, context=context, mode="chat", user="hello", prompt_messages=[])
+            save_turn(workspace, "hello", "hi", "s2", [])
             finish_live_trace(path, turn_id, status="done")
             server = ThreadingHTTPServer(("127.0.0.1", 0), TraceRequestHandler)
             thread = threading.Thread(target=server.serve_forever)
@@ -97,6 +112,26 @@ class TraceWebTests(unittest.TestCase):
 
             self.assertEqual([event["kind"] for event in body["events"]], ["user"])
             self.assertNotIn("node", body["events"][0])
+
+    def test_turn_api_groups_session_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": tmp}):
+            workspace = Path(tmp) / "workspace"
+            context = RunContext(metadata={"workspace": str(workspace), "session_id": "turns"})
+            path, turn_id = begin_live_trace(workspace, context=context, mode="chat", user="hello", prompt_messages=[])
+            finish_live_trace(path, turn_id, status="done", metrics={"elapsed_ms": 10})
+            server = ThreadingHTTPServer(("127.0.0.1", 0), TraceRequestHandler)
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                with urlopen(f"http://127.0.0.1:{server.server_port}/api/sessions/turns/turns") as response:
+                    body = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                thread.join()
+                server.server_close()
+
+            self.assertEqual(body["turns"][0]["user"], "hello")
+            self.assertEqual(body["turns"][0]["status"], "done")
 
     def test_analysis_endpoint_streams_deltas_and_final_answer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": tmp}):

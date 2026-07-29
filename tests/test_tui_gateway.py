@@ -144,6 +144,16 @@ class TuiGatewayTests(unittest.TestCase):
 
         self.assertEqual(ok.call_args.args[1], {"checkpoints": checkpoints})
 
+    def test_gateway_opens_trace_server_on_an_available_port(self) -> None:
+        gateway = Gateway()
+        server = object()
+        with patch("friday.app_server.start_trace_server", return_value=(server, "http://127.0.0.1:3210")) as start:
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle({"id": "1", "method": "trace.serve"})
+
+        start.assert_called_once_with(port=0)
+        ok.assert_called_once_with("1", {"url": "http://127.0.0.1:3210"})
+
     def test_gateway_reads_only_catalogued_skill_files(self) -> None:
         gateway = Gateway()
         with tempfile.TemporaryDirectory() as tmp:
@@ -184,6 +194,30 @@ class TuiGatewayTests(unittest.TestCase):
 
             self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "bypass")
             ok.assert_called_once_with("1", {"permission_mode": "bypass"})
+
+    def test_gateway_saves_model_key_without_returning_it(self) -> None:
+        gateway = Gateway()
+        with patch.object(gateway, "ok") as ok:
+            gateway.handle(
+                {
+                    "id": "1",
+                    "method": "model.save",
+                    "params": {
+                        "api_key": "private-key",
+                        "profile": {
+                            "name": "MiMo",
+                            "provider": "mimo",
+                            "model": "mimo-v2.5",
+                            "base_url": "https://api.xiaomimimo.com/v1",
+                        },
+                    },
+                }
+            )
+
+        result = ok.call_args.args[1]
+        self.assertNotIn("private-key", str(result))
+        self.assertTrue(result["info"]["model_configured"])
+        self.assertTrue(result["info"]["model_vision"])
 
     def test_gateway_renames_and_deletes_saved_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -47,9 +47,39 @@ type SessionInfo = {
   approval?: Approval
   cwd: string
   model: string
+  model_configured?: boolean
+  model_name?: string
+  model_profile?: string
+  model_vision?: boolean
   permission_mode: PermissionMode
   session_id?: string
   tools: string[]
+}
+
+type ModelProfile = {
+  api_key_configured: boolean
+  base_url: string
+  context_window: number
+  id: string
+  max_output_tokens: number
+  model: string
+  name: string
+  provider: string
+  run_token_budget: number
+  vision: boolean
+}
+
+type ModelProvider = {
+  base_url: string
+  id: string
+  label: string
+  models: Array<{ id: string; vision: boolean }>
+}
+
+type ModelCatalog = {
+  active: string
+  profiles: ModelProfile[]
+  providers: ModelProvider[]
 }
 
 type ResumeChoice = {
@@ -114,6 +144,7 @@ type ProjectView = {
   guidance: string
   info: SessionInfo
   items: TimelineItem[]
+  models: ModelCatalog
   pendingApproval: Approval | null
   sessions: ResumeChoice[]
   skills: SkillInfo[]
@@ -149,6 +180,8 @@ const welcome: TimelineItem = {
   text: 'Friday 已经准备好了。告诉我你想完成什么。'
 }
 
+const emptyModelCatalog: ModelCatalog = { active: '', profiles: [], providers: [] }
+
 function nextId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -162,6 +195,7 @@ function emptyView(path = ''): ProjectView {
     guidance: '',
     info: { cwd: path, model: path ? 'loading' : '', permission_mode: 'manual', tools: [] },
     items: [welcome],
+    models: emptyModelCatalog,
     pendingApproval: null,
     sessions: [],
     skills: [],
@@ -214,6 +248,7 @@ function App() {
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null)
   const [skillError, setSkillError] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
   const activeAssistants = useRef(new Map<string, string>())
@@ -225,7 +260,7 @@ function App() {
   const openProjects = useRef(new Set(initialProjects.current.map(pathKey)))
 
   const view = views[activeProject] || emptyView(activeProject)
-  const { activeSession, busy, checkpoints, draft, guidance, info, items, pendingApproval, sessions, skills, status } = view
+  const { activeSession, busy, checkpoints, draft, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
 
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
     setViews(current => ({
@@ -250,13 +285,17 @@ function App() {
     const id = `desktop-${++requestId.current}`
     return new Promise<T>((resolve, reject) => {
       pendingRequests.current.set(id, { resolve: value => resolve(value as T), reject, workspace })
-      void invoke('gateway_send', {
-        workspace,
-        message: JSON.stringify({ id, jsonrpc: '2.0', method, params })
+      const message = JSON.stringify({ id, jsonrpc: '2.0', method, params })
+      const write = () => invoke('gateway_send', { workspace, message })
+      void write().catch(async error => {
+        if (!String(error).includes('gateway is not running')) throw error
+        const resolved = await invoke<string>('gateway_start', { workspace })
+        startedProjects.current.add(pathKey(resolved))
+        await write()
       }).catch(error => {
-        pendingRequests.current.delete(id)
-        reject(error)
-      })
+          pendingRequests.current.delete(id)
+          reject(error)
+        })
     })
   }
 
@@ -285,13 +324,19 @@ function App() {
       updateView(workspace, current => ({ ...current, skills: result.skills }))
     })
 
+  const refreshModels = (workspace: string) =>
+    sendGateway<ModelCatalog>(workspace, 'model.list').then(result => {
+      updateView(workspace, current => ({ ...current, models: result }))
+    })
+
   const hydrateProject = (workspace: string) =>
     Promise.all([
       sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.current'),
       sendGateway<{ choices: ResumeChoice[] }>(workspace, 'session.resume_choices'),
       sendGateway<{ checkpoints: CheckpointChoice[] }>(workspace, 'checkpoint.list'),
-      sendGateway<{ skills: SkillInfo[] }>(workspace, 'skill.list')
-    ]).then(([current, saved, checkpointResult, skillResult]) => {
+      sendGateway<{ skills: SkillInfo[] }>(workspace, 'skill.list'),
+      sendGateway<ModelCatalog>(workspace, 'model.list')
+    ]).then(([current, saved, checkpointResult, skillResult, modelResult]) => {
       updateView(workspace, existing => ({
         ...existing,
         activeSession: current.info.session_id || '',
@@ -299,6 +344,7 @@ function App() {
         checkpoints: checkpointResult.checkpoints,
         info: current.info,
         items: timelineFromHistory(current.history),
+        models: modelResult,
         pendingApproval: current.info.approval?.pending ? current.info.approval : null,
         sessions: saved.choices,
         skills: skillResult.skills,
@@ -313,6 +359,7 @@ function App() {
   useEffect(() => {
     if (activeProject) localStorage.setItem(ACTIVE_PROJECT_KEY, activeProject)
     setRenaming(null)
+    setModelSettingsOpen(false)
     setSkillDetail(null)
     setSkillError('')
   }, [activeProject])
@@ -568,6 +615,39 @@ function App() {
     })
   }
 
+  const selectModel = (profileId: string) => {
+    if (busy || profileId === info.model_profile) return
+    void sendGateway<{ catalog: ModelCatalog; info: SessionInfo }>(activeProject, 'model.select', { id: profileId })
+      .then(result => {
+        updateView(activeProject, current => ({ ...current, info: result.info, models: result.catalog }))
+      })
+      .catch(error => updateView(activeProject, current => ({
+        ...current,
+        items: [...current.items, { id: nextId('model'), kind: 'system', text: String(error) }]
+      })))
+  }
+
+  const saveModel = (
+    profile: Omit<ModelProfile, 'api_key_configured' | 'vision'>,
+    apiKey: string,
+    clearApiKey: boolean
+  ) => sendGateway<{ catalog: ModelCatalog; info: SessionInfo }>(activeProject, 'model.save', {
+    activate: true,
+    api_key: apiKey || undefined,
+    clear_api_key: clearApiKey,
+    profile
+  }).then(result => {
+    updateView(activeProject, current => ({ ...current, info: result.info, models: result.catalog }))
+    return result.catalog
+  })
+
+  const deleteModel = (profileId: string) =>
+    sendGateway<{ catalog: ModelCatalog; info: SessionInfo }>(activeProject, 'model.delete', { id: profileId })
+      .then(result => {
+        updateView(activeProject, current => ({ ...current, info: result.info, models: result.catalog }))
+        return result.catalog
+      })
+
   const resolveApproval = (method: string, params: Record<string, unknown> = {}) => {
     updateView(activeProject, current => ({ ...current, busy: true }))
     void sendGateway(activeProject, method, params).catch(error => {
@@ -603,8 +683,9 @@ function App() {
   }
 
   const resumeSession = (session: ResumeChoice) => {
-    if (busy || session.id === activeSession) return
+    if (busy) return
     setPage('chat')
+    if (session.id === activeSession) return
     updateView(activeProject, current => ({ ...current, busy: true }))
     void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(activeProject, 'session.resume', { id: session.id }).then(result => {
       updateView(activeProject, current => ({
@@ -772,10 +853,21 @@ function App() {
       .catch(error => setSkillError(String(error)))
   }
 
+  const openObservability = () => {
+    if (!activeProject) return
+    void sendGateway<{ url: string }>(activeProject, 'trace.serve').catch(error => {
+      updateView(activeProject, current => ({
+        ...current,
+        items: [...current.items, { id: nextId('trace'), kind: 'system', text: String(error) }]
+      }))
+    })
+  }
+
   const selectedSession = sessions.find(session => session.id === activeSession)
   const conversationTitle = selectedSession ? sessionLabel(selectedSession) : 'New conversation'
   const project = projectLabel(activeProject)
   const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions[0]
+  const selectedModel = models.profiles.find(profile => profile.id === info.model_profile)
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -823,8 +915,22 @@ function App() {
               }}
               type="button"
             >
-              <span aria-hidden="true" className="plugin-nav-glyph">{'\u25c9'}</span>
+              <svg aria-hidden="true" className="nav-icon" fill="none" viewBox="0 0 24 24">
+                <path d="M12 22v-5M9 8V2M15 8V2M18 8v5a6 6 0 0 1-12 0V8Z" />
+              </svg>
               <span>Plugins</span>
+            </button>
+            <button
+              disabled={!activeProject}
+              onClick={openObservability}
+              title="Open Trace Workbench in browser"
+              type="button"
+            >
+              <svg aria-hidden="true" className="nav-icon" fill="none" viewBox="0 0 24 24">
+                <path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <span>Observability</span>
             </button>
           </nav>
 
@@ -913,13 +1019,20 @@ function App() {
           )) : <div className="empty-sessions">No saved conversations</div>}
           </section>
 
-          <div className="sidebar-footer">
-          <span className={`status-dot ${status}`} />
-          <div>
-            <strong>{busy ? 'Working' : status === 'ready' ? 'Ready' : status === 'error' ? 'Unavailable' : status === 'idle' ? 'No project' : 'Connecting'}</strong>
-            <span>{info.model}</span>
-          </div>
-          </div>
+          <button
+            className="sidebar-footer"
+            disabled={!activeProject}
+            onClick={() => setModelSettingsOpen(true)}
+            title="Configure models"
+            type="button"
+          >
+            <span className={`status-dot ${status} ${status === 'ready' && !info.model_configured ? 'needs-key' : ''}`} />
+            <span>
+              <strong>{busy ? 'Working' : status === 'ready' && !info.model_configured ? 'API key required' : status === 'ready' ? 'Ready' : status === 'error' ? 'Unavailable' : status === 'idle' ? 'No project' : 'Connecting'}</strong>
+              <span>{info.model_name || info.model}</span>
+            </span>
+            <span aria-hidden="true" className="footer-chevron">{'\u203a'}</span>
+          </button>
         </aside>
 
         <div
@@ -1015,6 +1128,48 @@ function App() {
             <span>Enter to send · Shift+Enter for a new line</span>
             <div className="composer-actions">
               <details
+                className={`model-picker ${busy ? 'disabled' : ''}`}
+                key={`${activeProject}-${info.model_profile}`}
+                onBlur={event => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute('open')
+                }}
+              >
+                <summary aria-disabled={busy} onClick={event => busy && event.preventDefault()}>
+                  {selectedModel?.vision && <VisionIcon />}
+                  <span>{selectedModel?.name || info.model_name || info.model}</span>
+                  <i aria-hidden="true" />
+                </summary>
+                <div className="model-menu">
+                  {models.profiles.map(profile => (
+                    <button
+                      className={profile.id === info.model_profile ? 'active' : ''}
+                      key={profile.id}
+                      onClick={event => {
+                        event.currentTarget.closest('details')?.removeAttribute('open')
+                        selectModel(profile.id)
+                      }}
+                      type="button"
+                    >
+                      <span className="model-menu-copy">
+                        <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
+                        <small>{profile.provider} / {profile.model}</small>
+                      </span>
+                      <span className={`model-key ${profile.api_key_configured ? 'configured' : ''}`} title={profile.api_key_configured ? 'API key configured' : 'API key required'} />
+                    </button>
+                  ))}
+                  <button
+                    className="configure-models"
+                    onClick={event => {
+                      event.currentTarget.closest('details')?.removeAttribute('open')
+                      setModelSettingsOpen(true)
+                    }}
+                    type="button"
+                  >
+                    Configure models
+                  </button>
+                </div>
+              </details>
+              <details
                 className={`permission-picker ${busy ? 'disabled' : ''}`}
                 key={`${activeProject}-permissions`}
                 onBlur={event => {
@@ -1068,9 +1223,200 @@ function App() {
         </>
         )}
         </main>
+        {modelSettingsOpen && (
+          <ModelSettings
+            catalog={models}
+            onClose={() => setModelSettingsOpen(false)}
+            onDelete={deleteModel}
+            onSave={saveModel}
+          />
+        )}
       </div>
     </div>
   )
+}
+
+type ModelDraft = Omit<ModelProfile, 'api_key_configured' | 'vision'>
+
+function VisionIcon() {
+  return (
+    <svg aria-label="Supports vision" className="vision-icon" fill="none" viewBox="0 0 24 24">
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+      <circle cx="12" cy="12" r="2.6" />
+    </svg>
+  )
+}
+
+function ModelSettings({
+  catalog,
+  onClose,
+  onDelete,
+  onSave
+}: {
+  catalog: ModelCatalog
+  onClose: () => void
+  onDelete: (id: string) => Promise<ModelCatalog>
+  onSave: (profile: ModelDraft, apiKey: string, clearApiKey: boolean) => Promise<ModelCatalog>
+}) {
+  const [selectedId, setSelectedId] = useState(catalog.active)
+  const [draft, setDraft] = useState<ModelDraft>(() => modelDraft(catalog.profiles.find(item => item.id === catalog.active)))
+  const [apiKey, setApiKey] = useState('')
+  const [clearApiKey, setClearApiKey] = useState(false)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const provider = catalog.providers.find(item => item.id === draft.provider) || catalog.providers[0]
+  const vision = provider?.models.find(item => item.id === draft.model)?.vision || false
+
+  const edit = (profile?: ModelProfile) => {
+    setSelectedId(profile?.id || '')
+    setDraft(modelDraft(profile, catalog.providers[0]))
+    setApiKey('')
+    setClearApiKey(false)
+    setError('')
+  }
+
+  const save = (event: FormEvent) => {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    void onSave(draft, apiKey, clearApiKey)
+      .then(result => {
+        const selected = result.profiles.find(item => item.id === result.active)
+        edit(selected)
+      })
+      .catch(value => setError(String(value)))
+      .finally(() => setSaving(false))
+  }
+
+  const remove = () => {
+    if (!selectedId || !window.confirm(`Remove "${draft.name}"?`)) return
+    setSaving(true)
+    setError('')
+    void onDelete(selectedId)
+      .then(result => edit(result.profiles.find(item => item.id === result.active)))
+      .catch(value => setError(String(value)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <div className="model-settings-backdrop" onMouseDown={onClose}>
+      <section aria-modal="true" className="model-settings" onMouseDown={event => event.stopPropagation()} role="dialog">
+        <header>
+          <div>
+            <h2>Models</h2>
+            <p>Provider credentials stay on this computer.</p>
+          </div>
+          <button aria-label="Close model settings" onClick={onClose} title="Close" type="button">{'\u00d7'}</button>
+        </header>
+        <div className="model-settings-body">
+          <aside>
+            <button className="add-model" onClick={() => edit()} type="button">+ Add model</button>
+            {catalog.profiles.map(profile => (
+              <button
+                className={profile.id === selectedId ? 'active' : ''}
+                key={profile.id}
+                onClick={() => edit(profile)}
+                type="button"
+              >
+                <span>
+                  <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
+                  <small>{profile.provider} / {profile.model}</small>
+                </span>
+                <span className={`model-key ${profile.api_key_configured ? 'configured' : ''}`} />
+              </button>
+            ))}
+          </aside>
+          <form onSubmit={save}>
+            <div className="model-form-heading">
+              <div>
+                <h3>{selectedId ? 'Model configuration' : 'New model'}</h3>
+                <p>{vision ? 'Vision supported' : 'Text model'}{vision && <VisionIcon />}</p>
+              </div>
+            </div>
+            <label>
+              <span>Name</span>
+              <input required value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} />
+            </label>
+            <fieldset className="provider-field">
+              <legend>Provider</legend>
+              <div className="provider-picker">
+                {catalog.providers.map(item => (
+                  <button
+                    aria-pressed={item.id === draft.provider}
+                    className={item.id === draft.provider ? 'active' : ''}
+                    key={item.id}
+                    onClick={() => setDraft(current => ({
+                      ...current,
+                      base_url: item.base_url,
+                      model: item.models[0]?.id || '',
+                      provider: item.id
+                    }))}
+                    type="button"
+                  >
+                    <strong>{item.label}</strong>
+                    <small>{item.models.length} suggested models</small>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <label>
+              <span>Model</span>
+              <input
+                list={`models-${draft.provider}`}
+                required
+                value={draft.model}
+                onChange={event => setDraft(current => ({ ...current, model: event.target.value }))}
+              />
+              <datalist id={`models-${draft.provider}`}>
+                {provider?.models.map(item => <option key={item.id} value={item.id} />)}
+              </datalist>
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input required type="url" value={draft.base_url} onChange={event => setDraft(current => ({ ...current, base_url: event.target.value }))} />
+            </label>
+            <label>
+              <span>API key</span>
+              <input
+                autoComplete="off"
+                placeholder={selectedId ? 'Leave blank to keep the saved key' : 'Required unless set in the environment'}
+                type="password"
+                value={apiKey}
+                onChange={event => {
+                  setApiKey(event.target.value)
+                  if (event.target.value) setClearApiKey(false)
+                }}
+              />
+            </label>
+            {selectedId && (
+              <label className="clear-key">
+                <input checked={clearApiKey} onChange={event => setClearApiKey(event.target.checked)} type="checkbox" />
+                <span>Remove saved API key</span>
+              </label>
+            )}
+            {error && <div className="model-settings-error">{error}</div>}
+            <footer>
+              <button className="remove-model" disabled={saving || !selectedId || catalog.profiles.length < 2} onClick={remove} type="button">Remove</button>
+              <button className="save-model" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save and use'}</button>
+            </footer>
+          </form>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function modelDraft(profile?: ModelProfile, provider?: ModelProvider): ModelDraft {
+  return {
+    base_url: profile?.base_url || provider?.base_url || '',
+    context_window: profile?.context_window || 353000,
+    id: profile?.id || '',
+    max_output_tokens: profile?.max_output_tokens || 65536,
+    model: profile?.model || provider?.models[0]?.id || '',
+    name: profile?.name || '',
+    provider: profile?.provider || provider?.id || '',
+    run_token_budget: profile?.run_token_budget || 2824000
+  }
 }
 
 function SkillBrowser({
