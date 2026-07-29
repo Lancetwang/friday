@@ -16,6 +16,26 @@
   --selection: rgba(45, 45, 43, 0.07);
   --success: #00c853;
   --danger: #ff5f38;
+  --text-micro: 0.5625rem;
+  --text-caption: 0.625rem;
+  --text-label: 0.6875rem;
+  --text-control: 0.75rem;
+  --text-ui: 0.8125rem;
+  --text-body: 0.875rem;
+  --text-input: 0.9375rem;
+  --text-reading: 1rem;
+  --text-subtitle: 1.125rem;
+  --text-title: 1.25rem;
+  --text-hero: 1.75rem;
+  --weight-regular: 400;
+  --weight-medium: 550;
+  --weight-semibold: 650;
+  --leading-tight: 1.25;
+  --leading-control: 1.4;
+  --leading-body: 1.6;
+  --leading-reading: 1.72;
+  --spring: 440ms cubic-bezier(0.2, 1.35, 0.32, 1);
+  --spring-soft: 360ms cubic-bezier(0.22, 1.12, 0.36, 1);
 }
 
 * {
@@ -40,11 +60,19 @@ textarea {
 button {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out, opacity 120ms ease-out, transform 100ms ease-out;
+  transform: translateZ(0);
+  transition:
+    color 140ms ease-out,
+    background-color 140ms ease-out,
+    border-color 140ms ease-out,
+    opacity 140ms ease-out,
+    transform var(--spring);
 }
 
 button:active:not(:disabled) {
-  transform: scale(0.97);
+  transform: scale(0.94);
+  transition-duration: 80ms;
+  transition-timing-function: ease-out;
 }
 
 button:focus-visible,
@@ -81,8 +109,8 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
 }
 
 .titlebar-brand img {
@@ -274,15 +302,15 @@ summary:focus-visible {
 
 .brand strong {
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 1.15;
+  font-size: var(--text-input);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
 }
 
 .brand span,
 .sidebar-footer span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .sidebar-section {
@@ -310,14 +338,19 @@ summary:focus-visible {
   border-radius: 7px;
   color: var(--ink);
   background: transparent;
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
   text-align: left;
+  transform-origin: left center;
 }
 
 .sidebar-nav button:hover,
 .sidebar-nav button.active {
   background: var(--selection);
+}
+
+.sidebar-nav button:hover:not(:active) {
+  transform: translateX(3px) scale(1.01);
 }
 
 .sidebar-nav button:disabled {
@@ -334,6 +367,11 @@ summary:focus-visible {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+  transition: transform var(--spring);
+}
+
+.sidebar-nav button:hover .nav-icon {
+  transform: rotate(-4deg) scale(1.12);
 }
 
 .section-heading {
@@ -347,9 +385,9 @@ summary:focus-visible {
 .section-heading h2 {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0;
 }
 
 .section-heading button {
@@ -399,7 +437,7 @@ summary:focus-visible {
   border-radius: 7px;
   color: var(--ink);
   background: transparent;
-  transition: background-color 140ms ease-out;
+  transition: background-color 140ms ease-out, transform var(--spring-soft);
 }
 
 .project-entry:hover,
@@ -425,6 +463,14 @@ summary:focus-visible {
   gap: 8px;
   min-height: 35px;
   padding: 6px 9px;
+  transform-origin: left center;
+  transition: padding-right 120ms ease-out, transform var(--spring-soft);
+}
+
+.project-entry:hover .project-main:not(:active),
+.project-entry:focus-within .project-main:not(:active) {
+  padding-right: 52px;
+  transform: translateX(2px);
 }
 
 .project-main span:last-child,
@@ -435,8 +481,8 @@ summary:focus-visible {
 }
 
 .project-main span:last-child {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
 }
 
 .project-folder {
@@ -448,11 +494,13 @@ summary:focus-visible {
   stroke-width: 1.65;
   stroke-linecap: round;
   stroke-linejoin: round;
+  transition: color 140ms ease-out, transform var(--spring);
 }
 
 .project-entry.active .project-folder,
 .project-group.expanded .project-folder {
   color: var(--ink);
+  transform: scale(1.08);
 }
 
 .project-folder.busy {
@@ -472,32 +520,53 @@ summary:focus-visible {
   background: var(--danger);
 }
 
-.project-actions {
-  display: none;
-  margin-right: 8px;
+.project-actions,
+.session-actions {
+  display: flex;
+  position: absolute;
   align-items: center;
   gap: 2px;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(5px) scale(0.82);
+  transform-origin: right center;
+  transition: opacity 120ms ease-out, transform var(--spring);
 }
 
-.project-actions button {
+.project-actions {
+  right: 0;
+  margin-right: 8px;
+}
+
+.project-actions button,
+.session-actions button {
   display: grid;
   width: 18px;
   height: 18px;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 5px;
   color: var(--muted);
   background: transparent;
+}
+
+.project-actions button {
+  border-radius: 5px;
   font: 13px/1 Arial, sans-serif;
 }
 
 .project-entry:hover .project-actions,
-.project-entry:focus-within .project-actions {
-  display: flex;
+.project-entry:focus-within .project-actions,
+.session-entry:hover .session-actions,
+.session-entry:focus-within .session-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
 }
 
-.project-actions button:hover {
+.project-actions button:hover,
+.session-actions button:hover {
   color: var(--ink);
   background: transparent;
 }
@@ -512,8 +581,31 @@ summary:focus-visible {
 }
 
 .nested-sessions {
+  display: grid;
+  grid-template-rows: 0fr;
   min-width: 0;
-  margin: 2px 0 5px 21px;
+  margin-left: 21px;
+  opacity: 0;
+  transform: translateY(-8px) scaleY(0.96);
+  transform-origin: top;
+  transition:
+    grid-template-rows var(--spring-soft),
+    margin var(--spring-soft),
+    opacity 150ms ease-out,
+    transform var(--spring-soft);
+}
+
+.project-group.expanded .nested-sessions {
+  grid-template-rows: 1fr;
+  margin-top: 2px;
+  margin-bottom: 5px;
+  opacity: 1;
+  transform: translateY(0) scaleY(1);
+}
+
+.nested-sessions-content {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .session-main {
@@ -523,12 +615,17 @@ summary:focus-visible {
   justify-content: center;
   gap: 2px;
   padding: 7px 10px;
-  transition: padding-right 120ms ease-out;
+  transform-origin: left center;
+  transition: padding-right 120ms ease-out, transform var(--spring-soft);
+}
+
+.session-entry:hover .session-main:not(:active) {
+  transform: translateX(2px);
 }
 
 .session-main span {
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
 }
 
 .session-main input {
@@ -541,8 +638,8 @@ summary:focus-visible {
   color: var(--ink);
   background: rgba(255, 255, 255, 0.82);
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
 }
 
 .session-main input:focus {
@@ -553,7 +650,7 @@ summary:focus-visible {
 .session-main small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -565,18 +662,8 @@ summary:focus-visible {
 }
 
 .session-actions {
-  display: none;
-  position: absolute;
   right: 8px;
-  align-items: center;
-  gap: 2px;
   padding-left: 6px;
-  background: transparent;
-}
-
-.session-entry:hover .session-actions,
-.session-entry:focus-within .session-actions {
-  display: flex;
 }
 
 .session-entry:hover:not(.renaming) .session-main,
@@ -585,30 +672,18 @@ summary:focus-visible {
 }
 
 .session-entry.renaming .session-actions {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .session-actions button {
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  color: var(--muted);
-  background: transparent;
   font: 12px/1 Arial, sans-serif;
-}
-
-.session-actions button:hover {
-  color: var(--ink);
-  background: transparent;
 }
 
 .empty-sessions {
   padding: 7px 10px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .sidebar-footer {
@@ -633,8 +708,8 @@ summary:focus-visible {
 
 .sidebar-footer strong {
   color: var(--ink);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
 }
 
 .sidebar-footer .footer-chevron {
@@ -679,9 +754,9 @@ summary:focus-visible {
   max-width: min(54vw, 620px);
   margin: 0;
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.25;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -691,7 +766,7 @@ summary:focus-visible {
   max-width: min(54vw, 620px);
   margin: 2px 0 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -713,15 +788,15 @@ summary:focus-visible {
 .skills-heading h1 {
   margin: 0;
   color: var(--ink);
-  font-size: 30px;
-  font-weight: 620;
-  line-height: 1.2;
+  font-size: var(--text-hero);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
 }
 
 .skills-heading p {
   margin: 7px 0 24px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--text-body);
 }
 
 .skill-search {
@@ -735,6 +810,7 @@ summary:focus-visible {
   border-radius: 21px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.48);
+  transition: background-color 160ms ease-out, border-color 160ms ease-out, box-shadow var(--spring-soft), transform var(--spring-soft);
 }
 
 .skill-search input {
@@ -744,12 +820,14 @@ summary:focus-visible {
   outline: 0;
   color: var(--ink);
   background: transparent;
-  font-size: 13px;
+  font-size: var(--text-ui);
 }
 
 .skill-search:focus-within {
   border-color: rgba(45, 45, 43, 0.26);
   background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 8px 24px rgba(45, 45, 43, 0.06);
+  transform: translateY(-1px) scale(1.002);
 }
 
 .skills-section-heading {
@@ -764,13 +842,13 @@ summary:focus-visible {
 .skills-section-heading h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--text-input);
+  font-weight: var(--weight-semibold);
 }
 
 .skills-section-heading span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .skills-grid {
@@ -793,10 +871,16 @@ summary:focus-visible {
   color: var(--ink);
   background: transparent;
   text-align: left;
+  transform-origin: center;
 }
 
 .skill-card:hover {
   background: var(--selection);
+  transform: translateY(-2px) scale(1.012);
+}
+
+.skill-card:nth-child(2n) {
+  animation-delay: 35ms;
 }
 
 .skill-card-icon {
@@ -809,6 +893,11 @@ summary:focus-visible {
   color: var(--accent);
   background: rgba(45, 45, 43, 0.05);
   font: 18px/1 Arial, sans-serif;
+  transition: transform var(--spring);
+}
+
+.skill-card:hover .skill-card-icon {
+  transform: rotate(-5deg) scale(1.12);
 }
 
 .skill-card-copy {
@@ -826,13 +915,13 @@ summary:focus-visible {
 }
 
 .skill-card-copy strong {
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
 }
 
 .skill-card-copy small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .skill-card-check {
@@ -844,7 +933,7 @@ summary:focus-visible {
 .skill-error {
   padding: 28px 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-control);
 }
 
 .skill-error {
@@ -880,6 +969,7 @@ summary:focus-visible {
   color: var(--ink);
   background: var(--canvas);
   box-shadow: 0 24px 70px rgba(45, 45, 43, 0.18);
+  transform-origin: center;
 }
 
 .skill-modal > header {
@@ -906,21 +996,21 @@ summary:focus-visible {
 
 .skill-modal h2 {
   margin: 18px 0 5px;
-  font-size: 22px;
-  font-weight: 650;
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
   overflow-wrap: anywhere;
 }
 
 .skill-modal h2 span {
   color: var(--muted);
-  font-weight: 450;
+  font-weight: var(--weight-regular);
 }
 
 .skill-modal > p {
   margin: 0 0 7px;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--text-ui);
+  line-height: var(--leading-body);
   overflow-wrap: anywhere;
 }
 
@@ -928,7 +1018,7 @@ summary:focus-visible {
   overflow: hidden;
   margin-bottom: 16px;
   color: rgba(45, 45, 43, 0.44);
-  font-size: 9px;
+  font-size: var(--text-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -941,8 +1031,8 @@ summary:focus-visible {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.34);
-  font-size: 13px;
-  line-height: 1.65;
+  font-size: var(--text-ui);
+  line-height: var(--leading-body);
   overflow-wrap: anywhere;
 }
 
@@ -963,7 +1053,7 @@ summary:focus-visible {
 
 .skill-content code {
   font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .timeline {
@@ -971,6 +1061,7 @@ summary:focus-visible {
   overflow-y: auto;
   padding: 36px max(34px, calc((100% - 900px) / 2)) 38px;
   background: var(--canvas);
+  overscroll-behavior: contain;
 }
 
 .timeline.empty {
@@ -983,8 +1074,8 @@ summary:focus-visible {
   align-items: center;
   min-height: 34px;
   color: var(--ink);
-  font-size: 22px;
-  font-weight: 560;
+  font-size: var(--text-title);
+  font-weight: var(--weight-medium);
   letter-spacing: 0;
 }
 
@@ -1001,6 +1092,7 @@ summary:focus-visible {
   width: 100%;
   margin: 0;
   padding: 0;
+  transform-origin: center bottom;
 }
 
 .message + .message {
@@ -1057,11 +1149,13 @@ summary:focus-visible {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-caption);
   line-height: 1;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 120ms ease-out;
+  transform: translateY(-3px) scale(0.88);
+  transform-origin: right top;
+  transition: opacity 120ms ease-out, transform var(--spring-soft);
   white-space: nowrap;
   z-index: 1;
 }
@@ -1070,6 +1164,7 @@ summary:focus-visible {
 .message .message-body:focus-within .message-meta {
   opacity: 1;
   pointer-events: auto;
+  transform: translateY(0) scale(1);
 }
 
 .message.assistant .message-meta {
@@ -1131,16 +1226,16 @@ summary:focus-visible {
 .message-text {
   padding-top: 0;
   color: var(--ink);
-  font-size: 16px;
-  line-height: 1.72;
+  font-size: var(--text-reading);
+  line-height: var(--leading-reading);
   overflow-wrap: anywhere;
 }
 
 .message.user .message-text {
   color: var(--ink);
-  font-size: 14px;
-  font-weight: 450;
-  line-height: 1.55;
+  font-size: var(--text-body);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
 }
 
 .message.user .message-text p {
@@ -1178,20 +1273,20 @@ summary:focus-visible {
 .message-text h3,
 .message-text h4 {
   margin: 20px 0 9px;
-  line-height: 1.25;
+  line-height: var(--leading-tight);
 }
 
 .message-text h1 {
-  font-size: 21px;
+  font-size: var(--text-title);
 }
 
 .message-text h2 {
-  font-size: 18px;
+  font-size: var(--text-subtitle);
 }
 
 .message-text h3,
 .message-text h4 {
-  font-size: 16px;
+  font-size: var(--text-reading);
 }
 
 .message-text ul,
@@ -1209,7 +1304,7 @@ summary:focus-visible {
   padding: 2px 5px;
   border-radius: 4px;
   background: #eeeeec;
-  font: 12px/1.55 "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  font: var(--text-control)/var(--leading-body) "JetBrains Mono", "Cascadia Code", Consolas, monospace;
 }
 
 .message-text pre {
@@ -1245,7 +1340,7 @@ summary:focus-visible {
 .metrics {
   margin-top: 8px;
   color: #a09a92;
-  font-size: 10px;
+  font-size: var(--text-caption);
 }
 
 .system-row {
@@ -1255,7 +1350,7 @@ summary:focus-visible {
   border-radius: 6px;
   color: var(--muted);
   background: rgba(45, 45, 43, 0.06);
-  font-size: 10px;
+  font-size: var(--text-caption);
 }
 
 .tool-row {
@@ -1278,8 +1373,17 @@ summary:focus-visible {
   min-height: 28px;
   padding: 3px 0;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--text-label);
   list-style: none;
+  border-radius: 8px;
+  transform-origin: left center;
+  transition: color 140ms ease-out, background-color 140ms ease-out, transform var(--spring-soft);
+}
+
+.tool-row > summary:hover,
+.tool-subrow > summary:hover {
+  color: var(--ink);
+  transform: translateX(3px);
 }
 
 .tool-row > summary::-webkit-details-marker,
@@ -1314,12 +1418,12 @@ summary:focus-visible {
 .tool-row > summary strong,
 .tool-subrow > summary strong {
   color: var(--muted);
-  font-weight: 550;
+  font-weight: var(--weight-medium);
 }
 
 .tool-subrow > summary small {
   color: rgba(45, 45, 43, 0.42);
-  font-size: 9px;
+  font-size: var(--text-micro);
 }
 
 .tool-group-list {
@@ -1348,11 +1452,21 @@ summary:focus-visible {
   background: transparent;
 }
 
+.tool-row[open] > .tool-details,
+.tool-subrow[open] > .tool-details,
+.tool-row[open] > .tool-group-list {
+  --enter-offset: -6px;
+  --enter-overshoot: 1px;
+  --enter-scale-y: 0.9;
+  transform-origin: top left;
+  animation: spring-enter var(--spring-soft) backwards;
+}
+
 .tool-details > strong {
   display: block;
   margin-bottom: 5px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--text-micro);
   text-transform: uppercase;
 }
 
@@ -1361,7 +1475,7 @@ summary:focus-visible {
   overflow: auto;
   margin: 0 0 10px;
   color: #4f4b45;
-  font: 10px/1.6 "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  font: var(--text-caption)/var(--leading-body) "JetBrains Mono", "Cascadia Code", Consolas, monospace;
   white-space: pre-wrap;
 }
 
@@ -1375,7 +1489,7 @@ summary:focus-visible {
   gap: 5px;
   margin: 20px 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-caption);
 }
 
 .thinking span {
@@ -1401,6 +1515,7 @@ summary:focus-visible {
   border: 1px solid rgba(204, 125, 94, 0.28);
   border-radius: 7px;
   background: var(--accent-soft);
+  transform-origin: center top;
 }
 
 .approval-panel > strong,
@@ -1412,12 +1527,12 @@ summary:focus-visible {
 
 .approval-panel > code {
   overflow-wrap: anywhere;
-  font: 11px/1.6 "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  font: var(--text-label)/var(--leading-body) "JetBrains Mono", "Cascadia Code", Consolas, monospace;
 }
 
 .approval-panel > p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .approval-actions,
@@ -1425,7 +1540,7 @@ summary:focus-visible {
 .composer-actions {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
 }
 
 .approval-actions button,
@@ -1435,7 +1550,7 @@ summary:focus-visible {
   border-radius: 6px;
   color: var(--ink);
   background: rgba(255, 255, 255, 0.48);
-  font-size: 10px;
+  font-size: var(--text-caption);
 }
 
 .approval-actions .reject {
@@ -1469,12 +1584,14 @@ summary:focus-visible {
   border-radius: 16px;
   background: #fff;
   box-shadow: 0 10px 32px rgba(45, 45, 43, 0.07);
-  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
+  transform-origin: center bottom;
+  transition: border-color 140ms ease-out, box-shadow var(--spring-soft), transform var(--spring-soft);
 }
 
 .composer:focus-within {
   border-color: rgba(45, 45, 43, 0.26);
   box-shadow: 0 0 0 3px rgba(45, 45, 43, 0.035), 0 12px 36px rgba(45, 45, 43, 0.09);
+  transform: translateY(-2px) scale(1.002);
 }
 
 .composer textarea {
@@ -1487,8 +1604,8 @@ summary:focus-visible {
   outline: 0;
   color: var(--ink);
   background: transparent;
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: var(--text-input);
+  line-height: var(--leading-body);
 }
 
 .composer textarea::placeholder {
@@ -1504,7 +1621,7 @@ summary:focus-visible {
 
 .composer-footer > span {
   color: #9d978f;
-  font-size: 9px;
+  font-size: var(--text-micro);
 }
 
 .model-picker,
@@ -1515,18 +1632,19 @@ summary:focus-visible {
 .model-picker summary,
 .permission-picker summary {
   display: flex;
-  min-height: 30px;
+  min-height: 22px;
   align-items: center;
-  gap: 8px;
-  padding: 6px 9px 6px 11px;
-  border-radius: 9px;
+  gap: 5px;
+  padding: 3px 6px;
+  border-radius: 6px;
   color: var(--muted);
   background: transparent;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
   list-style: none;
   cursor: pointer;
-  transition: color 120ms ease-out, background-color 120ms ease-out;
+  transform-origin: center;
+  transition: color 140ms ease-out, background-color 140ms ease-out, transform var(--spring-soft);
 }
 
 .model-picker summary::-webkit-details-marker,
@@ -1540,6 +1658,15 @@ summary:focus-visible {
 .permission-picker[open] summary {
   color: var(--ink);
   background: var(--selection);
+  transform: scale(1.015);
+}
+
+.model-picker summary > span,
+.permission-picker summary > span {
+  overflow: hidden;
+  max-width: 108px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-picker summary i,
@@ -1549,7 +1676,7 @@ summary:focus-visible {
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   transform: translateY(-1px) rotate(45deg);
-  transition: transform 120ms ease-out;
+  transition: transform var(--spring-soft);
 }
 
 .model-picker[open] summary i,
@@ -1567,37 +1694,41 @@ summary:focus-visible {
 .permission-menu {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 6px);
   z-index: 20;
   display: grid;
-  width: 230px;
+  width: 196px;
   gap: 2px;
-  padding: 6px;
+  padding: 4px;
   border: 1px solid rgba(45, 45, 43, 0.12);
-  border-radius: 14px;
+  border-radius: 10px;
   background: #fff;
   box-shadow: 0 16px 45px rgba(45, 45, 43, 0.14);
+  transform-origin: right bottom;
+  font-size: var(--text-micro);
 }
 
 .model-menu {
   left: 0;
   right: auto;
-  width: 260px;
+  width: 204px;
+  transform-origin: left bottom;
 }
 
 .model-menu button,
 .permission-menu button {
   display: grid;
   grid-template-columns: 10px minmax(0, 1fr);
-  gap: 9px;
+  gap: 5px;
   align-items: center;
   width: 100%;
-  padding: 9px 10px;
+  padding: 5px 6px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 6px;
   color: var(--ink);
   background: transparent;
   text-align: left;
+  line-height: var(--leading-tight);
 }
 
 .model-menu button {
@@ -1612,6 +1743,11 @@ summary:focus-visible {
   background: var(--selection);
 }
 
+.model-menu button:hover:not(:active),
+.permission-menu button:hover:not(:active) {
+  transform: translateX(3px) scale(1.01);
+}
+
 .model-menu-copy {
   display: grid;
   min-width: 0;
@@ -1622,13 +1758,14 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
 }
 
 .model-menu-copy small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--text-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1637,21 +1774,23 @@ summary:focus-visible {
   justify-content: flex-start;
   margin-top: 3px;
   border-top: 1px solid var(--line);
-  border-radius: 0 0 9px 9px;
+  border-radius: 0 0 6px 6px;
   color: var(--muted);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
 }
 
 .vision-icon {
-  width: 13px;
-  height: 13px;
+  width: 11px;
+  height: 11px;
   flex: 0 0 auto;
   stroke: currentColor;
   stroke-width: 1.6;
 }
 
 .model-key {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: var(--accent);
@@ -1667,13 +1806,13 @@ summary:focus-visible {
 }
 
 .permission-menu strong {
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
 }
 
 .permission-menu small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--text-micro);
 }
 
 .permission-indicator {
@@ -1706,6 +1845,11 @@ summary:focus-visible {
 
 .composer-footer .send-button:hover:not(:disabled) {
   background: #000;
+  transform: scale(1.08);
+}
+
+.composer-footer .send-button:active:not(:disabled) {
+  transform: scale(0.9, 0.84);
 }
 
 .composer-footer .send-button:disabled {
@@ -1720,28 +1864,31 @@ summary:focus-visible {
   display: grid;
   inset: 0;
   place-items: center;
-  padding: 24px;
+  padding: 18px;
   background: rgba(45, 45, 43, 0.22);
   backdrop-filter: blur(8px);
 }
 
 .model-settings {
   display: grid;
-  width: min(820px, 100%);
-  max-height: min(640px, calc(100vh - 64px));
+  width: min(700px, 100%);
+  max-height: min(580px, calc(100vh - 52px));
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid rgba(45, 45, 43, 0.1);
-  border-radius: 20px;
+  border-radius: 14px;
   background: var(--canvas);
   box-shadow: 0 28px 80px rgba(45, 45, 43, 0.2);
+  transform-origin: center;
+  font-size: var(--text-control);
+  line-height: var(--leading-control);
 }
 
 .model-settings > header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 22px 24px 18px;
+  padding: 16px 19px 13px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1752,23 +1899,23 @@ summary:focus-visible {
 }
 
 .model-settings h2 {
-  font-size: 22px;
-  font-weight: 680;
+  font-size: var(--text-subtitle);
+  font-weight: var(--weight-semibold);
 }
 
 .model-settings > header p,
 .model-form-heading p {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .model-settings > header > button {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 5px;
   color: var(--muted);
   background: transparent;
   font-size: 18px;
@@ -1782,15 +1929,15 @@ summary:focus-visible {
 .model-settings-body {
   display: grid;
   min-height: 0;
-  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-columns: 190px minmax(0, 1fr);
 }
 
 .model-settings-body > aside {
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 12px;
+  padding: 10px 8px;
   border-right: 1px solid var(--line);
-  background: rgba(239, 239, 236, 0.56);
+  background: transparent;
 }
 
 .model-settings-body > aside button {
@@ -1799,9 +1946,9 @@ summary:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 11px;
-  border: 1px solid transparent;
-  border-radius: 11px;
+  padding: 8px 7px;
+  border: 0;
+  border-radius: 5px;
   color: var(--ink);
   background: transparent;
   text-align: left;
@@ -1812,12 +1959,8 @@ summary:focus-visible {
   background: var(--selection);
 }
 
-.model-settings-body > aside button.active {
-  border-color: rgba(45, 45, 43, 0.07);
-}
-
 .model-settings-body > aside .add-model {
-  margin-bottom: 8px;
+  margin-bottom: 5px;
   color: var(--muted);
 }
 
@@ -1831,13 +1974,14 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
 }
 
 .model-settings-body > aside small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--text-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1846,9 +1990,9 @@ summary:focus-visible {
   display: grid;
   min-height: 0;
   align-content: start;
-  gap: 15px;
+  gap: 11px;
   overflow-y: auto;
-  padding: 24px 28px;
+  padding: 18px 22px;
 }
 
 .model-form-heading {
@@ -1859,7 +2003,8 @@ summary:focus-visible {
 }
 
 .model-form-heading h3 {
-  font-size: 15px;
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
 }
 
 .model-form-heading p {
@@ -1870,32 +2015,33 @@ summary:focus-visible {
 
 .model-settings form > label:not(.clear-key) {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .model-settings label > span,
 .provider-field legend {
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-control);
 }
 
 .model-settings input {
   width: 100%;
   min-width: 0;
-  height: 40px;
-  padding: 0 12px;
+  height: 34px;
+  padding: 0 9px;
   border: 1px solid rgba(45, 45, 43, 0.14);
-  border-radius: 11px;
+  border-radius: 7px;
   outline: 0;
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.72);
-  font-size: 12px;
+  background: rgba(255, 255, 255, 0.42);
+  font-size: var(--text-control);
 }
 
 .model-settings input:focus {
   border-color: rgba(204, 125, 94, 0.55);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .provider-field {
@@ -1912,36 +2058,40 @@ summary:focus-visible {
 
 .provider-picker {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .provider-picker button {
   display: grid;
   min-width: 0;
   gap: 2px;
-  padding: 10px 12px;
-  border: 1px solid rgba(45, 45, 43, 0.1);
-  border-radius: 12px;
+  padding: 7px 6px 6px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.58);
+  background: transparent;
   text-align: left;
 }
 
 .provider-picker button:hover {
-  border-color: rgba(45, 45, 43, 0.18);
-  background: #fff;
+  color: #000;
+  background: transparent;
+  transform: translateY(-1px);
 }
 
 .provider-picker button.active {
-  border-color: rgba(204, 125, 94, 0.46);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px rgba(204, 125, 94, 0.08);
+  border-bottom-color: var(--ink);
+  background: transparent;
+  box-shadow: none;
 }
 
 .provider-picker strong {
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1949,7 +2099,7 @@ summary:focus-visible {
 .provider-picker small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--text-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1967,7 +2117,7 @@ summary:focus-visible {
 
 .model-settings-error {
   color: var(--danger);
-  font-size: 10px;
+  font-size: var(--text-caption);
 }
 
 .model-settings form > footer {
@@ -1978,11 +2128,11 @@ summary:focus-visible {
 }
 
 .model-settings form > footer button {
-  padding: 8px 12px;
+  padding: 7px 10px;
   border: 0;
-  border-radius: 9px;
-  font-size: 11px;
-  font-weight: 650;
+  border-radius: 6px;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
 }
 
 .model-settings .remove-model {
@@ -2005,6 +2155,58 @@ summary:focus-visible {
 .tool-details pre {
   scrollbar-color: rgba(104, 96, 84, 0.28) transparent;
   scrollbar-width: thin;
+}
+
+.skills-page,
+.timeline,
+.skill-card,
+.message,
+.system-row,
+.tool-row,
+.thinking {
+  animation: spring-enter var(--spring-soft) backwards;
+}
+
+.skill-modal,
+.approval-panel,
+.composer,
+.model-menu,
+.permission-menu,
+.model-settings {
+  --enter-offset: 14px;
+  --enter-scale-x: 0.95;
+  --enter-scale-y: 0.96;
+  animation: spring-enter var(--spring) backwards;
+}
+
+.skill-modal-backdrop,
+.model-settings-backdrop {
+  animation: materialize 180ms ease-out backwards;
+}
+
+@keyframes spring-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(var(--enter-offset, 9px)) scale(var(--enter-scale-x, 0.98), var(--enter-scale-y, 0.98));
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(var(--enter-overshoot, -1px)) scale(1.006);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes materialize {
+  0% {
+    opacity: 0;
+    backdrop-filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 @keyframes pulse {

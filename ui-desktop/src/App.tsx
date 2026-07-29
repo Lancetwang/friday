@@ -1093,7 +1093,9 @@ function App() {
                         </button>
                       </div>
                     </div>
-                    {isExpanded && <div className="nested-sessions">{renderSessions(path)}</div>}
+                    <div aria-hidden={!isExpanded} className="nested-sessions" inert={!isExpanded}>
+                      <div className="nested-sessions-content">{renderSessions(path)}</div>
+                    </div>
                   </div>
                 )
               })}
