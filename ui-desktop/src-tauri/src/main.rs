@@ -3,6 +3,7 @@
 use std::{
     collections::HashMap,
     env,
+    fs,
     path::PathBuf,
     sync::Mutex,
 };
@@ -22,18 +23,15 @@ fn workspace_root(requested: Option<String>) -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("FRIDAY_CWD") {
         return canonical_directory(PathBuf::from(path));
     }
-    let cwd = env::current_dir().map_err(|error| error.to_string())?;
-    if let Some(root) = cwd
-        .ancestors()
-        .find(|path| path.join("pyproject.toml").is_file())
-    {
-        return Ok(root.to_path_buf());
-    }
-    canonical_directory(
+    let home = env::var_os("FRIDAY_HOME").map(PathBuf::from).unwrap_or_else(|| {
         env::var_os("USERPROFILE")
             .map(PathBuf::from)
-            .unwrap_or(cwd),
-    )
+            .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+            .join(".friday")
+    });
+    let workspace = home.join("workspace");
+    fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
+    canonical_directory(workspace)
 }
 
 fn canonical_directory(path: PathBuf) -> Result<PathBuf, String> {

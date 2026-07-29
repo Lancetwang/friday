@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import shutil
 import tempfile
 import time
 import unittest
@@ -13,7 +14,7 @@ from agent_core import RunContext
 from friday.checkpoint import begin_checkpoint, checkpoint_choices, finish_checkpoint, restore_checkpoint
 from friday.app import undo_friday
 from friday.state import delete_session, save_turn
-from friday.storage import project_state_dir
+from friday.storage import checkpoint_dir, project_state_dir
 from friday.trace import begin_live_trace
 
 
@@ -187,6 +188,22 @@ class CheckpointTests(unittest.TestCase):
             self.assertFalse(path.parent.exists())
             self.assertFalse(artifacts.exists())
             self.assertEqual(checkpoint_choices(root), [])
+
+    def test_missing_internal_git_refs_are_repaired_without_a_project_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "work.txt").write_text("before", encoding="utf-8")
+            first = self._begin(root)
+            (root / "work.txt").write_text("after", encoding="utf-8")
+            finish_checkpoint(root, first, pending=False)
+            repo = checkpoint_dir(root) / "repo.git"
+            shutil.rmtree(repo / "refs")
+
+            second = self._begin(root)
+            finish_checkpoint(root, second, pending=False)
+
+            self.assertTrue((repo / "refs").is_dir())
+            self.assertEqual([choice["id"] for choice in checkpoint_choices(root)], [second, first])
 
     def _begin(self, root: Path) -> str:
         context = RunContext(metadata={"workspace": str(root), "session_id": "session-1"})

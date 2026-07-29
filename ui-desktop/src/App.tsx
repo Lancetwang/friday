@@ -174,12 +174,14 @@ const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
 const DEFAULT_SIDEBAR_WIDTH = 252
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 520
-const welcome: TimelineItem = {
-  id: 'welcome',
-  kind: 'assistant',
-  text: 'Friday 已经准备好了。告诉我你想完成什么。'
-}
-
+const WELCOME_MESSAGES = [
+  '今天我们从哪里开始？',
+  '今天我能帮你做什么？',
+  '从一个想法开始吧。',
+  'What are we building today?',
+  'Where should we begin?',
+  'Ready when you are.'
+]
 const emptyModelCatalog: ModelCatalog = { active: '', profiles: [], providers: [] }
 
 function nextId(prefix: string) {
@@ -194,7 +196,7 @@ function emptyView(path = ''): ProjectView {
     draft: '',
     guidance: '',
     info: { cwd: path, model: path ? 'loading' : '', permission_mode: 'manual', tools: [] },
-    items: [welcome],
+    items: [],
     models: emptyModelCatalog,
     pendingApproval: null,
     sessions: [],
@@ -241,7 +243,9 @@ function App() {
   const initialProjects = useRef(loadProjects())
   const [projects, setProjects] = useState<string[]>(initialProjects.current)
   const [activeProject, setActiveProject] = useState(localStorage.getItem(ACTIVE_PROJECT_KEY) || '')
-  const [renaming, setRenaming] = useState<{ id: string; original: string; title: string } | null>(null)
+  const [defaultWorkspace, setDefaultWorkspace] = useState('')
+  const [renaming, setRenaming] = useState<{ id: string; original: string; title: string; workspace: string } | null>(null)
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [page, setPage] = useState<'chat' | 'skills'>('chat')
@@ -253,6 +257,7 @@ function App() {
   const activeProjectRef = useRef(activeProject)
   const activeAssistants = useRef(new Map<string, string>())
   const bottom = useRef<HTMLDivElement | null>(null)
+  const followOutput = useRef(true)
   const pendingRequests = useRef(new Map<string, PendingRequest>())
   const requestId = useRef(0)
   const sidebarDrag = useRef<{ startWidth: number; startX: number } | null>(null)
@@ -261,6 +266,7 @@ function App() {
 
   const view = views[activeProject] || emptyView(activeProject)
   const { activeSession, busy, checkpoints, draft, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
+  const isDefaultWorkspace = Boolean(defaultWorkspace && samePath(defaultWorkspace, activeProject))
 
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
     setViews(current => ({
@@ -357,12 +363,14 @@ function App() {
   }, [projects])
 
   useEffect(() => {
-    if (activeProject) localStorage.setItem(ACTIVE_PROJECT_KEY, activeProject)
+    const tracked = projects.some(path => samePath(path, activeProject))
+    if (activeProject && tracked) localStorage.setItem(ACTIVE_PROJECT_KEY, activeProject)
+    else localStorage.removeItem(ACTIVE_PROJECT_KEY)
     setRenaming(null)
     setModelSettingsOpen(false)
     setSkillDetail(null)
     setSkillError('')
-  }, [activeProject])
+  }, [activeProject, projects])
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
@@ -537,18 +545,24 @@ function App() {
         }))
       })
       if (disposed) return
-      const requested = localStorage.getItem(ACTIVE_PROJECT_KEY) || initialProjects.current[0] || undefined
+      const saved = localStorage.getItem(ACTIVE_PROJECT_KEY) || ''
+      const requested = initialProjects.current.find(path => samePath(path, saved)) || initialProjects.current[0]
+      let trackedStartup = Boolean(requested)
       let workspace: string
       try {
-        workspace = await invoke<string>('gateway_start', { workspace: requested })
+        workspace = await invoke<string>('gateway_start', { workspace: requested || null })
       } catch {
         if (requested) setProjects(current => current.filter(path => !samePath(path, requested)))
-        workspace = await invoke<string>('gateway_start')
+        trackedStartup = false
+        workspace = await invoke<string>('gateway_start', { workspace: null })
       }
       startedProjects.current.add(pathKey(workspace))
+      openProjects.current.add(pathKey(workspace))
+      setExpandedProjects(current => new Set(current).add(pathKey(workspace)))
       activeProjectRef.current = workspace
       setActiveProject(workspace)
-      rememberProject(workspace)
+      if (trackedStartup) rememberProject(workspace)
+      else setDefaultWorkspace(workspace)
       await hydrateProject(workspace)
     })().catch(error => {
       const workspace = activeProjectRef.current
@@ -578,7 +592,11 @@ function App() {
   }, [])
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: 'smooth' })
+    followOutput.current = true
+  }, [activeProject, activeSession])
+
+  useEffect(() => {
+    if (followOutput.current) bottom.current?.scrollIntoView()
   }, [activeProject, items])
 
   const submit = async (event?: FormEvent) => {
@@ -586,6 +604,7 @@ function App() {
     const text = draft.trim()
     if (!text || busy || pendingApproval || status !== 'ready') return
 
+    followOutput.current = true
     updateView(activeProject, current => ({
       ...current,
       busy: true,
@@ -659,13 +678,14 @@ function App() {
     })
   }
 
-  const startNewSession = () => {
-    if (busy || !activeProject) return
+  const startNewSessionAt = (workspace: string) => {
+    const current = views[workspace] || emptyView(workspace)
+    if (current.busy || !workspace) return Promise.resolve()
     setPage('chat')
-    updateView(activeProject, current => ({ ...current, busy: true }))
-    void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(activeProject, 'session.new').then(result => {
-      updateView(activeProject, current => ({
-        ...current,
+    updateView(workspace, value => ({ ...value, busy: true }))
+    return sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.new').then(result => {
+      updateView(workspace, value => ({
+        ...value,
         activeSession: '',
         busy: false,
         checkpoints: [],
@@ -674,21 +694,49 @@ function App() {
         pendingApproval: null
       }))
     }).catch(error => {
-      updateView(activeProject, current => ({
-        ...current,
+      updateView(workspace, value => ({
+        ...value,
         busy: false,
-        items: [...current.items, { id: nextId('session'), kind: 'system', text: String(error) }]
+        items: [...value.items, { id: nextId('session'), kind: 'system', text: String(error) }]
       }))
     })
   }
 
-  const resumeSession = (session: ResumeChoice) => {
-    if (busy) return
+  const addProjectSession = (event: MouseEvent, workspace: string) => {
+    event.stopPropagation()
+    void (async () => {
+      if (!samePath(workspace, activeProject)) await selectProject(workspace)
+      setExpandedProjects(current => new Set(current).add(pathKey(workspace)))
+      await startNewSessionAt(workspace)
+    })()
+  }
+
+  const addDefaultSession = (event: MouseEvent) => {
+    event.stopPropagation()
+    void (async () => {
+      let workspace = defaultWorkspace
+      if (!workspace || !samePath(workspace, activeProject)) {
+        workspace = await selectWorkspace() || ''
+      }
+      if (workspace) {
+        setExpandedProjects(current => new Set(current).add(pathKey(workspace)))
+        await startNewSessionAt(workspace)
+      }
+    })()
+  }
+
+  const resumeSession = async (workspace: string, session: ResumeChoice) => {
+    const projectView = views[workspace] || emptyView(workspace)
+    if (projectView.busy) return
     setPage('chat')
-    if (session.id === activeSession) return
-    updateView(activeProject, current => ({ ...current, busy: true }))
-    void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(activeProject, 'session.resume', { id: session.id }).then(result => {
-      updateView(activeProject, current => ({
+    if (!samePath(workspace, activeProject)) {
+      const resolved = await selectWorkspace(workspace, projects.some(path => samePath(path, workspace)))
+      if (!resolved) return
+    }
+    if (session.id === projectView.activeSession) return
+    updateView(workspace, current => ({ ...current, busy: true }))
+    void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.resume', { id: session.id }).then(result => {
+      updateView(workspace, current => ({
         ...current,
         activeSession: result.info.session_id || '',
         busy: false,
@@ -696,9 +744,9 @@ function App() {
         items: timelineFromHistory(result.history),
         pendingApproval: result.info.approval?.pending ? result.info.approval : null
       }))
-      void refreshCheckpoints(activeProject).catch(() => undefined)
+      void refreshCheckpoints(workspace).catch(() => undefined)
     }).catch(error => {
-      updateView(activeProject, current => ({
+      updateView(workspace, current => ({
         ...current,
         busy: false,
         items: [...current.items, { id: nextId('resume'), kind: 'system', text: String(error) }]
@@ -706,32 +754,56 @@ function App() {
     })
   }
 
-  const selectProject = async (workspace: string) => {
-    const known = projects.find(path => samePath(path, workspace)) || workspace
-    const wasStarted = startedProjects.current.has(pathKey(known))
+  const selectWorkspace = async (workspace?: string, tracked = false, expand = true) => {
+    const known = workspace
+      ? projects.find(path => samePath(path, workspace)) || workspace
+      : defaultWorkspace
+    const wasStarted = Boolean(known && startedProjects.current.has(pathKey(known)))
     setPage('chat')
-    activeProjectRef.current = known
-    setActiveProject(known)
-    updateView(known, current => ({ ...current, status: wasStarted ? current.status : 'connecting' }))
+    if (known) {
+      activeProjectRef.current = known
+      setActiveProject(known)
+      updateView(known, current => ({ ...current, status: wasStarted ? current.status : 'connecting' }))
+    }
     try {
-      const resolved = await invoke<string>('gateway_start', { workspace: known })
+      const resolved = await invoke<string>('gateway_start', { workspace: workspace || null })
       startedProjects.current.add(pathKey(resolved))
-      rememberProject(resolved)
+      openProjects.current.add(pathKey(resolved))
+      if (tracked) rememberProject(resolved)
+      else setDefaultWorkspace(resolved)
+      if (expand) setExpandedProjects(current => new Set(current).add(pathKey(resolved)))
       activeProjectRef.current = resolved
       setActiveProject(resolved)
-      if (!wasStarted) await hydrateProject(resolved)
+      if (!wasStarted || !views[resolved]) await hydrateProject(resolved)
+      return resolved
     } catch (error) {
-      updateView(known, current => ({
-        ...current,
-        items: [...current.items, { id: nextId('workspace'), kind: 'system', text: String(error) }],
-        status: 'error'
-      }))
+      if (known) {
+        updateView(known, current => ({
+          ...current,
+          items: [...current.items, { id: nextId('workspace'), kind: 'system', text: String(error) }],
+          status: 'error'
+        }))
+      }
+      return undefined
     }
+  }
+
+  const selectProject = (workspace: string) => selectWorkspace(workspace, true)
+
+  const toggleProject = (workspace: string) => {
+    const key = pathKey(workspace)
+    setExpandedProjects(current => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+    if (!samePath(workspace, activeProject)) void selectWorkspace(workspace, true, false)
   }
 
   const addProject = async () => {
     const selected = await open({
-      defaultPath: activeProject || undefined,
+      defaultPath: isDefaultWorkspace ? undefined : activeProject || undefined,
       directory: true,
       multiple: false,
       title: 'Add Friday project'
@@ -755,6 +827,11 @@ function App() {
     const key = pathKey(workspace)
     openProjects.current.delete(key)
     startedProjects.current.delete(key)
+    setExpandedProjects(current => {
+      const next = new Set(current)
+      next.delete(key)
+      return next
+    })
     for (const [id, pending] of pendingRequests.current) {
       if (samePath(pending.workspace, workspace)) {
         pending.reject(new Error('Project closed.'))
@@ -772,38 +849,37 @@ function App() {
     })
 
     if (samePath(activeProject, workspace)) {
-      const next = remaining[0] || ''
-      activeProjectRef.current = next
-      setActiveProject(next)
+      const next = remaining[0]
       if (next) await selectProject(next)
+      else await selectWorkspace()
     }
   }
 
-  const beginRenameConversation = (event: MouseEvent, session: ResumeChoice) => {
+  const beginRenameConversation = (event: MouseEvent, workspace: string, session: ResumeChoice) => {
     event.stopPropagation()
     const title = sessionLabel(session)
-    setRenaming({ id: session.id, original: title, title })
+    setRenaming({ id: session.id, original: title, title, workspace })
   }
 
-  const commitRenameConversation = (session: ResumeChoice, value: string) => {
-    if (renaming?.id !== session.id) return
+  const commitRenameConversation = (workspace: string, session: ResumeChoice, value: string) => {
+    if (renaming?.id !== session.id || !samePath(renaming.workspace, workspace)) return
     const title = value.trim()
     setRenaming(null)
     if (!title || title === renaming.original) return
-    void sendGateway(activeProject, 'session.rename', { id: session.id, title })
-      .then(() => refreshSessions(activeProject))
-      .catch(error => updateView(activeProject, current => ({
+    void sendGateway(workspace, 'session.rename', { id: session.id, title })
+      .then(() => refreshSessions(workspace))
+      .catch(error => updateView(workspace, current => ({
         ...current,
         items: [...current.items, { id: nextId('rename'), kind: 'system', text: String(error) }]
       })))
   }
 
-  const deleteConversation = (event: MouseEvent, session: ResumeChoice) => {
+  const deleteConversation = (event: MouseEvent, workspace: string, session: ResumeChoice) => {
     event.stopPropagation()
     if (!window.confirm(`Delete "${sessionLabel(session)}"?`)) return
-    void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(activeProject, 'session.delete', { id: session.id })
+    void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.delete', { id: session.id })
       .then(result => {
-        updateView(activeProject, current => session.id === current.activeSession
+        updateView(workspace, current => session.id === current.activeSession
           ? {
               ...current,
               activeSession: result.info.session_id || '',
@@ -813,9 +889,9 @@ function App() {
               pendingApproval: null
             }
           : current)
-        return Promise.all([refreshSessions(activeProject), refreshCheckpoints(activeProject)])
+        return Promise.all([refreshSessions(workspace), refreshCheckpoints(workspace)])
       })
-      .catch(error => updateView(activeProject, current => ({
+      .catch(error => updateView(workspace, current => ({
         ...current,
         items: [...current.items, { id: nextId('delete'), kind: 'system', text: String(error) }]
       })))
@@ -865,7 +941,7 @@ function App() {
 
   const selectedSession = sessions.find(session => session.id === activeSession)
   const conversationTitle = selectedSession ? sessionLabel(selectedSession) : 'New conversation'
-  const project = projectLabel(activeProject)
+  const project = isDefaultWorkspace ? 'Personal conversations' : projectLabel(activeProject)
   const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions[0]
   const selectedModel = models.profiles.find(profile => profile.id === info.model_profile)
 
@@ -894,7 +970,53 @@ function App() {
     setResizingSidebar(false)
   }
 
+  const renderSessions = (workspace: string) => {
+    const projectView = views[workspace] || emptyView(workspace)
+    const isCurrent = samePath(workspace, activeProject)
+    const isRenaming = (session: ResumeChoice) =>
+      renaming?.id === session.id && samePath(renaming.workspace, workspace)
+    return projectView.sessions.length ? projectView.sessions.map(session => (
+    <div className={`session-entry ${isCurrent && session.id === activeSession ? 'active' : ''} ${isRenaming(session) ? 'renaming' : ''}`} key={session.id}>
+      {isRenaming(session) ? (
+        <div className="session-main">
+          <input
+            aria-label="Conversation name"
+            autoFocus
+            onBlur={event => commitRenameConversation(workspace, session, event.currentTarget.value)}
+            onChange={event => setRenaming(current => current ? { ...current, title: event.target.value } : null)}
+            onFocus={event => event.currentTarget.select()}
+            onKeyDown={event => {
+              if (event.nativeEvent.isComposing) return
+              if (event.key === 'Enter') event.currentTarget.blur()
+              if (event.key === 'Escape') {
+                event.currentTarget.value = renaming?.original || ''
+                event.currentTarget.blur()
+              }
+            }}
+            value={renaming?.title || ''}
+          />
+          <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
+        </div>
+      ) : (
+        <button className="session-main" disabled={projectView.busy} onClick={() => void resumeSession(workspace, session)} type="button">
+          <span>{sessionLabel(session)}</span>
+          <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
+        </button>
+      )}
+      <div className="session-actions">
+        <button aria-label="Rename conversation" disabled={projectView.busy} onClick={event => beginRenameConversation(event, workspace, session)} title="Rename" type="button">
+          <span aria-hidden="true">{'\u270e'}</span>
+        </button>
+        <button aria-label="Delete conversation" disabled={projectView.busy} onClick={event => deleteConversation(event, workspace, session)} title="Delete" type="button">
+          <span aria-hidden="true">{'\u00d7'}</span>
+        </button>
+      </div>
+    </div>
+    )) : <div className="empty-sessions">No saved conversations</div>
+  }
+
   const timelineItems = bindCheckpoints(items, checkpoints, activeSession)
+  const showWelcome = status === 'ready' && !activeSession && !timelineItems.length && !pendingApproval && !busy
 
   return (
     <div className="desktop-window">
@@ -907,7 +1029,6 @@ function App() {
           <nav className="sidebar-nav">
             <button
               className={page === 'skills' ? 'active' : ''}
-              disabled={!activeProject}
               onClick={() => {
                 setPage('skills')
                 setSkillDetail(null)
@@ -934,90 +1055,66 @@ function App() {
             </button>
           </nav>
 
-          <section className="sidebar-section projects">
-          <div className="section-heading">
-            <h2>Projects</h2>
-            <button aria-label="Add project" onClick={() => void addProject()} title="Add project" type="button">+</button>
-          </div>
-          {projects.map(path => {
-            const projectView = views[path]
-            return (
-              <div className={`project-entry ${samePath(path, activeProject) ? 'active' : ''}`} key={path}>
-                <button className="project-main" onClick={() => void selectProject(path)} title={path} type="button">
-                  <span className={`project-dot ${projectView?.busy ? 'busy' : projectView?.status || ''}`} />
-                  <span>{projectLabel(path)}</span>
-                </button>
-                <button
-                  aria-label={`Close ${projectLabel(path)}`}
-                  className="project-close"
-                  onClick={event => void closeProject(event, path)}
-                  title="Close project"
-                  type="button"
-                >
-                  <span aria-hidden="true">{'\u00d7'}</span>
-                </button>
+          <div className="sidebar-tree">
+            <section className="sidebar-section projects">
+              <div className="section-heading">
+                <h2>Projects</h2>
+                <button aria-label="Add project" onClick={() => void addProject()} title="Add project" type="button">+</button>
               </div>
-            )
-          })}
-          </section>
+              {projects.map(path => {
+                const projectView = views[path]
+                const isActive = samePath(path, activeProject)
+                const isExpanded = expandedProjects.has(pathKey(path))
+                return (
+                  <div className={`project-group ${isExpanded ? 'expanded' : ''}`} key={path}>
+                    <div className={`project-entry ${isActive && !activeSession ? 'active' : ''}`}>
+                      <button className="project-main" onClick={() => toggleProject(path)} title={path} type="button">
+                        <FolderIcon className={projectView?.busy ? 'busy' : projectView?.status || ''} open={isExpanded} />
+                        <span>{projectLabel(path)}</span>
+                      </button>
+                      <div className="project-actions">
+                        <button
+                          aria-label={`New conversation in ${projectLabel(path)}`}
+                          disabled={isActive && (busy || status !== 'ready')}
+                          onClick={event => addProjectSession(event, path)}
+                          title="New conversation"
+                          type="button"
+                        >
+                          <span aria-hidden="true">+</span>
+                        </button>
+                        <button
+                          aria-label={`Close ${projectLabel(path)}`}
+                          className="project-close"
+                          onClick={event => void closeProject(event, path)}
+                          title="Close project"
+                          type="button"
+                        >
+                          <span aria-hidden="true">{'\u00d7'}</span>
+                        </button>
+                      </div>
+                    </div>
+                    {isExpanded && <div className="nested-sessions">{renderSessions(path)}</div>}
+                  </div>
+                )
+              })}
+            </section>
 
-          <section className="sidebar-section sessions">
-          <div className="section-heading">
-            <h2>Conversations</h2>
-            <button
-              aria-label="New conversation"
-              disabled={busy || !activeProject}
-              onClick={startNewSession}
-              title="New conversation"
-              type="button"
-            >
-              +
-            </button>
-          </div>
-          {sessions.length ? sessions.map(session => (
-            <div className={`session-entry ${session.id === activeSession ? 'active' : ''} ${renaming?.id === session.id ? 'renaming' : ''}`} key={session.id}>
-              {renaming?.id === session.id ? (
-                <div className="session-main">
-                  <input
-                    aria-label="Conversation name"
-                    autoFocus
-                    onBlur={event => commitRenameConversation(session, event.currentTarget.value)}
-                    onChange={event => setRenaming(current => current ? { ...current, title: event.target.value } : null)}
-                    onFocus={event => event.currentTarget.select()}
-                    onKeyDown={event => {
-                      if (event.nativeEvent.isComposing) return
-                      if (event.key === 'Enter') event.currentTarget.blur()
-                      if (event.key === 'Escape') {
-                        event.currentTarget.value = renaming.original
-                        event.currentTarget.blur()
-                      }
-                    }}
-                    value={renaming.title}
-                  />
-                  <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
-                </div>
-              ) : (
+            <section className="sidebar-section conversation-space">
+              <div className="section-heading">
+                <h2>Recent</h2>
                 <button
-                  className="session-main"
-                  disabled={busy}
-                  onClick={() => resumeSession(session)}
+                  aria-label="New personal conversation"
+                  disabled={isDefaultWorkspace && (busy || status !== 'ready')}
+                  onClick={addDefaultSession}
+                  title="New conversation"
                   type="button"
                 >
-                  <span>{sessionLabel(session)}</span>
-                  <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
-                </button>
-              )}
-              <div className="session-actions">
-                <button aria-label="Rename conversation" disabled={busy} onClick={event => beginRenameConversation(event, session)} title="Rename" type="button">
-                  <span aria-hidden="true">{'\u270e'}</span>
-                </button>
-                <button aria-label="Delete conversation" disabled={busy} onClick={event => deleteConversation(event, session)} title="Delete" type="button">
-                  <span aria-hidden="true">{'\u00d7'}</span>
+                  +
                 </button>
               </div>
-            </div>
-          )) : <div className="empty-sessions">No saved conversations</div>}
-          </section>
+              {defaultWorkspace && renderSessions(defaultWorkspace)}
+            </section>
+          </div>
 
           <button
             className="sidebar-footer"
@@ -1075,8 +1172,16 @@ function App() {
           </div>
         </header>
 
-        <section className="timeline" aria-live="polite">
-          {groupToolItems(timelineItems).map(item => Array.isArray(item)
+        <section
+          className={`timeline ${showWelcome ? 'empty' : ''}`}
+          aria-live="polite"
+          onScroll={event => {
+            const timeline = event.currentTarget
+            followOutput.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 96
+          }}
+        >
+          {showWelcome && <WelcomePrompt key={activeProject} />}
+          {!showWelcome && groupToolItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
               ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onRestore={restoreCheckpoint} />
               : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
@@ -1233,6 +1338,44 @@ function App() {
         )}
       </div>
     </div>
+  )
+}
+
+function WelcomePrompt() {
+  const [message] = useState(() => WELCOME_MESSAGES[Math.floor(Math.random() * WELCOME_MESSAGES.length)]!)
+  const characters = Array.from(message)
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const [visible, setVisible] = useState(reduceMotion ? characters.length : 0)
+
+  useEffect(() => {
+    if (reduceMotion) return
+    const timer = window.setInterval(() => {
+      setVisible(current => {
+        if (current >= characters.length - 1) {
+          window.clearInterval(timer)
+          return characters.length
+        }
+        return current + 1
+      })
+    }, 58)
+    return () => window.clearInterval(timer)
+  }, [characters.length, reduceMotion])
+
+  return (
+    <div aria-label={message} className="welcome-prompt">
+      <span aria-hidden="true">{characters.slice(0, visible).join('')}</span>
+      <i aria-hidden="true" />
+    </div>
+  )
+}
+
+function FolderIcon({ className = '', open }: { className?: string; open: boolean }) {
+  return (
+    <svg aria-hidden="true" className={`project-folder ${className}`} fill="none" viewBox="0 0 24 24">
+      {open
+        ? <path d="M3.5 8h17l-1.6 9.2a2 2 0 0 1-2 1.7H6a2 2 0 0 1-2-1.7L2.8 10A1.7 1.7 0 0 1 4.5 8Zm1-1.5V5.8a1.7 1.7 0 0 1 1.7-1.7h4l2 2.4H19a1.5 1.5 0 0 1 1.5 1.5" />
+        : <path d="M3.5 6.2a2 2 0 0 1 2-2h4.3l2.1 2.4h6.6a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" />}
+    </svg>
   )
 }
 
@@ -1599,18 +1742,16 @@ function bindCheckpoints(items: TimelineItem[], checkpoints: CheckpointChoice[],
 }
 
 function timelineFromHistory(history: HistoryItem[]) {
-  return history.length
-    ? history.map((item, index): TimelineItem => ({
-        arguments: item.arguments == null ? undefined : JSON.stringify(item.arguments, null, 2),
-        id: `history-${index}-${item.tool_call_id || item.kind}`,
-        kind: item.kind,
-        name: item.name,
-        status: item.status,
-        text: item.text,
-        createdAt: item.timestamp,
-        toolCallId: item.tool_call_id
-      }))
-    : [welcome]
+  return history.map((item, index): TimelineItem => ({
+    arguments: item.arguments == null ? undefined : JSON.stringify(item.arguments, null, 2),
+    id: `history-${index}-${item.tool_call_id || item.kind}`,
+    kind: item.kind,
+    name: item.name,
+    status: item.status,
+    text: item.text,
+    createdAt: item.timestamp,
+    toolCallId: item.tool_call_id
+  }))
 }
 
 function TimelineRow({

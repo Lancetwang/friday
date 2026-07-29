@@ -223,10 +223,29 @@ def _tree_paths(workspace: Path, tree: str) -> list[str]:
 
 def _ensure_repo(workspace: Path) -> None:
     repo = _repo_dir(workspace)
-    if not (repo / "HEAD").exists():
-        git = shutil.which("git")
-        if not git:
-            raise RuntimeError("Friday checkpoints require Git on PATH.")
+    git = shutil.which("git")
+    if not git:
+        raise RuntimeError("Friday checkpoints require Git on PATH.")
+
+    repaired_refs = False
+    if all((repo / name).exists() for name in ("HEAD", "config", "objects")):
+        repaired_refs = not (repo / "refs").exists()
+        (repo / "refs" / "heads").mkdir(parents=True, exist_ok=True)
+        (repo / "refs" / "tags").mkdir(parents=True, exist_ok=True)
+
+    check = subprocess.run(
+        [git, f"--git-dir={repo}", "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if check.returncode:
+        if repo.is_dir():
+            shutil.rmtree(repo)
+        elif repo.exists():
+            repo.unlink()
+        shutil.rmtree(_entries_dir(workspace), ignore_errors=True)
         repo.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [git, "init", "--bare", "--quiet", str(repo)],
@@ -237,6 +256,9 @@ def _ensure_repo(workspace: Path) -> None:
         )
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or "Could not initialize Friday checkpoint storage.")
+    elif repaired_refs:
+        for entry in _entries(workspace):
+            _sync_entry_refs(workspace, entry)
     exclude = repo / "info" / "exclude"
     exclude.parent.mkdir(parents=True, exist_ok=True)
     exclude.write_text("/.git/\n/.friday/\n", encoding="utf-8")
