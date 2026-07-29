@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
@@ -97,6 +98,7 @@ def run_loop(
     max_steps: int,
     stream: bool = True,
     compact_between_attempts: bool = False,
+    images: Sequence[str] = (),
     on_delta: Any = None,
     on_verify: Callable[[dict[str, Any]], None] | None = None,
 ) -> LoopResult:
@@ -109,6 +111,7 @@ def run_loop(
         "feedback": "",
         "force_verify": force_verify,
         "goal": goal,
+        "images": list(images),
         "last_attempt_signature": None,
         "last_repair_signature": None,
         "max_attempts": max_attempts,
@@ -146,12 +149,17 @@ def _attempt(state: dict[str, Any]):
     else:
         prompt = retry_prompt(state["goal"], state["attempt"] - 1, state["feedback"])
     event_start = len(state["context"].events)
-    state["answer"] = state["agent"].chat(
-        prompt,
-        context=state["context"],
-        max_steps=state["max_steps"],
-        on_delta=state["on_delta"],
-    )
+    kwargs = {
+        "context": state["context"],
+        "max_steps": state["max_steps"],
+        "on_delta": state["on_delta"],
+    }
+    if state["attempt"] == 1 and state["images"]:
+        kwargs["content"] = [
+            {"type": "text", "text": prompt},
+            *({"type": "image_url", "image_url": {"url": url}} for url in state["images"]),
+        ]
+    state["answer"] = state["agent"].chat(prompt, **kwargs)
     state["attempt_signature"] = _event_signature(state["context"].events[event_start:])
     return "verify", state
 

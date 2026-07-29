@@ -38,7 +38,7 @@ def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
     skill = sections.get("Skills", "")
     tool_schema = _tool_schema_text(tools)
     ordinary = "\n".join(
-        str(message.get("content", ""))
+        _content_text(message.get("content", ""))
         for message in context.get_messages()
         if message.get("role") in {"user", "assistant"}
     )
@@ -106,7 +106,7 @@ def compact_tool_results(context: RunContext, tools: list[Any] | None = None) ->
 
 
 def _context_text(context: RunContext) -> str:
-    return "\n".join(str(message.get("content", "")) for message in context.get_messages())
+    return "\n".join(_content_text(message.get("content", "")) for message in context.get_messages())
 
 
 def _tool_schema_text(tools: list[Any] | None) -> str:
@@ -114,7 +114,23 @@ def _tool_schema_text(tools: list[Any] | None) -> str:
 
 
 def _system_text(context: RunContext) -> str:
-    return "\n".join(str(message.get("content", "")) for message in context.get_messages() if message.get("role") == "system")
+    return "\n".join(_content_text(message.get("content", "")) for message in context.get_messages() if message.get("role") == "system")
+
+
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+            elif item.get("type") == "image_url":
+                parts.append("[image attachment]")
+        return "\n".join(parts)
+    return str(content or "")
 
 
 def _sections(text: str) -> dict[str, str]:

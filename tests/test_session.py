@@ -23,6 +23,19 @@ def _turn_result(answer: str) -> TurnResult:
 
 
 class SessionApprovalTests(unittest.TestCase):
+    def test_chat_rejects_images_for_a_text_only_model(self) -> None:
+        session = FridaySession()
+        session.agent = object()
+        session.context = RunContext(
+            metadata={
+                "workspace": str(session.workspace),
+                "friday.model_config": {"vision": False},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "does not support image"):
+            session.chat("describe it", images=["data:image/png;base64,aW1hZ2U="])
+
     def test_approve_continues_suspended_goal_with_original_text(self) -> None:
         session = FridaySession()
         session.suspended = {"text": "delete the stale export", "goal": True}

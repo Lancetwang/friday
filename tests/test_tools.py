@@ -15,8 +15,8 @@ from agent_core import Agent, RunContext, reset_current_context, set_current_con
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
 from friday.config import DEFAULT_MODEL_CONFIG, load_model_catalog, load_model_config, model_api_key, save_model_profile
-from friday.context import compact_tool_results, context_report
-from friday.loop import AGENT_MAX_STEPS, goal_chat, verified_chat
+from friday.context import _context_text, compact_tool_results, context_report
+from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
 from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
@@ -1010,10 +1010,30 @@ class ProgressTests(unittest.TestCase):
 
             self.assertEqual(current_progress(restored)["status"], "done")
             self.assertTrue(all(step["status"] == "completed" for step in current_progress(restored)["steps"]))
-            self.assertIn("## Current Session Progress", restored.messages[-1]["content"])
+            self.assertFalse(any(message.get("friday_progress") for message in restored.messages))
+
+            active = RunContext()
+            restore_progress(active, planned)
+            append_progress_checkpoint(active)
+            self.assertEqual(active.messages[-1]["role"], "system")
+            self.assertIn("## Current Session Progress", active.messages[-1]["content"])
 
 
 class CompactTests(unittest.TestCase):
+    def test_context_report_does_not_count_image_base64_as_text(self) -> None:
+        context = RunContext()
+        context.add_message(
+            "user",
+            [
+                {"type": "text", "text": "inspect this"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + ("a" * 5000)}},
+            ],
+        )
+
+        text = _context_text(context)
+
+        self.assertEqual(text, "inspect this\n[image attachment]")
+
     def test_session_title_survives_future_turns_and_session_can_be_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1233,6 +1253,31 @@ class CompactTests(unittest.TestCase):
 
 
 class VerificationTests(unittest.TestCase):
+    def test_first_loop_attempt_sends_multimodal_content(self) -> None:
+        agent = Mock()
+        agent.chat.return_value = "seen"
+        context = RunContext(metadata={"workspace": "."})
+        image = "data:image/png;base64,aW1hZ2U="
+
+        with patch("friday.loop.verify_friday", return_value=None):
+            run_loop(
+                agent,
+                context,
+                "describe it",
+                force_verify=False,
+                max_attempts=None,
+                max_steps=10,
+                images=[image],
+            )
+
+        self.assertEqual(
+            agent.chat.call_args.kwargs["content"],
+            [
+                {"type": "text", "text": "describe it"},
+                {"type": "image_url", "image_url": {"url": image}},
+            ],
+        )
+
     def test_inner_loop_suspends_immediately_when_tool_needs_approval(self) -> None:
         class ApprovalModel:
             def __init__(self) -> None:
@@ -1691,8 +1736,9 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(choices[1]["objective"], "finish first")
             self.assertEqual(choices[1]["status"], "blocked")
             self.assertEqual(context.metadata["session_id"], "s1")
-            self.assertEqual(non_system[-2], {"role": "assistant", "content": "one more"})
-            self.assertIn("## Current Session Progress", non_system[-1]["content"])
+            self.assertEqual(non_system[-1], {"role": "assistant", "content": "one more"})
+            self.assertIn("## Current Session Progress", context.get_messages()[-1]["content"])
+            self.assertEqual(context.get_messages()[-1]["role"], "system")
             self.assertIn({"role": "user", "content": "follow"}, non_system)
             self.assertNotIn({"role": "user", "content": "second"}, non_system)
 

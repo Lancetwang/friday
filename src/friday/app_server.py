@@ -27,6 +27,9 @@ from friday.tools import build_tools, pending_approval, permission_mode, set_per
 from friday.trace_web import start_trace_server
 
 _write_lock = threading.Lock()
+_IMAGE_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,", "data:image/gif;base64,")
+_MAX_IMAGE_CHARS = 14_000_000
+_MAX_TOTAL_IMAGE_CHARS = 20_000_000
 
 
 def main() -> None:
@@ -96,7 +99,8 @@ class Gateway:
             if method == "session.info":
                 self.ok(rid, self.session_info())
             elif method == "chat.send":
-                self.ok(rid, {"text": self.session.chat(str(params.get("text") or "")).answer})
+                images = _image_urls(params.get("images"))
+                self.ok(rid, {"text": self.session.chat(str(params.get("text") or ""), images=images).answer})
             elif method == "goal.run":
                 self.ok(rid, {"text": self.session.chat(str(params.get("text") or ""), goal=True).answer})
             elif method == "memory.command":
@@ -348,10 +352,16 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
 
     for message in session.context.get_messages():
         role = message.get("role")
-        content = str(message.get("content") or "")
+        content = _message_text(message.get("content"))
         if role == "user" and content:
             flush_assistant()
-            history.append({"kind": "user", "text": content})
+            history.append(
+                {
+                    "images": _message_images(message.get("content")),
+                    "kind": "user",
+                    "text": content,
+                }
+            )
         elif role == "assistant" and not message.get("friday_progress"):
             for call in message.get("tool_calls") or []:
                 function = call.get("function") if isinstance(call, dict) else {}
@@ -406,6 +416,38 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                 item["timestamp"] = str(record.get("time") or "")
                 break
     return history
+
+
+def _image_urls(value: Any) -> list[str]:
+    if value in (None, []):
+        return []
+    if not isinstance(value, list) or len(value) > 4:
+        raise ValueError("Attach at most four images.")
+    images = [str(item) for item in value]
+    if any(len(item) > _MAX_IMAGE_CHARS or not item.lower().startswith(_IMAGE_PREFIXES) for item in images):
+        raise ValueError("Images must be PNG, JPEG, WebP, or GIF data URLs no larger than 10 MB.")
+    if sum(map(len, images)) > _MAX_TOTAL_IMAGE_CHARS:
+        raise ValueError("Attached images are too large.")
+    return images
+
+
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text = [str(part.get("text") or "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+        return "\n".join(filter(None, text)) or "[Image]"
+    return str(content or "")
+
+
+def _message_images(content: Any) -> list[str]:
+    if not isinstance(content, list):
+        return []
+    return [
+        str((part.get("image_url") or {}).get("url") or "")
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    ]
 
 
 if __name__ == "__main__":

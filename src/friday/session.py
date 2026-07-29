@@ -9,6 +9,7 @@ event subscribers survive the swap.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable
 
@@ -78,8 +79,12 @@ class FridaySession:
         approval_result: dict[str, Any] | None = None,
         user_label: str | None = None,
         continuation: bool = False,
+        images: Sequence[str] = (),
     ) -> TurnResult:
         agent, context = self.ensure()
+        config = context.metadata.get("friday.model_config")
+        if images and (not isinstance(config, dict) or not config.get("vision")):
+            raise ValueError("The selected model does not support image input.")
         if self.on_turn_start is not None:
             self.on_turn_start(text)
         result = run_turn(
@@ -95,6 +100,7 @@ class FridaySession:
             approval_result=approval_result,
             user_label=user_label,
             continuation=continuation,
+            images=images,
         )
         self._adopt(result.agent, result.context)
         self.suspended = {"text": text, "goal": goal} if pending_approval(self.workspace).get("pending") else None

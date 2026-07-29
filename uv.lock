@@ -92,20 +92,20 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.54.0" },
-    { name = "friday-agent-core", specifier = "==0.1.1" },
+    { name = "friday-agent-core", specifier = "==0.1.3", index = "https://pypi.org/simple" },
     { name = "rich", specifier = ">=13.7.0" },
 ]
 
 [[package]]
 name = "friday-agent-core"
-version = "0.1.1"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openai" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/10/81/7b760606821afdf716f96df1918cdc7047e0d8811bd6df4a3be726fd317b/friday_agent_core-0.1.1.tar.gz", hash = "sha256:b642d206a97d78bb1a7881c33f3ea857ed161eb9b3cf2b31df993e700f572c85" }
+sdist = { url = "https://files.pythonhosted.org/packages/f2/a4/1a4ea278c793bbb033419671a287c2b6710ac01ecf4a080f8ad95cac9d3d/friday_agent_core-0.1.3.tar.gz", hash = "sha256:47d95ab5abf3b5383043f83567339ffc290ef73cf9e1e871264b409b554a9052", size = 55515, upload-time = "2026-07-29T13:25:12.189Z" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/bd/9c/5430672c38be0cd0dcfafa3f57c464e9b4b23c490d35d5d232dd877e2c7d/friday_agent_core-0.1.1-py3-none-any.whl", hash = "sha256:4a2740b6d6762a1c57b60ef5f1805264e07cc66735d62d847ffb63d713d1a121" },
+    { url = "https://files.pythonhosted.org/packages/7c/d3/f3e0328af6deb4a396f194d0fd3fd696e47f226d14759088392181b87732/friday_agent_core-0.1.3-py3-none-any.whl", hash = "sha256:547456b4ed366214050192f4067f3226ef374b2910bdb2b6cadf2059b700b49e", size = 25214, upload-time = "2026-07-29T13:25:10.557Z" },
 ]
 
 [[package]]

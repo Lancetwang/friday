@@ -113,8 +113,14 @@ type SkillDetail = {
   skill: SkillInfo
 }
 
+type ImageAttachment = {
+  dataUrl: string
+  name: string
+}
+
 type HistoryItem = {
   arguments?: unknown
+  images?: string[]
   kind: TimelineItem['kind']
   name?: string
   status?: TimelineItem['status']
@@ -128,6 +134,7 @@ type TimelineItem = {
   checkpointId?: string
   createdAt?: string
   id: string
+  images?: string[]
   kind: 'assistant' | 'system' | 'tool' | 'user'
   metrics?: Metrics
   name?: string
@@ -138,6 +145,7 @@ type TimelineItem = {
 
 type ProjectView = {
   activeSession: string
+  attachment: ImageAttachment | null
   busy: boolean
   checkpoints: CheckpointChoice[]
   draft: string
@@ -174,6 +182,7 @@ const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
 const DEFAULT_SIDEBAR_WIDTH = 252
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 520
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const WELCOME_MESSAGES = [
   '今天我们从哪里开始？',
   '今天我能帮你做什么？',
@@ -191,6 +200,7 @@ function nextId(prefix: string) {
 function emptyView(path = ''): ProjectView {
   return {
     activeSession: '',
+    attachment: null,
     busy: false,
     checkpoints: [],
     draft: '',
@@ -203,6 +213,23 @@ function emptyView(path = ''): ProjectView {
     skills: [],
     status: path ? 'connecting' : 'idle'
   }
+}
+
+function readImage(file: File) {
+  return new Promise<ImageAttachment>((resolve, reject) => {
+    if (file.size > MAX_IMAGE_BYTES) {
+      reject(new Error('Images must be 10 MB or smaller.'))
+      return
+    }
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
+      reject(new Error('Paste a PNG, JPEG, WebP, or GIF image.'))
+      return
+    }
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Friday could not read the pasted image.'))
+    reader.onload = () => resolve({ dataUrl: String(reader.result || ''), name: file.name || 'Pasted image' })
+    reader.readAsDataURL(file)
+  })
 }
 
 function loadProjects() {
@@ -253,6 +280,7 @@ function App() {
   const [skillError, setSkillError] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
+  const [previewImage, setPreviewImage] = useState('')
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
   const activeAssistants = useRef(new Map<string, string>())
@@ -265,7 +293,7 @@ function App() {
   const openProjects = useRef(new Set(initialProjects.current.map(pathKey)))
 
   const view = views[activeProject] || emptyView(activeProject)
-  const { activeSession, busy, checkpoints, draft, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
+  const { activeSession, attachment, busy, checkpoints, draft, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
   const isDefaultWorkspace = Boolean(defaultWorkspace && samePath(defaultWorkspace, activeProject))
 
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
@@ -368,6 +396,7 @@ function App() {
     else localStorage.removeItem(ACTIVE_PROJECT_KEY)
     setRenaming(null)
     setModelSettingsOpen(false)
+    setPreviewImage('')
     setSkillDetail(null)
     setSkillError('')
   }, [activeProject, projects])
@@ -603,18 +632,28 @@ function App() {
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault()
-    const text = draft.trim()
+    const text = draft.trim() || (attachment ? 'Please analyze the attached image.' : '')
     if (!text || busy || pendingApproval || status !== 'ready') return
 
     followOutput.current = true
     updateView(activeProject, current => ({
       ...current,
+      attachment: null,
       busy: true,
       draft: '',
-      items: [...current.items, { createdAt: new Date().toISOString(), id: nextId('user'), kind: 'user', text }]
+      items: [
+        ...current.items,
+        {
+          createdAt: new Date().toISOString(),
+          id: nextId('user'),
+          images: attachment ? [attachment.dataUrl] : [],
+          kind: 'user',
+          text
+        }
+      ]
     }))
     try {
-      await sendGateway(activeProject, 'chat.send', { text })
+      await sendGateway(activeProject, 'chat.send', { images: attachment ? [attachment.dataUrl] : [], text })
     } catch (error) {
       updateView(activeProject, current => ({
         ...current,
@@ -885,6 +924,7 @@ function App() {
           ? {
               ...current,
               activeSession: result.info.session_id || '',
+              attachment: null,
               checkpoints: [],
               info: result.info,
               items: timelineFromHistory(result.history),
@@ -1191,9 +1231,9 @@ function App() {
           {showWelcome && <WelcomePrompt key={activeProject} />}
           {!showWelcome && groupToolItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
-              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onRestore={restoreCheckpoint} />
+              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onPreview={setPreviewImage} onRestore={restoreCheckpoint} />
               : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
-            : <TimelineRow busy={busy} item={item} key={item.id} onRestore={restoreCheckpoint} />)}
+            : <TimelineRow busy={busy} item={item} key={item.id} onPreview={setPreviewImage} onRestore={restoreCheckpoint} />)}
           {pendingApproval && (
             <section className="approval-panel">
               <strong>Approval required</strong>
@@ -1227,11 +1267,44 @@ function App() {
         </section>
 
         <form className="composer" onSubmit={submit}>
+          {attachment && (
+            <div className="composer-attachment">
+              <img alt={attachment.name} src={attachment.dataUrl} />
+              <button
+                aria-label="Remove pasted image"
+                onClick={() => updateView(activeProject, current => ({ ...current, attachment: null }))}
+                title="Remove image"
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+          )}
           <textarea
             aria-label="Message Friday"
             disabled={status !== 'ready' || Boolean(pendingApproval)}
             onChange={event => updateView(activeProject, current => ({ ...current, draft: event.target.value }))}
             onKeyDown={onKeyDown}
+            onPaste={event => {
+              const image = Array.from(event.clipboardData.files).find(file => file.type.startsWith('image/'))
+              if (!image) return
+              event.preventDefault()
+              if (!(selectedModel?.vision ?? info.model_vision)) {
+                updateView(activeProject, current => ({
+                  ...current,
+                  items: [...current.items, { id: nextId('image'), kind: 'system', text: 'Select a vision-capable model before attaching an image.' }]
+                }))
+                return
+              }
+              void readImage(image).then(value => {
+                updateView(activeProject, current => ({ ...current, attachment: value }))
+              }).catch(error => {
+                updateView(activeProject, current => ({
+                  ...current,
+                  items: [...current.items, { id: nextId('image'), kind: 'system', text: String(error) }]
+                }))
+              })
+            }}
             placeholder={pendingApproval ? 'Resolve the pending approval first...' : status === 'ready' ? 'Ask Friday to do something...' : 'Starting Friday...'}
             rows={3}
             value={draft}
@@ -1323,7 +1396,7 @@ function App() {
               <button
                 aria-label="Send message"
                 className="send-button"
-                disabled={!draft.trim() || busy || Boolean(pendingApproval) || status !== 'ready'}
+                disabled={(!draft.trim() && !attachment) || busy || Boolean(pendingApproval) || status !== 'ready'}
                 title="Send"
                 type="submit"
               >
@@ -1342,6 +1415,12 @@ function App() {
             onDelete={deleteModel}
             onSave={saveModel}
           />
+        )}
+        {previewImage && (
+          <div aria-modal="true" className="image-preview-backdrop" onMouseDown={() => setPreviewImage('')} role="dialog">
+            <button aria-label="Close image preview" onClick={() => setPreviewImage('')} type="button">{'\u00d7'}</button>
+            <img alt="Attached image preview" onMouseDown={event => event.stopPropagation()} src={previewImage} />
+          </div>
         )}
       </div>
     </div>
@@ -1752,6 +1831,7 @@ function timelineFromHistory(history: HistoryItem[]) {
   return history.map((item, index): TimelineItem => ({
     arguments: item.arguments == null ? undefined : JSON.stringify(item.arguments, null, 2),
     id: `history-${index}-${item.tool_call_id || item.kind}`,
+    images: item.images,
     kind: item.kind,
     name: item.name,
     status: item.status,
@@ -1764,10 +1844,12 @@ function timelineFromHistory(history: HistoryItem[]) {
 function TimelineRow({
   busy,
   item,
+  onPreview,
   onRestore
 }: {
   busy: boolean
   item: TimelineItem
+  onPreview: (image: string) => void
   onRestore: (checkpointId: string) => void
 }) {
   const [copied, setCopied] = useState(false)
@@ -1794,6 +1876,15 @@ function TimelineRow({
         <div className="message-text">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
         </div>
+        {item.images?.length ? (
+          <div className="message-images">
+            {item.images.map((image, index) => (
+              <button key={`${item.id}-image-${index}`} onClick={() => onPreview(image)} type="button">
+                <img alt={`Attachment ${index + 1}`} src={image} />
+              </button>
+            ))}
+          </div>
+        ) : null}
         {item.metrics && <MetricsLine metrics={item.metrics} />}
         {(item.kind === 'user' || item.checkpointId) && (
           <div className="message-meta">

@@ -27,6 +27,36 @@ def _turn_result(answer: str, verifications: list[dict] | None = None) -> TurnRe
 
 
 class TuiGatewayTests(unittest.TestCase):
+    def test_gateway_passes_valid_image_data_to_the_session(self) -> None:
+        gateway = Gateway()
+        image = "data:image/png;base64,aW1hZ2U="
+
+        with patch.object(gateway.session, "chat", return_value=_turn_result("seen")) as chat:
+            with patch.object(gateway, "ok"):
+                gateway.handle(
+                    {
+                        "id": "1",
+                        "method": "chat.send",
+                        "params": {"text": "describe it", "images": [image]},
+                    }
+                )
+
+        chat.assert_called_once_with("describe it", images=[image])
+
+    def test_gateway_rejects_non_image_data_urls(self) -> None:
+        gateway = Gateway()
+
+        with patch.object(gateway, "err") as error:
+            gateway.handle(
+                {
+                    "id": "1",
+                    "method": "chat.send",
+                    "params": {"text": "describe it", "images": ["data:text/plain;base64,bm8="]},
+                }
+            )
+
+        error.assert_called_once_with("1", "Images must be PNG, JPEG, WebP, or GIF data URLs no larger than 10 MB.")
+
     def setUp(self) -> None:
         self.state_tmp = tempfile.TemporaryDirectory()
         self.state_env = patch.dict(os.environ, {"FRIDAY_HOME": str(Path(self.state_tmp.name) / ".friday")})
@@ -260,7 +290,14 @@ class TuiGatewayTests(unittest.TestCase):
             }
         )
         context.add_message("system", "hidden prefix")
-        context.add_message("user", "Inspect skills")
+        image = "data:image/png;base64,aW1hZ2U="
+        context.add_message(
+            "user",
+            [
+                {"type": "text", "text": "Inspect skills"},
+                {"type": "image_url", "image_url": {"url": image}},
+            ],
+        )
         context.add_message(
             "assistant",
             "I will inspect.",
@@ -284,6 +321,7 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertEqual(history[1]["arguments"]["command"], "friday skill list --json")
         self.assertIn("No extra skills", history[2]["text"])
         self.assertEqual(history[0]["timestamp"], "2026-07-28T16:00:00+08:00")
+        self.assertEqual(history[0]["images"], [image])
         self.assertNotIn("hidden prefix", str(history))
 
     def test_gateway_continues_pending_goal_after_approval(self) -> None:

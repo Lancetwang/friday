@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,7 @@ def run_turn(
     approval_result: dict[str, Any] | None = None,
     user_label: str | None = None,
     continuation: bool = False,
+    images: Sequence[str] = (),
 ) -> TurnResult:
     event_handler = context.on_event
     observation_handler = context.on_observation
@@ -139,6 +141,7 @@ def run_turn(
             max_steps=AGENT_MAX_STEPS,
             stream=stream,
             compact_between_attempts=True,
+            images=images,
             on_delta=on_delta,
             on_verify=on_verify,
         )

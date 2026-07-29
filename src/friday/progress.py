@@ -105,15 +105,15 @@ def restore_progress(context: RunContext, value: Any) -> dict[str, Any]:
 
 def append_progress_checkpoint(context: RunContext) -> None:
     state = current_progress(context)
-    if state:
-        collections = [context.messages]
-        scoped = context.get_messages()
-        if scoped is not context.messages:
-            collections.append(scoped)
-        for messages in collections:
-            if messages and is_progress_checkpoint(messages[-1]):
-                messages.pop()
-        context.add_message("assistant", progress_checkpoint(state), friday_progress=True)
+    collections = [context.messages]
+    scoped = context.get_messages()
+    if scoped is not context.messages:
+        collections.append(scoped)
+    for messages in collections:
+        if messages and is_progress_checkpoint(messages[-1]):
+            messages.pop()
+    if state and state.get("status") != "done":
+        context.add_message("system", progress_checkpoint(state), friday_progress=True)
 
 
 def is_progress_checkpoint(message: dict[str, Any]) -> bool:
