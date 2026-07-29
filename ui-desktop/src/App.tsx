@@ -179,6 +179,7 @@ type PendingRequest = {
 const PROJECTS_KEY = 'friday.desktop.projects'
 const ACTIVE_PROJECT_KEY = 'friday.desktop.activeProject'
 const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
+const THEME_KEY = 'friday.desktop.theme'
 const DEFAULT_SIDEBAR_WIDTH = 252
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 520
@@ -261,6 +262,17 @@ function loadSidebarWidth() {
   return clampSidebarWidth(Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || DEFAULT_SIDEBAR_WIDTH)
 }
 
+type Theme = 'dark' | 'light'
+
+function storedTheme(): Theme | null {
+  const value = localStorage.getItem(THEME_KEY)
+  return value === 'dark' || value === 'light' ? value : null
+}
+
+function loadTheme(): Theme {
+  return storedTheme() || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+}
+
 function clampSidebarWidth(width: number) {
   const available = Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 420)
   return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH, available)
@@ -275,6 +287,7 @@ function App() {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
+  const [theme, setTheme] = useState<Theme>(loadTheme)
   const [page, setPage] = useState<'chat' | 'skills'>('chat')
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null)
   const [skillError, setSkillError] = useState('')
@@ -404,6 +417,20 @@ function App() {
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
   }, [sidebarWidth])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#171714' : '#fafaf8')
+    localStorage.setItem(THEME_KEY, theme)
+  }, [theme])
+
+  useEffect(() => {
+    if (storedTheme()) return
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const followSystem = () => setTheme(media.matches ? 'dark' : 'light')
+    media.addEventListener('change', followSystem)
+    return () => media.removeEventListener('change', followSystem)
+  }, [])
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined
@@ -1081,7 +1108,7 @@ function App() {
               <svg aria-hidden="true" className="nav-icon" fill="none" viewBox="0 0 24 24">
                 <path d="M12 22v-5M9 8V2M15 8V2M18 8v5a6 6 0 0 1-12 0V8Z" />
               </svg>
-              <span>Plugins</span>
+              <span>Skills</span>
             </button>
             <button
               disabled={!activeProject}
@@ -1160,20 +1187,32 @@ function App() {
             </section>
           </div>
 
-          <button
-            className="sidebar-footer"
-            disabled={!activeProject}
-            onClick={() => setModelSettingsOpen(true)}
-            title="Configure models"
-            type="button"
-          >
-            <span className={`status-dot ${status} ${status === 'ready' && !info.model_configured ? 'needs-key' : ''}`} />
-            <span>
-              <strong>{busy ? 'Working' : status === 'ready' && !info.model_configured ? 'API key required' : status === 'ready' ? 'Ready' : status === 'error' ? 'Unavailable' : status === 'idle' ? 'No project' : 'Connecting'}</strong>
-              <span>{info.model_name || info.model}</span>
-            </span>
-            <span aria-hidden="true" className="footer-chevron">{'\u203a'}</span>
-          </button>
+          <div className="sidebar-footer">
+            <button
+              className="sidebar-status"
+              disabled={!activeProject}
+              onClick={() => setModelSettingsOpen(true)}
+              title="Configure models"
+              type="button"
+            >
+              <span className={`status-dot ${status} ${status === 'ready' && !info.model_configured ? 'needs-key' : ''}`} />
+              <span className="sidebar-status-copy">
+                <strong>{busy ? 'Working' : status === 'ready' && !info.model_configured ? 'API key required' : status === 'ready' ? 'Ready' : status === 'error' ? 'Unavailable' : status === 'idle' ? 'No project' : 'Connecting'}</strong>
+                <span>{info.model_name || info.model}</span>
+              </span>
+              <span aria-hidden="true" className="footer-chevron">{'\u203a'}</span>
+            </button>
+            <button
+              aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              aria-pressed={theme === 'dark'}
+              className="theme-toggle"
+              onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}
+              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              type="button"
+            >
+              {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+            </button>
+          </div>
         </aside>
 
         <div
@@ -1472,6 +1511,23 @@ function VisionIcon() {
     <svg aria-label="Supports vision" className="vision-icon" fill="none" viewBox="0 0 24 24">
       <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
       <circle cx="12" cy="12" r="2.6" />
+    </svg>
+  )
+}
+
+function SunIcon() {
+  return (
+    <svg aria-hidden="true" className="theme-icon" fill="none" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" />
+    </svg>
+  )
+}
+
+function MoonIcon() {
+  return (
+    <svg aria-hidden="true" className="theme-icon" fill="none" viewBox="0 0 24 24">
+      <path d="M20.2 14.5A8.3 8.3 0 0 1 9.5 3.8a8.3 8.3 0 1 0 10.7 10.7Z" />
     </svg>
   )
 }
