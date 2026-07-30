@@ -8,5 +8,5 @@ Rules:
 - Use `merge` to replace repeated episodic notes with one canonical note. Omit `scope` for merge.
 - Use `promote` only when the combined count is at least 2 and the fact is stable, useful in future sessions, and has a clear scope.
 - `user` is for stable identity and preferences, `global` for cross-project facts, and `project` for lasting facts whose episode workspace matches the current workspace.
-- Never promote task progress, command output, temporary state, guesses, credentials, rules, or reusable procedures.
+- Never promote task progress, command output, temporary state, guesses, credentials, rules, reusable procedures, or facts directly recoverable from current files or git.
 - Omit notes that need no change. Never return a source id more than once.

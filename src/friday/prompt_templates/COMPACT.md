@@ -1,6 +1,6 @@
 The conversation is being compacted. Do two steps in order, in this one turn, then stop.
 
-1) Memory first, so compaction never drops what matters. Review the conversation for declarative facts worth recalling across sessions. Save ordinary candidates through Bash with `friday memory add --scope episode <text>`; manual or scheduled consolidation decides whether repeated facts become permanent. Only when the user explicitly said to remember something forever, permanently, or always may you write it directly to `user`, `global`, or `project`. Run `friday memory help` if needed. Write facts, not instructions. Do not save task progress, command output, failed attempts, or anything stale within a week. If nothing qualifies, save nothing.
+1) Memory first, so compaction never drops what matters. Review the conversation for declarative facts worth recalling across sessions. Save ordinary candidates through Bash with `friday memory add --scope episode <text>`; manual or scheduled consolidation decides whether repeated facts become permanent. Only when the user explicitly said to remember something forever, permanently, or always may you write it directly to `user`, `global`, or `project`. Run `friday memory help` if needed. Write facts, not instructions. Do not save task progress, command output, failed attempts, facts recoverable from current files or git, or anything stale within a week. If nothing qualifies, save nothing.
 
 2) Then send your final message as the short-term session state only, using this exact Markdown structure:
 ## Current Goal

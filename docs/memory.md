@@ -19,6 +19,8 @@ Friday deterministically detects explicit memory signals such as "remember", "fr
 
 Before each model turn, the harness searches episodic Markdown with English terms and Chinese character pairs. It injects at most three relevant entries and labels them as background evidence; the current user statement always wins over stale or conflicting memory. This dynamic tail does not alter the stable system-prefix order.
 
+Memory is evidence from an earlier point in time, not authority over current state. Before acting on a remembered file, function, flag, date, or external resource, Friday checks the current workspace or source and updates or removes stale entries.
+
 The main agent can promote a durable fact into hot memory through Bash and the CLI. No separate memory model, database, or model tool is required:
 
 ```powershell
