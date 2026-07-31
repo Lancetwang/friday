@@ -19,6 +19,7 @@ class StorageTests(unittest.TestCase):
             (legacy / "sessions" / "s1.json").write_text("{}", encoding="utf-8")
             (legacy / "tool-results").mkdir()
             (legacy / "tool-results" / "bash.txt").write_text("output", encoding="utf-8")
+            (legacy / "config.json").write_text('{"model":"legacy"}', encoding="utf-8")
 
             with patch.dict(os.environ, {"FRIDAY_HOME": str(Path(tmp) / "home" / ".friday")}):
                 target = migrate_legacy_runtime(root)
@@ -26,6 +27,7 @@ class StorageTests(unittest.TestCase):
                 self.assertEqual(target, project_state_dir(root))
                 self.assertTrue((target / "sessions" / "s1.json").exists())
                 self.assertTrue((target / "tool-results" / "bash.txt").exists())
+                self.assertTrue((target / "config.json").exists())
                 self.assertFalse(legacy.exists())
 
     def test_unknown_legacy_files_are_not_moved(self) -> None:

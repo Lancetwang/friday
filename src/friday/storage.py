@@ -8,7 +8,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-RUNTIME_ENTRIES = ("sessions", "tool-results", "pending_approval.json", "permissions.json")
+RUNTIME_ENTRIES = ("sessions", "tool-results", "pending_approval.json", "permissions.json", "config.json")
 
 
 def friday_home(home: Path | None = None) -> Path:

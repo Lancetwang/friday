@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from agent_core import RunContext
 
-from friday.checkpoint import begin_checkpoint, checkpoint_choices, finish_checkpoint, restore_checkpoint
+from friday.checkpoint import begin_checkpoint, checkpoint_artifacts, checkpoint_choices, discard_checkpoint, finish_checkpoint, restore_checkpoint
 from friday.app import undo_friday
 from friday.state import delete_session, save_turn
 from friday.storage import checkpoint_dir, project_state_dir
@@ -53,6 +53,29 @@ class CheckpointTests(unittest.TestCase):
             self.assertFalse(created.exists())
             self.assertEqual(restored["messages"][0]["content"], "stable prefix")
             self.assertEqual(set(restored["changed_paths"]), {"created.txt", "original.txt"})
+            self.assertEqual(checkpoint_choices(root), [])
+
+    def test_checkpoint_reports_previewable_artifacts_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint_id = self._begin(root)
+            (root / "report.md").write_text("# Result", encoding="utf-8")
+            (root / "script.py").write_text("print('done')", encoding="utf-8")
+
+            entry = finish_checkpoint(root, checkpoint_id, pending=False)
+
+            self.assertEqual(
+                checkpoint_artifacts(root, entry),
+                [{"kind": "markdown", "name": "report.md", "path": "report.md", "size": 8}],
+            )
+
+    def test_discard_removes_a_cancelled_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint_id = self._begin(root)
+
+            discard_checkpoint(root, checkpoint_id)
+
             self.assertEqual(checkpoint_choices(root), [])
 
     def test_restore_refuses_unrecorded_workspace_changes(self) -> None:

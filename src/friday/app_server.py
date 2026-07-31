@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import os
 import sys
 import threading
@@ -11,7 +13,7 @@ from typing import Any
 from agent_core import AgentEvent
 
 from friday.app import resume_choices
-from friday.checkpoint import checkpoint_choices
+from friday.checkpoint import ARTIFACT_TYPES, checkpoint_choices
 from friday.config import (
     delete_model_profile,
     load_model_catalog,
@@ -45,6 +47,7 @@ _write_lock = threading.Lock()
 _IMAGE_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,", "data:image/gif;base64,")
 _MAX_IMAGE_CHARS = 14_000_000
 _MAX_TOTAL_IMAGE_CHARS = 20_000_000
+_MAX_ARTIFACT_BYTES = 25_000_000
 
 
 def main() -> None:
@@ -140,6 +143,7 @@ class Gateway:
                 "text": result.answer,
                 "metrics": result.metrics,
                 "progress": result.progress,
+                "artifacts": result.artifacts,
                 "fork_points": fork_points(session),
                 "verification": verification_status(result.verifications[-1]) if result.verifications else None,
             },
@@ -190,6 +194,8 @@ class Gateway:
                 if skill is None:
                     raise ValueError("Skill is not available to Friday.")
                 self.ok(rid, {"skill": skill, "content": skill_body(Path(path).read_text(encoding="utf-8"))})
+            elif method == "artifact.get":
+                self.ok(rid, artifact_detail(Path.cwd().resolve(), str(params.get("path") or "")))
             elif method == "permission.set":
                 self.ok(rid, {"permission_mode": set_permission_mode(str(params.get("mode") or ""))})
             elif method == "thinking.set":
@@ -556,13 +562,23 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
     tools: dict[str, int] = {}
     assistant_parts: list[str] = []
     assistant_index = -1
+    snapshot = read_session(session_path(Path.cwd().resolve(), session.session_id)) or {}
+    records = snapshot.get("artifacts", []) if isinstance(snapshot.get("artifacts"), list) else []
+    artifacts = {
+        int(record["message_index"]): record["items"]
+        for record in records
+        if isinstance(record, dict)
+        and isinstance(record.get("message_index"), int)
+        and isinstance(record.get("items"), list)
+    }
 
     def flush_assistant() -> None:
         nonlocal assistant_index
         if assistant_parts:
-            history.append(
-                {"kind": "assistant", "message_index": assistant_index, "text": "\n\n".join(assistant_parts)}
-            )
+            item = {"kind": "assistant", "message_index": assistant_index, "text": "\n\n".join(assistant_parts)}
+            if assistant_index in artifacts:
+                item["artifacts"] = artifacts[assistant_index]
+            history.append(item)
             assistant_parts.clear()
             assistant_index = -1
 
@@ -657,6 +673,30 @@ def _image_urls(value: Any) -> list[str]:
     if sum(map(len, images)) > _MAX_TOTAL_IMAGE_CHARS:
         raise ValueError("Attached images are too large.")
     return images
+
+
+def artifact_detail(workspace: Path, relative: str) -> dict[str, Any]:
+    candidate = Path(relative)
+    if not relative or candidate.is_absolute():
+        raise ValueError("Artifact path must be relative to the workspace.")
+    root = workspace.resolve()
+    path = (root / candidate).resolve()
+    if root not in path.parents or not path.is_file():
+        raise ValueError("Artifact is outside the workspace or no longer exists.")
+    kind = ARTIFACT_TYPES.get(path.suffix.lower())
+    if not kind:
+        raise ValueError("This artifact type cannot be previewed safely.")
+    size = path.stat().st_size
+    if size > _MAX_ARTIFACT_BYTES:
+        raise ValueError("Artifact is too large to preview (25 MB limit).")
+    data = path.read_bytes()
+    result = {"kind": kind, "name": path.name, "path": path.relative_to(root).as_posix(), "size": size}
+    if kind in {"markdown", "text"}:
+        result["content"] = data.decode("utf-8", errors="replace")
+    else:
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        result["data_url"] = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+    return result
 
 
 def _message_text(content: Any) -> str:

@@ -300,6 +300,8 @@ class TraceRequestHandler(BaseHTTPRequestHandler):
             if not (is_json or is_stream):
                 self._json(404, {"error": "Not found"})
                 return
+            if self.headers.get("Content-Type", "").partition(";")[0].strip().lower() != "application/json":
+                raise ValueError("Content-Type must be application/json.")
             length = int(self.headers.get("Content-Length", "0"))
             if length > 65536:
                 raise ValueError("Request body is too large.")
@@ -325,6 +327,9 @@ class TraceRequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Connection", "close")
         self.end_headers()
 
@@ -355,6 +360,10 @@ class TraceRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(raw)
 

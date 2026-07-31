@@ -12,7 +12,7 @@ from unittest.mock import patch
 from agent_core import AgentEvent, RunContext
 
 from friday.session import FridaySession
-from friday.app_server import Gateway, _request_lines, session_history, verification_status
+from friday.app_server import Gateway, _request_lines, artifact_detail, session_history, verification_status
 from friday.state import delete_session_tree, fork_session, read_session, resume_choices, save_turn, session_path, session_tree
 from friday.turn import TurnResult
 from friday.turn import TurnCancelled
@@ -178,6 +178,32 @@ class TuiGatewayTests(unittest.TestCase):
 
         payload = event.call_args.args[1]
         self.assertEqual(payload["verification"], {"passed": True, "verdict": "pass"})
+
+    def test_message_complete_includes_artifacts(self) -> None:
+        gateway = Gateway()
+        callback = gateway.session.on_turn_complete
+        assert callback is not None
+        result = _turn_result("done")
+        result.artifacts = [{"kind": "markdown", "name": "report.md", "path": "report.md", "size": 8}]
+
+        with patch.object(gateway, "event") as event:
+            callback(result)
+
+        self.assertEqual(event.call_args.args[1]["artifacts"], result.artifacts)
+
+    def test_artifact_preview_stays_inside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "report.md").write_text("# Result", encoding="utf-8")
+
+            detail = artifact_detail(root, "report.md")
+
+            self.assertEqual(detail["kind"], "markdown")
+            self.assertEqual(detail["content"], "# Result")
+            with self.assertRaisesRegex(ValueError, "relative"):
+                artifact_detail(root, str((root / "report.md").resolve()))
+            with self.assertRaisesRegex(ValueError, "outside"):
+                artifact_detail(root, "../secret.md")
 
     def test_gateway_exposes_progress_updates(self) -> None:
         gateway = Gateway()
@@ -487,6 +513,46 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertEqual(history[0]["timestamp"], "2026-07-28T16:00:00+08:00")
         self.assertEqual(history[0]["images"], [image])
         self.assertNotIn("hidden prefix", str(history))
+
+    def test_session_history_restores_persisted_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                gateway = Gateway()
+                context = RunContext(metadata={"workspace": str(root)})
+                context.add_message("user", "write a report")
+                context.add_message("assistant", "Done.")
+                gateway.session.context = context
+                artifact = {"kind": "markdown", "name": "report.md", "path": "report.md", "size": 8}
+                save_turn(
+                    root,
+                    "write a report",
+                    "Done.",
+                    gateway.session.session_id,
+                    context.get_messages(),
+                    artifacts=[artifact],
+                )
+                rebased = RunContext(metadata={"workspace": str(root)})
+                rebased.add_message("user", "earlier")
+                rebased.add_message("assistant", "Earlier answer.")
+                rebased.add_message("user", "write a report")
+                rebased.add_message("assistant", "Done.")
+                gateway.session.context = rebased
+                save_turn(
+                    root,
+                    "next",
+                    "No new artifact.",
+                    gateway.session.session_id,
+                    rebased.get_messages(),
+                )
+                history = session_history(gateway.session)
+            finally:
+                os.chdir(cwd)
+
+            restored = next(item for item in history if item.get("text") == "Done.")
+            self.assertEqual(restored["artifacts"], [artifact])
 
     def test_gateway_continues_pending_goal_after_approval(self) -> None:
         gateway = Gateway()

@@ -30,7 +30,8 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 - Progressive Skills: Friday lists metadata and paths first, then reads only the selected `SKILL.md` and referenced resources.
 - Long-running task control: explicit objectives, plans, next actions, verifier state, semantic stop conditions, and session resume keep work on track.
 - Turn checkpoints: `/undo` restores workspace files, conversation, and progress to the state before the latest Friday turn without touching the project's Git history.
-- Program-enforced permissions: dangerous Bash commands stop before execution and require explicit approval.
+- Program-enforced permissions: hard-denied commands and explicit deny rules stop before execution; grey-area commands can be reviewed by the user or a separate intent reviewer.
+- Checkpoint-derived deliverables: files actually changed by a turn are attached to its reply and safe document/image formats can be previewed locally.
 - Prompt-injection boundary: private control context is protected across the main agent and auxiliary model calls, while retrieved content is treated as untrusted data.
 - Bounded web research: search continues only for missing evidence, with retrieved sources separated from model inference.
 - Exact accounting and traces: provider usage, model calls, tool activity, compaction, verification, and results are recorded for inspection and analysis.

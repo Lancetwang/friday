@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -12,7 +12,7 @@ from agent_core import Agent, RunContext
 
 from friday.agent_flow import begin_guarded_run
 from friday.app import prepare_context_for_chat
-from friday.checkpoint import begin_checkpoint, discard_checkpoint, finish_checkpoint
+from friday.checkpoint import begin_checkpoint, checkpoint_artifacts, discard_checkpoint, finish_checkpoint
 from friday.context import token_estimate
 from friday.loop import AGENT_MAX_STEPS, run_loop
 from friday.memory import capture_user_memory, relevant_memory
@@ -30,6 +30,7 @@ class TurnResult:
     verifications: list[dict[str, Any]]
     metrics: dict[str, Any]
     progress: dict[str, Any]
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
     context_notice: str = ""
 
 
@@ -96,6 +97,8 @@ def run_turn(
         agent, context, notice = prepare_context_for_chat(agent, context, stream=stream)
         context.on_event = on_event
         context.on_observation = on_observation
+        if not continuation or not context.metadata.get("friday.user_request"):
+            context.metadata["friday.user_request"] = text
         record_context_transition(live_path, turn_id, notice, context.get_messages())
         begin_guarded_run(context, usage_start)
         if notice and on_context_notice:
@@ -185,6 +188,12 @@ def run_turn(
     }
     context.metadata["friday.last_usage"] = metrics
     try:
+        checkpoint = finish_checkpoint(
+            workspace,
+            checkpoint_id,
+            pending=bool(pending_approval(workspace).get("pending")),
+        )
+        artifacts = checkpoint_artifacts(workspace, checkpoint)
         write_trace(
             workspace,
             mode=mode,
@@ -208,6 +217,7 @@ def run_turn(
             last_usage=metrics,
             user_message_times=context.metadata.get(USER_MESSAGE_TIMES_KEY),
             thinking_effort=str(context.metadata.get("friday.thinking_effort") or "high"),
+            artifacts=artifacts,
         )
         finish_live_trace(
             live_path,
@@ -215,10 +225,9 @@ def run_turn(
             status=str(context.metadata.get("friday.loop_status") or "done"),
             metrics=metrics,
         )
-        finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
     finally:
         context.events.clear()
-    return TurnResult(agent, context, answer, verifications, metrics, progress, notice)
+    return TurnResult(agent, context, answer, verifications, metrics, progress, artifacts, notice)
 
 
 def _tokens(text: str) -> int:

@@ -17,6 +17,7 @@ so compact, resume, and undo are just different ways to compute ``state``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -123,6 +124,7 @@ def save_turn(
     last_usage: dict[str, Any] | None = None,
     user_message_times: list[dict[str, str]] | None = None,
     thinking_effort: str = DEFAULT_THINKING_EFFORT,
+    artifacts: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Persist one snapshot per session, overwritten in place (atomic).
 
@@ -136,6 +138,37 @@ def save_turn(
     path = sessions / f"{sid}.json"
     existing = read_session(path) or {}
     now = datetime.now().isoformat(timespec="seconds")
+    saved_artifacts = (
+        [item for item in existing.get("artifacts", []) if isinstance(item, dict)]
+        if isinstance(existing.get("artifacts"), list)
+        else []
+    )
+    body = conversation_body(messages or [])
+    assistant_indexes: dict[str, list[int]] = {}
+    for index, message in enumerate(body):
+        if message.get("role") == "assistant":
+            assistant_indexes.setdefault(_message_fingerprint(message), []).append(index)
+    artifact_records = []
+    for record in saved_artifacts:
+        fingerprint = str(record.get("message_hash") or "")
+        matches = assistant_indexes.get(fingerprint, [])
+        old_index = record.get("message_index")
+        if old_index in matches or len(matches) == 1:
+            artifact_records.append({**record, "message_index": old_index if old_index in matches else matches[0]})
+    if artifacts:
+        message_index = next(
+            (index for index in range(len(body) - 1, -1, -1) if body[index].get("role") == "assistant"),
+            -1,
+        )
+        if message_index >= 0:
+            artifact_records = [item for item in artifact_records if item.get("message_index") != message_index]
+            artifact_records.append(
+                {
+                    "items": artifacts,
+                    "message_hash": _message_fingerprint(body[message_index]),
+                    "message_index": message_index,
+                }
+            )
     snapshot = {
         **{
             key: existing[key]
@@ -156,6 +189,7 @@ def save_turn(
         if isinstance(user_message_times, list)
         else existing.get("user_message_times", []),
         "thinking_effort": thinking_effort,
+        "artifacts": artifact_records,
     }
     write_session(path, snapshot)
     return path
@@ -293,6 +327,11 @@ def fork_session(
         "last_usage": {},
         "user_message_times": list(source.get("user_message_times", []))[:user_count],
         "thinking_effort": source.get("thinking_effort", DEFAULT_THINKING_EFFORT),
+        "artifacts": [
+            record
+            for record in (source.get("artifacts", []) if isinstance(source.get("artifacts"), list) else [])
+            if isinstance(record, dict) and int(record.get("message_index", -1)) <= message_index
+        ],
         "fork_parent": source_session_id,
         "fork_root": source.get("fork_root") or source_session_id,
         "fork_message_index": message_index,
@@ -376,6 +415,11 @@ def write_session(path: Path, data: dict[str, Any]) -> None:
         json.dump(data, file, ensure_ascii=False)
         temp_path = Path(file.name)
     temp_path.replace(path)
+
+
+def _message_fingerprint(message: dict[str, Any]) -> str:
+    value = json.dumps(message.get("content"), ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
 
 
 def preview(text: str, limit: int = 80) -> str:

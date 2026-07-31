@@ -8,6 +8,7 @@ import unittest
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from http.server import ThreadingHTTPServer
 
@@ -175,6 +176,28 @@ class TraceWebTests(unittest.TestCase):
 
             self.assertEqual([row["type"] for row in rows], ["delta", "delta", "final"])
             self.assertEqual(rows[-1]["answer"], "The answer follows from [event:1].")
+
+    def test_analysis_endpoint_rejects_simple_cross_origin_posts(self) -> None:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), TraceRequestHandler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/api/sessions/missing/analyze",
+            data=b'{"question":"spend tokens"}',
+            headers={"Content-Type": "text/plain"},
+            method="POST",
+        )
+        try:
+            with patch("friday.trace_web.analyze_trace") as analyze:
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(request)
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+        self.assertEqual(error.exception.code, 400)
+        analyze.assert_not_called()
 
 
 if __name__ == "__main__":

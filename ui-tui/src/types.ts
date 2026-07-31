@@ -23,7 +23,7 @@ export interface SessionInfo {
   model_name?: string
   model_profile?: string
   model_vision?: boolean
-  permission_mode: 'accept-edits' | 'bypass' | 'dont-ask' | 'manual'
+  permission_mode: 'accept-edits' | 'auto' | 'bypass' | 'dont-ask' | 'manual'
   thinking_effort: 'high' | 'low' | 'max' | 'off'
   thinking_supported?: boolean
   progress?: ProgressState

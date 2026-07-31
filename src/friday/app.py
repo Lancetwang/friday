@@ -4,7 +4,6 @@ import hashlib
 import re
 import shutil
 import tomllib
-from datetime import datetime
 from dataclasses import asdict
 from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
@@ -47,7 +46,7 @@ from friday.state import (
     state_from_snapshot,
     write_session,
 )
-from friday.tools import INSTRUCTION_FILE_NAMES, PERMISSIONS_FILE, build_tools, default_permissions
+from friday.tools import INSTRUCTION_FILE_NAMES, build_tools
 from friday.trace import delete_workspace_traces, record_checkpoint_restore
 
 __all__ = [

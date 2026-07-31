@@ -16,6 +16,21 @@ from friday.trace import load_trace, load_trace_object
 SCHEMA_VERSION = 1
 ACTIVE_STATES = {"pending", "ready"}
 MAX_CHECKPOINTS = 50
+MAX_ARTIFACTS_PER_TURN = 24
+ARTIFACT_TYPES = {
+    ".csv": "text",
+    ".gif": "image",
+    ".html": "text",
+    ".jpeg": "image",
+    ".jpg": "image",
+    ".json": "text",
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".pdf": "pdf",
+    ".png": "image",
+    ".txt": "text",
+    ".webp": "image",
+}
 _snapshot_lock = threading.Lock()
 
 
@@ -80,12 +95,30 @@ def finish_pending_checkpoint(workspace: Path, *, pending: bool) -> dict[str, An
     return finish_checkpoint(root, str(entry["id"]), pending=pending) if entry else None
 
 
+def checkpoint_artifacts(workspace: Path, entry: dict[str, Any]) -> list[dict[str, Any]]:
+    root = workspace.resolve()
+    artifacts = []
+    for relative in _diff_paths(root, str(entry["before_tree"]), str(entry["after_tree"])):
+        path = (root / Path(*PurePosixPath(relative).parts)).resolve()
+        kind = ARTIFACT_TYPES.get(path.suffix.lower())
+        if kind and path.is_file() and root in path.parents:
+            artifacts.append(
+                {
+                    "kind": kind,
+                    "name": path.name,
+                    "path": relative,
+                    "size": path.stat().st_size,
+                }
+            )
+            if len(artifacts) >= MAX_ARTIFACTS_PER_TURN:
+                break
+    return artifacts
+
+
 def discard_checkpoint(workspace: Path, checkpoint_id: str) -> None:
     root = workspace.resolve()
     entry = _entry(root, checkpoint_id)
-    entry.update(state="cancelled", updated=datetime.now().isoformat(timespec="seconds"))
-    _write_entry(root, entry)
-    _remove_checkpoint(root, entry)
+    _remove_entries(root, [entry])
 
 
 def checkpoint_choices(workspace: Path | None = None, *, limit: int = 20) -> list[dict[str, Any]]:

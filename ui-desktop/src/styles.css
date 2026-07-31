@@ -1664,6 +1664,137 @@ input[type="checkbox"] {
   transform: scale(1.05);
 }
 
+.message-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.message-artifacts > button {
+  display: flex;
+  max-width: 280px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  color: var(--ink);
+  background: var(--fill);
+  text-align: left;
+}
+
+.message-artifacts > button:hover {
+  border-color: var(--line-strong);
+  background: var(--fill-strong);
+}
+
+.message-artifacts strong,
+.message-artifacts small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-artifacts strong {
+  font-size: var(--text-small);
+}
+
+.message-artifacts small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-micro);
+}
+
+.artifact-icon {
+  width: 18px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 1px solid var(--faint);
+  border-radius: 3px;
+  background: var(--canvas);
+}
+
+.artifact-preview-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--scrim-strong);
+  backdrop-filter: blur(8px);
+}
+
+.artifact-preview {
+  display: grid;
+  width: min(920px, 100%);
+  height: min(760px, 100%);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: var(--canvas);
+  box-shadow: var(--shadow-3);
+}
+
+.artifact-preview > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.artifact-preview > header strong,
+.artifact-preview > header span {
+  display: block;
+}
+
+.artifact-preview > header span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-micro);
+}
+
+.artifact-preview > header button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: transparent;
+  font-size: 20px;
+}
+
+.artifact-preview > header button:hover {
+  color: var(--ink);
+  background: var(--fill);
+}
+
+.artifact-preview-content {
+  min-height: 0;
+  padding: 24px 30px;
+  overflow: auto;
+}
+
+.artifact-preview-content > img,
+.artifact-preview-content > iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  object-fit: contain;
+}
+
+.artifact-preview-content > pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .image-preview-backdrop {
   position: fixed;
   inset: 0;
@@ -2664,6 +2795,11 @@ input[type="checkbox"] {
 .permission-indicator.mode-manual {
   border-color: var(--caution);
   background: var(--caution);
+}
+
+.permission-indicator.mode-auto {
+  border-color: #8b7d6b;
+  background: #8b7d6b;
 }
 
 .permission-indicator.mode-accept-edits {

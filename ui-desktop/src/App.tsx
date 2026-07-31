@@ -39,7 +39,7 @@ type Metrics = {
   output_tokens?: number | null
 }
 
-type PermissionMode = 'accept-edits' | 'bypass' | 'dont-ask' | 'manual'
+type PermissionMode = 'accept-edits' | 'auto' | 'bypass' | 'dont-ask' | 'manual'
 type ProjectStatus = 'connecting' | 'error' | 'idle' | 'ready'
 type ThinkingEffort = 'high' | 'low' | 'max' | 'off'
 
@@ -50,8 +50,9 @@ const permissionOptions: ReadonlyArray<{
 }> = [
   { description: 'Reject risky actions', label: 'Deny risky commands', value: 'dont-ask' },
   { description: 'Ask before risky actions', label: 'Request approval', value: 'manual' },
+  { description: 'Review intent before risky actions', label: 'Let Friday decide', value: 'auto' },
   { description: 'Allow workspace changes', label: 'Allow edits', value: 'accept-edits' },
-  { description: 'Run without approval', label: 'Full access', value: 'bypass' }
+  { description: 'Run allowed commands without prompts', label: 'Full access', value: 'bypass' }
 ]
 
 const thinkingOptions: ReadonlyArray<{
@@ -158,8 +159,21 @@ type ImageAttachment = {
   name: string
 }
 
+type ArtifactInfo = {
+  kind: 'image' | 'markdown' | 'pdf' | 'text'
+  name: string
+  path: string
+  size: number
+}
+
+type ArtifactDetail = ArtifactInfo & {
+  content?: string
+  data_url?: string
+}
+
 type HistoryItem = {
   arguments?: unknown
+  artifacts?: ArtifactInfo[]
   images?: string[]
   kind: TimelineItem['kind']
   message_index?: number
@@ -178,6 +192,7 @@ type ThinkingState = {
 
 type TimelineItem = {
   arguments?: string
+  artifacts?: ArtifactInfo[]
   checkpointId?: string
   createdAt?: string
   id: string
@@ -362,6 +377,7 @@ function App() {
   const [skillError, setSkillError] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
+  const [artifactPreview, setArtifactPreview] = useState<ArtifactDetail | null>(null)
   const [previewImage, setPreviewImage] = useState('')
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
@@ -484,6 +500,7 @@ function App() {
     if (activeProject && tracked) localStorage.setItem(ACTIVE_PROJECT_KEY, activeProject)
     else localStorage.removeItem(ACTIVE_PROJECT_KEY)
     setRenaming(null)
+    setArtifactPreview(null)
     setModelSettingsOpen(false)
     setPreviewImage('')
     setSkillDetail(null)
@@ -630,6 +647,7 @@ function App() {
       } else if (type === 'message.complete') {
         const text = String(payload.text || '')
         const metrics = (payload.metrics || {}) as Metrics
+        const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts as ArtifactInfo[] : []
         const forkPoints = Array.isArray(payload.fork_points)
           ? payload.fork_points as Array<{ kind: string; message_index: number }>
           : []
@@ -638,8 +656,8 @@ function App() {
         activeAssistants.current.delete(eventKey)
         updateView(workspace, current => {
           let items: TimelineItem[] = id
-            ? current.items.map(item => item.id === id ? { ...item, metrics, text: text || item.text } : item)
-            : text ? [...current.items, { id: nextId('assistant'), kind: 'assistant', metrics, text }] : current.items
+            ? current.items.map(item => item.id === id ? { ...item, artifacts, metrics, text: text || item.text } : item)
+            : text ? [...current.items, { artifacts, id: nextId('assistant'), kind: 'assistant', metrics, text }] : current.items
           items = verification
             ? items.map(item => item.id === 'verification-status' ? { ...item, text: verificationLabel(verification) } : item)
             : items.filter(item => item.id !== 'verification-status')
@@ -1260,6 +1278,15 @@ function App() {
       .catch(error => setSkillError(String(error)))
   }
 
+  const openArtifact = (artifact: ArtifactInfo) => {
+    void sendGateway<ArtifactDetail>(activeProject, 'artifact.get', { path: artifact.path })
+      .then(setArtifactPreview)
+      .catch(error => updateView(activeProject, current => ({
+        ...current,
+        items: [...current.items, { id: nextId('artifact'), kind: 'system', text: String(error) }]
+      })))
+  }
+
   const openObservability = () => {
     if (!activeProject) return
     void sendGateway<{ url: string }>(activeProject, 'trace.serve').catch(error => {
@@ -1536,9 +1563,9 @@ function App() {
           {showWelcome && <WelcomePrompt key={activeProject} />}
           {!showWelcome && groupToolItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
-              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onFork={forkConversation} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
+              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onFork={forkConversation} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
               : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
-            : <TimelineRow busy={busy} item={item} key={item.id} onFork={forkConversation} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
+            : <TimelineRow busy={busy} item={item} key={item.id} onFork={forkConversation} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
           {pendingApproval && (
             <section className="approval-panel">
               <strong>Approval required</strong>
@@ -1770,6 +1797,36 @@ function App() {
             onDelete={deleteModel}
             onSave={saveModel}
           />
+        )}
+        {artifactPreview && (
+          <div aria-modal="true" className="artifact-preview-backdrop" onMouseDown={() => setArtifactPreview(null)} role="dialog">
+            <section className="artifact-preview" onMouseDown={event => event.stopPropagation()}>
+              <header>
+                <div>
+                  <strong>{artifactPreview.name}</strong>
+                  <span>{artifactPreview.path}</span>
+                </div>
+                <button aria-label="Close artifact preview" onClick={() => setArtifactPreview(null)} type="button">{'×'}</button>
+              </header>
+              <div className="artifact-preview-content message-text">
+                {artifactPreview.kind === 'markdown' ? (
+                  <ReactMarkdown
+                    components={markdownComponents(openLinkExternally)}
+                    rehypePlugins={markdownRehypePlugins}
+                    remarkPlugins={markdownRemarkPlugins}
+                  >
+                    {normalizeMarkdownMath(artifactPreview.content || '')}
+                  </ReactMarkdown>
+                ) : artifactPreview.kind === 'text' ? (
+                  <pre>{artifactPreview.content}</pre>
+                ) : artifactPreview.kind === 'image' ? (
+                  <img alt={artifactPreview.name} src={artifactPreview.data_url} />
+                ) : (
+                  <iframe src={artifactPreview.data_url} title={artifactPreview.name} />
+                )}
+              </div>
+            </section>
+          </div>
         )}
         {previewImage && (
           <div aria-modal="true" className="image-preview-backdrop" onMouseDown={() => setPreviewImage('')} role="dialog">
@@ -2446,6 +2503,7 @@ function bindCheckpoints(items: TimelineItem[], checkpoints: CheckpointChoice[],
 function timelineFromHistory(history: HistoryItem[]) {
   return history.map((item, index): TimelineItem => ({
     arguments: item.arguments == null ? undefined : JSON.stringify(item.arguments, null, 2),
+    artifacts: item.artifacts,
     id: `history-${index}-${item.tool_call_id || item.kind}`,
     forkIndex: item.message_index,
     images: item.images,
@@ -2551,6 +2609,7 @@ function TimelineRow({
   busy,
   item,
   onFork,
+  onOpenArtifact,
   onOpenLink,
   onPreview,
   onRestore,
@@ -2559,6 +2618,7 @@ function TimelineRow({
   busy: boolean
   item: TimelineItem
   onFork: (messageIndex: number) => void
+  onOpenArtifact: (artifact: ArtifactInfo) => void
   onOpenLink: (url: string) => void
   onPreview: (image: string) => void
   onRestore: (checkpointId: string) => void
@@ -2603,6 +2663,19 @@ function TimelineRow({
             {item.images.map((image, index) => (
               <button key={`${item.id}-image-${index}`} onClick={() => onPreview(image)} type="button">
                 <img alt={`Attachment ${index + 1}`} src={image} />
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {item.artifacts?.length ? (
+          <div className="message-artifacts">
+            {item.artifacts.map(artifact => (
+              <button key={`${item.id}-${artifact.path}`} onClick={() => onOpenArtifact(artifact)} type="button">
+                <span aria-hidden="true" className={`artifact-icon ${artifact.kind}`} />
+                <span>
+                  <strong>{artifact.name}</strong>
+                  <small>{artifact.kind} · {formatBytes(artifact.size)}</small>
+                </span>
               </button>
             ))}
           </div>
@@ -2728,6 +2801,12 @@ function formatThinkingDuration(ms: number) {
   const minutes = Math.floor(seconds / 60)
   const rest = Math.round(seconds % 60)
   return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function ToolGroup({ items }: { items: TimelineItem[] }) {

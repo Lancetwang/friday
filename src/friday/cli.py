@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(prog="friday", description="Friday general-purpose local CLI agent.")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output.")
-    parser.add_argument("--permission-mode", choices=["manual", "accept-edits", "dont-ask", "bypass"], default=None)
+    parser.add_argument("--permission-mode", choices=["manual", "auto", "accept-edits", "dont-ask", "bypass"], default=None)
     parser.add_argument("--cwd", type=Path, help="Use this directory as the Friday workspace.")
     parser.add_argument("--dangerously-skip-permissions", action="store_true", help="Bypass command approvals for sandboxed runs.")
     parser.add_argument("--permission-allow", "--permission_allow", action="store_true", help="Alias for --dangerously-skip-permissions.")
@@ -367,7 +367,7 @@ def _slash(text: str, session: FridaySession) -> None:
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /new, /model [id], /thinking [off|low|high|max], /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|bypass], /approve [session], /reject [guidance], /reset, /exit")
+        print("/help, /new, /model [id], /thinking [off|low|high|max], /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|auto|accept-edits|dont-ask|bypass], /approve [session], /reject [guidance], /reset, /exit")
     elif command == "new":
         session.new()
         print("started a new conversation")
@@ -432,7 +432,7 @@ def _slash(text: str, session: FridaySession) -> None:
             try:
                 set_permission_mode(aliases.get(requested, requested))
             except ValueError:
-                print("usage: /permission manual|bypass")
+                print("usage: /permission manual|auto|accept-edits|dont-ask|bypass")
                 return
         print(f"permission mode: {permission_mode()}")
     elif command.startswith("goal"):

@@ -78,7 +78,7 @@ Put non-secret model settings in `config.json`:
 }
 ```
 
-Friday stores optional project overrides under `~/.friday/projects/<workspace-id>/config.json`; existing `<workspace>/.friday/config.json` files remain readable for compatibility. A project config overrides only the keys it contains; all other values come from the global file. Provider-specific keys such as `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` are supported, with `LLM_API_KEY` as the generic fallback. Configuration changes apply the next time Friday starts or rebuilds its context.
+Friday stores optional project overrides under `~/.friday/projects/<workspace-id>/config.json`; existing `<workspace>/.friday/config.json` files are migrated there on startup. A project config overrides only the keys it contains; all other values come from the global file. Provider-specific keys such as `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` are supported, with `LLM_API_KEY` as the generic fallback. Configuration changes apply the next time Friday starts or rebuilds its context.
 
 Secret priority is:
 

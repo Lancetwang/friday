@@ -4,7 +4,7 @@ import json
 import os
 import re
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -240,7 +240,6 @@ def _load_base_config(workspace: Path, *, home: Path | None = None) -> ModelConf
     user_dir = friday_home(home)
     for path in (
         user_dir / "config.json",
-        workspace.resolve() / ".friday" / "config.json",
         project_state_dir(workspace, home) / "config.json",
     ):
         values.update(_read_config(path))
@@ -259,6 +258,12 @@ def build_model(config: ModelConfig) -> ChatModel:
 
 
 def load_model_environment(workspace: Path, *, home: Path | None = None) -> None:
+    allowed = {
+        "ANYSEARCH_API_KEY",
+        "JINA_API_KEY",
+        "TAVILY_API_KEY",
+        *(name for provider in PROVIDERS for name in _provider_env_names(str(provider["id"])) if name),
+    }
     for path in (workspace.resolve() / ".env", friday_home(home) / ".env"):
         if not path.exists():
             continue
@@ -268,7 +273,7 @@ def load_model_environment(workspace: Path, *, home: Path | None = None) -> None
                 continue
             key, value = line.split("=", 1)
             key = key.strip().lstrip("\ufeff")
-            if not key or key in os.environ:
+            if key not in allowed or key in os.environ:
                 continue
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
