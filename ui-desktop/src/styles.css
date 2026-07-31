@@ -36,6 +36,7 @@
   --accent-ink: #24439a;
   --accent-soft: rgba(43, 81, 181, 0.1);
   --caution: #c9932c;
+  --orange: #d9732c;
   --success: #2e9e5e;
   --danger: #d94830;
   --danger-soft: rgba(217, 72, 48, 0.1);
@@ -118,6 +119,7 @@
   --accent-ink: #a5b7f1;
   --accent-soft: rgba(141, 164, 236, 0.15);
   --caution: #d9a84e;
+  --orange: #e08a4d;
   --success: #55b87e;
   --danger: #e5604a;
   --danger-soft: rgba(229, 96, 74, 0.14);
@@ -2665,8 +2667,8 @@ input[type="checkbox"] {
 }
 
 .permission-indicator.mode-accept-edits {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--orange);
+  background: var(--orange);
 }
 
 .permission-indicator.mode-bypass {
