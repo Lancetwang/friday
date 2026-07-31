@@ -1719,8 +1719,10 @@ input[type="checkbox"] {
   text-decoration-color: currentColor;
 }
 
-.message-text .katex {
-  font-size: 1.05em;
+.message-text .katex,
+.thinking-content .katex,
+.skill-content .katex {
+  line-height: normal;
 }
 
 .message-text .katex-display {
@@ -1730,11 +1732,8 @@ input[type="checkbox"] {
   overflow-y: hidden;
 }
 
-.message-text p > .katex:only-child {
-  font-size: 1.05em;
-}
-
-.skill-content .katex-display {
+.skill-content .katex-display,
+.thinking-content .katex-display {
   margin: 14px 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -2001,8 +2000,55 @@ input[type="checkbox"] {
   line-height: var(--leading-body);
   scrollbar-color: var(--faint) transparent;
   scrollbar-width: thin;
-  white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.thinking-content > :first-child {
+  margin-top: 0;
+}
+
+.thinking-content p,
+.thinking-content ul,
+.thinking-content ol,
+.thinking-content pre {
+  margin: 0 0 8px;
+}
+
+.thinking-content > :last-child,
+.thinking-content p:last-child {
+  margin-bottom: 0;
+}
+
+.thinking-content ul,
+.thinking-content ol {
+  padding-left: 18px;
+}
+
+.thinking-content code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+.thinking-content pre {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--code-bg);
+  overflow-x: auto;
+}
+
+.thinking-content pre code {
+  padding: 0;
+  background: transparent;
+  line-height: var(--leading-body);
+}
+
+.thinking-content a {
+  color: var(--accent-ink);
+  text-underline-offset: 3px;
 }
 
 .thinking-row[open] > .thinking-content {

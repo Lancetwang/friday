@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { open as openUrl } from '@tauri-apps/plugin-shell'
 import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -13,6 +13,23 @@ import fridayAvatar from './assets/friday-avatar.svg'
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath]
 const markdownRehypePlugins = [rehypeKatex]
+
+function markdownComponents(onOpenLink: (url: string) => void): Components {
+  return {
+    a: ({ node: _node, ...props }) => (
+      <a
+        {...props}
+        onClick={event => {
+          const href = props.href || ''
+          if (/^https?:\/\//.test(href)) {
+            event.preventDefault()
+            onOpenLink(href)
+          }
+        }}
+      />
+    )
+  }
+}
 
 type Metrics = {
   elapsed_ms?: number
@@ -1919,20 +1936,7 @@ function SkillBrowser({
             <small>{detail.skill.scope} · {detail.skill.path}</small>
             <div className="skill-content">
               <ReactMarkdown
-                components={{
-                  a: ({ node: _node, ...props }) => (
-                    <a
-                      {...props}
-                      onClick={event => {
-                        const href = props.href || ''
-                        if (/^https?:\/\//.test(href)) {
-                          event.preventDefault()
-                          onOpenLink(href)
-                        }
-                      }}
-                    />
-                  )
-                }}
+                components={markdownComponents(onOpenLink)}
                 rehypePlugins={markdownRehypePlugins}
                 remarkPlugins={markdownRemarkPlugins}
               >
@@ -2168,7 +2172,7 @@ function TimelineRow({
   }
 
   if (item.kind === 'reasoning') {
-    return <ThinkingRow item={item} />
+    return <ThinkingRow item={item} onOpenLink={onOpenLink} />
   }
 
   if (item.kind === 'tool') {
@@ -2188,20 +2192,7 @@ function TimelineRow({
       <div className="message-body">
         <div className="message-text">
           <ReactMarkdown
-            components={{
-              a: ({ node: _node, ...props }) => (
-                <a
-                  {...props}
-                  onClick={event => {
-                    const href = props.href || ''
-                    if (/^https?:\/\//.test(href)) {
-                      event.preventDefault()
-                      onOpenLink(href)
-                    }
-                  }}
-                />
-              )
-            }}
+            components={markdownComponents(onOpenLink)}
             rehypePlugins={markdownRehypePlugins}
             remarkPlugins={markdownRemarkPlugins}
           >
@@ -2283,7 +2274,7 @@ function TimelineRow({
   )
 }
 
-function ThinkingRow({ item }: { item: TimelineItem }) {
+function ThinkingRow({ item, onOpenLink }: { item: TimelineItem; onOpenLink: (url: string) => void }) {
   const thinking = item.thinking || { started: Date.now() }
   const done = thinking.ended != null
   const [now, setNow] = useState(Date.now())
@@ -2308,7 +2299,15 @@ function ThinkingRow({ item }: { item: TimelineItem }) {
         <strong>{label}</strong>
         {!done && <span className="thinking-time">{formatThinkingDuration(elapsed)}</span>}
       </summary>
-      <div className="thinking-content">{item.text || '…'}</div>
+      <div className="thinking-content">
+        <ReactMarkdown
+          components={markdownComponents(onOpenLink)}
+          rehypePlugins={markdownRehypePlugins}
+          remarkPlugins={markdownRemarkPlugins}
+        >
+          {item.text || '…'}
+        </ReactMarkdown>
+      </div>
     </details>
   )
 }
