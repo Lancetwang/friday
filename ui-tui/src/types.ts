@@ -4,6 +4,8 @@ export type GatewayEvent =
   | { type: 'message.start'; payload: { text: string } }
   | { type: 'message.delta'; payload: { text: string } }
   | { type: 'message.complete'; payload: { metrics?: MessageMetrics; progress?: ProgressState; text: string } }
+  | { type: 'reasoning.delta'; payload: { id: string; text: string } }
+  | { type: 'reasoning.complete'; payload: { error?: boolean; id: string } }
   | { type: 'tool.start'; payload: { tool_call_id: string; name: string; arguments?: unknown } }
   | { type: 'tool.complete'; payload: { tool_call_id: string; name: string; error?: boolean; content?: string } }
   | { type: 'approval.pending'; payload: { command?: string; reason?: string } }
@@ -22,6 +24,8 @@ export interface SessionInfo {
   model_profile?: string
   model_vision?: boolean
   permission_mode: 'accept-edits' | 'bypass' | 'dont-ask' | 'manual'
+  thinking_effort: 'high' | 'low' | 'max' | 'off'
+  thinking_supported?: boolean
   progress?: ProgressState
   session_id?: string
   tools: string[]

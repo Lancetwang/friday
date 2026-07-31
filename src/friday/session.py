@@ -18,6 +18,7 @@ from agent_core import Agent, AgentEvent, RunContext
 from friday.app import build_friday, compact_friday, reset_friday, resume_friday, undo_friday
 from friday.checkpoint import finish_pending_checkpoint
 from friday.config import load_model_config
+from friday.model_options import DEFAULT_THINKING_EFFORT, normalize_thinking_effort, supports_thinking
 from friday.progress import current_progress, finish_progress
 from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, conversation_body, hydrate
 from friday.tools import allow_permissions_for_session, approve_pending, pending_approval
@@ -60,11 +61,16 @@ class FridaySession:
         self.agent: Agent | None = None
         self.context: RunContext | None = None
         self.model_profile: str | None = None
+        self.thinking_effort: str | None = None
         self.suspended: dict[str, Any] | None = None
 
     def ensure(self) -> tuple[Agent, RunContext]:
         if self.agent is None or self.context is None:
-            kwargs = {"stream": self.stream, **({"profile_id": self.model_profile} if self.model_profile else {})}
+            kwargs = {
+                "stream": self.stream,
+                **({"profile_id": self.model_profile} if self.model_profile else {}),
+                **({"thinking_effort": self.thinking_effort} if self.thinking_effort else {}),
+            }
             self._adopt(*build_friday(self.workspace, **kwargs))
         return self.agent, self.context
 
@@ -201,6 +207,7 @@ class FridaySession:
             stream=self.stream,
             force=force,
             profile_id=self.model_profile,
+            thinking_effort=self.thinking_effort or DEFAULT_THINKING_EFFORT,
         )
         self._adopt(agent, context)
         self.suspended = None
@@ -210,6 +217,17 @@ class FridaySession:
         """Change providers without losing the live conversation."""
         config = load_model_config(self.workspace, profile_id=profile_id)
         self.model_profile = config.profile_id
+        self._rebuild()
+
+    def select_thinking(self, effort: str) -> str:
+        config = load_model_config(self.workspace, profile_id=self.model_profile)
+        if not supports_thinking(config.provider):
+            raise ValueError("The selected model provider does not support configurable thinking.")
+        self.thinking_effort = normalize_thinking_effort(effort)
+        self._rebuild()
+        return self.thinking_effort
+
+    def _rebuild(self) -> None:
         if self.context is None:
             self.agent = None
             return
@@ -224,11 +242,13 @@ class FridaySession:
                 for item in previous.metadata.get(USER_MESSAGE_TIMES_KEY, [])
                 if isinstance(item, dict)
             ],
+            thinking_effort=self.thinking_effort or DEFAULT_THINKING_EFFORT,
         )
         agent, context = build_friday(
             self.workspace,
             stream=self.stream,
             profile_id=self.model_profile,
+            thinking_effort=self.thinking_effort or DEFAULT_THINKING_EFFORT,
         )
         context.usage = previous.usage
         hydrate(context, state)
@@ -247,6 +267,9 @@ class FridaySession:
         config = context.metadata.get("friday.model_config")
         if isinstance(config, dict) and config.get("profile_id"):
             self.model_profile = str(config["profile_id"])
+        effort = context.metadata.get("friday.thinking_effort")
+        if isinstance(effort, str):
+            self.thinking_effort = effort
         if self.on_event is not None:
             context.on_event = self.on_event
 

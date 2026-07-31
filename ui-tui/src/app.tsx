@@ -37,6 +37,7 @@ const APPROVAL_OPTIONS = [
 ] as const
 
 type ApprovalDecision = typeof APPROVAL_OPTIONS[number]['id']
+const THINKING_EFFORTS = ['off', 'low', 'high', 'max'] as const
 
 const HELP_TEXT = `# Friday commands
 
@@ -46,6 +47,7 @@ const HELP_TEXT = `# Friday commands
 | \`/new\` | Start a new conversation in the current workspace. |
 | \`/memory [help]\` | Inspect or manage persistent memory. |
 | \`/model [id]\` | List configured models or switch the active model. |
+| \`/thinking [off|low|high|max]\` | Show or set model thinking effort. Tab cycles it. |
 | \`/context\` | Print current context usage. |
 | \`/progress\` | Show the current objective and plan. |
 | \`/trace\` | Open the local Trace Workbench. |
@@ -93,6 +95,13 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setProgress(event.payload.progress ?? null)
         setStreaming('')
         setBusy(false)
+      } else if (event.type === 'reasoning.delta') {
+        const id = event.payload.id || ''
+        if (id && event.payload.text) {
+          setMessages(items => upsertThinking(items, activeTurn.current, id, event.payload.text))
+        }
+      } else if (event.type === 'reasoning.complete') {
+        setMessages(items => completeThinking(items, activeTurn.current, event.payload.id, Boolean(event.payload.error)))
       } else if (event.type === 'tool.start') {
         const startMs = Date.now()
         setMessages(items => addToolRun(items, activeTurn.current, { arguments: event.payload.arguments, id: event.payload.tool_call_id || `${startMs}-${items.length}`, name: event.payload.name, startMs }))
@@ -134,7 +143,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   }, [app, gateway])
 
   useEffect(() => {
-    if (!messages.some(message => message.tools?.some(run => !run.endMs))) {
+    const active = messages.some(message =>
+      message.tools?.some(run => !run.endMs) || message.thinking?.some(block => block.ended == null)
+    )
+    if (!active) {
       return
     }
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -171,6 +183,14 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (key.escape) {
         setResumePicker(null)
       }
+      return
+    }
+    if (key.tab && !busy && info?.thinking_supported) {
+      const current = THINKING_EFFORTS.indexOf(info.thinking_effort)
+      const effort = THINKING_EFFORTS[(current + 1) % THINKING_EFFORTS.length]!
+      void gateway.request<{ info: SessionInfo }>('thinking.set', { effort })
+        .then(result => setInfo(result.info))
+        .catch(error => setActivity(error.message))
       return
     }
     if (key.ctrl && (char.toLowerCase() === 'o' || char === '\u000f')) {
@@ -357,6 +377,16 @@ function runCommand(
       setInfo(result.info)
       setMessages(items => [...items, { role: 'system', text: `Model: ${result.info.model}` }])
     })
+  } else if (command === '/thinking') {
+    const effort = text.slice('/thinking'.length).trim().toLowerCase()
+    if (!THINKING_EFFORTS.includes(effort as typeof THINKING_EFFORTS[number])) {
+      setMessages(items => [...items, { role: 'system', text: 'Usage: /thinking off|low|high|max' }])
+    } else {
+      void gateway.request<{ info: SessionInfo }>('thinking.set', { effort }).then(result => {
+        setInfo(result.info)
+        setMessages(items => [...items, { role: 'system', text: `Thinking effort: ${result.info.thinking_effort}` }])
+      })
+    }
   } else if (command.startsWith('/context')) {
     void gateway.request<{ text: string }>('context.get').then(result =>
       setMessages(items => [...items, { role: 'system', text: result.text }])
@@ -445,9 +475,18 @@ function runCommand(
 }
 
 type UiMessage = Message & {
+  thinking?: ThinkingBlock[]
   tools?: ToolRun[]
   turnId?: string
   verification?: VerificationStatus
+}
+
+type ThinkingBlock = {
+  ended?: number
+  error?: boolean
+  id: string
+  started: number
+  text: string
 }
 
 type VerificationStatus = VerificationResult & {
@@ -507,6 +546,39 @@ function addToolRun(messages: UiMessage[], turnId: string | null, run: ToolRun) 
   return next
 }
 
+function upsertThinking(messages: UiMessage[], turnId: string | null, id: string, text: string) {
+  const index = turnIndex(messages, turnId)
+  if (index === -1) {
+    return messages
+  }
+  const next = [...messages]
+  const message = next[index]!
+  const blocks = [...(message.thinking ?? [])]
+  const blockIndex = blocks.findIndex(block => block.id === id)
+  if (blockIndex === -1) {
+    blocks.push({ id, started: Date.now(), text })
+  } else {
+    blocks[blockIndex] = { ...blocks[blockIndex]!, text: blocks[blockIndex]!.text + text }
+  }
+  next[index] = { ...message, thinking: blocks }
+  return next
+}
+
+function completeThinking(messages: UiMessage[], turnId: string | null, id: string, error: boolean) {
+  const index = turnIndex(messages, turnId)
+  if (index === -1) {
+    return messages
+  }
+  const next = [...messages]
+  const message = next[index]!
+  next[index] = {
+    ...message,
+    thinking: (message.thinking ?? []).map(block =>
+      block.id === id && block.ended == null ? { ...block, ended: Date.now(), error: error || undefined } : block)
+  }
+  return next
+}
+
 function updateToolRun(messages: UiMessage[], turnId: string | null, id: string, patch: Partial<ToolRun>) {
   const index = turnIndex(messages, turnId)
   if (index === -1) {
@@ -551,19 +623,20 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
   const model = info?.model_name || info?.model || 'loading model'
   const tools = info?.tools.length ?? 0
   const permissions = info?.permission_mode === 'bypass' ? 'full access' : 'request approval'
+  const thinking = info?.thinking_supported ? ` · thinking ${info.thinking_effort}` : ''
   return (
     <Box flexDirection="column">
       <Box>
         <Text color={theme.accent}>●</Text>
         <Text bold> Friday</Text>
-        <Text color={theme.dim}>  agent · /help for commands · Ctrl+O tools</Text>
+        <Text color={theme.dim}>  agent · /help commands · Ctrl+O tools{info?.thinking_supported ? ' · Tab thinking' : ''}</Text>
       </Box>
       <Text color={theme.dim} wrap="truncate-end">{cwd}</Text>
       {progress?.objective ? <ProgressLine progress={progress} /> : null}
       <Box>
         {busy ? <Text color={theme.warn}>{spinner} </Text> : <Text color={theme.ok}>● </Text>}
         <Text color={busy ? theme.warn : theme.ok}>{status}</Text>
-        <Text color={theme.dim}> · {shortModel(model)} · {tools} tools · {permissions}</Text>
+        <Text color={theme.dim}> · {shortModel(model)}{thinking} · {tools} tools · {permissions}</Text>
       </Box>
     </Box>
   )
@@ -590,6 +663,7 @@ function MessageLine({ toolsExpanded = false, message, now = Date.now() }: { too
         <Text color={theme.accent}>❯ </Text>
         <Box flexDirection="column">
           <Text bold wrap="wrap">{message.text}</Text>
+          <ThinkingPanel blocks={message.thinking ?? []} expanded={toolsExpanded} now={now} />
           <ToolPanel toolsExpanded={toolsExpanded} now={now} runs={message.tools ?? []} />
           {message.verification ? <VerificationLine verification={message.verification} /> : null}
         </Box>
@@ -618,6 +692,44 @@ function VerificationLine({ verification }: { verification: VerificationStatus }
   const passing = status === 'pass'
   const color = passing ? theme.ok : status === 'repair' || status === 'inconclusive' || status === 'approval pending' ? theme.warn : theme.error
   return <Text color={color}>{passing ? '✓' : color === theme.warn ? '!' : '✗'} verification: {status}</Text>
+}
+
+function ThinkingPanel({ blocks, expanded, now }: { blocks: ThinkingBlock[]; expanded: boolean; now: number }) {
+  if (!blocks.length) {
+    return null
+  }
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={theme.dim}>thinking (Ctrl+O)</Text>
+      {blocks.map(block => {
+        const done = block.ended != null
+        const color = block.error ? theme.error : done ? theme.dim : theme.warn
+        const seconds = formatThinkingSeconds(((block.ended ?? now) - block.started) / 1000)
+        const label = block.error ? `Thinking stopped · ${seconds}` : done ? `Thought for ${seconds}` : `Thinking… ${seconds}`
+        return (
+          <Box flexDirection="column" key={block.id}>
+            <Text wrap="truncate-end">
+              <Text color={color}>●</Text>
+              <Text color={done && !block.error ? theme.dim : undefined}> {label}</Text>
+            </Text>
+            {expanded && block.text ? (
+              <Box paddingLeft={2}>
+                <Text color={theme.dim}>{block.text}</Text>
+              </Box>
+            ) : null}
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
+function formatThinkingSeconds(seconds: number) {
+  const value = Math.max(0, seconds)
+  if (value < 60) return value < 10 ? `${value.toFixed(1)}s` : `${Math.round(value)}s`
+  const minutes = Math.floor(value / 60)
+  const rest = Math.round(value % 60)
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`
 }
 
 function ToolPanel({ toolsExpanded, now, runs }: { toolsExpanded: boolean; now: number; runs: ToolRun[] }) {

@@ -73,7 +73,7 @@ def begin_live_trace(
 def write_live_event(path: Path, turn_id: str, event: Any) -> None:
     value = _event_dict(event)
     event_type = str(value.get("type") or "")
-    if event_type in {"model.delta", "model.request", "model.response", "message.add"}:
+    if event_type in {"model.delta", "model.reasoning.delta", "model.request", "model.response", "message.add"}:
         return
     data = value.get("data", {})
     data = dict(data) if isinstance(data, dict) else {}

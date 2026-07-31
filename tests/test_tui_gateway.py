@@ -101,6 +101,57 @@ class TuiGatewayTests(unittest.TestCase):
 
         event.assert_called_once_with("verification.start", {})
 
+    def test_gateway_exposes_reasoning_as_grouped_stream_events(self) -> None:
+        gateway = Gateway()
+
+        with patch.object(gateway, "event") as event:
+            gateway.on_agent_event(
+                AgentEvent(
+                    "model.reasoning.delta",
+                    category="model",
+                    run_id="run-1",
+                    step=3,
+                    data={"content": "think"},
+                )
+            )
+            gateway.on_agent_event(
+                AgentEvent(
+                    "model.response",
+                    category="model",
+                    run_id="run-1",
+                    step=3,
+                    data={"has_reasoning": True},
+                )
+            )
+            gateway.on_agent_event(
+                AgentEvent(
+                    "model.reasoning.delta",
+                    category="model",
+                    run_id="run-1",
+                    step=3,
+                    data={"content": "again"},
+                )
+            )
+            gateway.on_agent_event(
+                AgentEvent(
+                    "model.response",
+                    category="model",
+                    run_id="run-1",
+                    step=3,
+                    data={"has_reasoning": True},
+                )
+            )
+
+        self.assertEqual(
+            [call.args for call in event.call_args_list],
+            [
+                ("reasoning.delta", {"id": "reasoning-1", "text": "think"}),
+                ("reasoning.complete", {"id": "reasoning-1"}),
+                ("reasoning.delta", {"id": "reasoning-2", "text": "again"}),
+                ("reasoning.complete", {"id": "reasoning-2"}),
+            ],
+        )
+
     def test_message_complete_includes_final_verification(self) -> None:
         gateway = Gateway()
         callback = gateway.session.on_turn_complete
@@ -232,6 +283,18 @@ class TuiGatewayTests(unittest.TestCase):
 
             self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "bypass")
             ok.assert_called_once_with("1", {"permission_mode": "bypass"})
+
+    def test_gateway_sets_thinking_effort_on_the_shared_session(self) -> None:
+        gateway = Gateway()
+        info = {"thinking_effort": "max", "thinking_supported": True}
+
+        with patch.object(gateway.session, "select_thinking", return_value="max") as select:
+            with patch.object(gateway, "session_info", return_value=info):
+                with patch.object(gateway, "ok") as ok:
+                    gateway.handle({"id": "1", "method": "thinking.set", "params": {"effort": "max"}})
+
+        select.assert_called_once_with("max")
+        ok.assert_called_once_with("1", {"thinking_effort": "max", "info": info})
 
     def test_gateway_saves_model_key_without_returning_it(self) -> None:
         gateway = Gateway()

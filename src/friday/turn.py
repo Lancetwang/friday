@@ -199,6 +199,7 @@ def run_turn(
             progress,
             last_usage=metrics,
             user_message_times=context.metadata.get(USER_MESSAGE_TIMES_KEY),
+            thinking_effort=str(context.metadata.get("friday.thinking_effort") or "high"),
         )
         finish_live_trace(
             live_path,

@@ -251,12 +251,10 @@ def build_model(config: ModelConfig) -> ChatModel:
     api_key = model_api_key(config)
     if config.provider == "anthropic":
         return AnthropicModel(api_key=api_key, base_url=config.base_url or None, model=config.model)
-    extra_body = {"thinking": {"type": "disabled"}} if config.provider == "mimo" else None
     return LLM(
         api_key=api_key,
         base_url=config.base_url or None,
         model=config.model,
-        extra_body=extra_body,
     )
 
 

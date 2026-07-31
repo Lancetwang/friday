@@ -19,6 +19,7 @@ from friday.config import (
 )
 from friday.context import context_report
 from friday.memory import format_memory_result, run_memory_command
+from friday.model_options import supports_thinking
 from friday.session import FridaySession
 from friday.skills import discover_skills, skill_body
 from friday.state import USER_MESSAGE_TIMES_KEY, delete_session, rename_session
@@ -68,6 +69,8 @@ class Gateway:
 
     def __init__(self, output=None) -> None:
         self.output = output or sys.stdout
+        self.reasoning_ids: dict[str, str] = {}
+        self.reasoning_seq = 0
         self.tool_names: dict[str, str] = {}
         self.session = self._new_session()
 
@@ -129,6 +132,9 @@ class Gateway:
                 self.ok(rid, {"skill": skill, "content": skill_body(Path(path).read_text(encoding="utf-8"))})
             elif method == "permission.set":
                 self.ok(rid, {"permission_mode": set_permission_mode(str(params.get("mode") or ""))})
+            elif method == "thinking.set":
+                effort = self.session.select_thinking(str(params.get("effort") or ""))
+                self.ok(rid, {"thinking_effort": effort, "info": self.session_info()})
             elif method == "model.list":
                 self.ok(rid, load_model_catalog(Path.cwd().resolve()))
             elif method == "model.save":
@@ -256,6 +262,9 @@ class Gateway:
             else:
                 self.err(rid, f"unknown method: {method}")
         except Exception as exc:
+            for reasoning_id in self.reasoning_ids.values():
+                self.event("reasoning.complete", {"id": reasoning_id, "error": True})
+            self.reasoning_ids.clear()
             self.err(rid, str(exc))
 
     def session_info(self) -> dict[str, Any]:
@@ -275,6 +284,8 @@ class Gateway:
             "model_name": config.profile_name,
             "model_profile": config.profile_id,
             "model_vision": config.vision,
+            "thinking_effort": self.session.thinking_effort or "high",
+            "thinking_supported": supports_thinking(config.provider),
             "permission_mode": permission_mode(),
             "progress": self.session.progress(),
             "approval": pending_approval(),
@@ -283,7 +294,22 @@ class Gateway:
         }
 
     def on_agent_event(self, event: AgentEvent) -> None:
-        if event.type == "verification.start":
+        reasoning_key = f"{event.run_id}:{event.step}"
+        if event.type == "model.reasoning.delta":
+            reasoning_id = self.reasoning_ids.get(reasoning_key)
+            if reasoning_id is None:
+                self.reasoning_seq += 1
+                reasoning_id = f"reasoning-{self.reasoning_seq}"
+                self.reasoning_ids[reasoning_key] = reasoning_id
+            self.event(
+                "reasoning.delta",
+                {"id": reasoning_id, "text": str(event.data.get("content") or "")},
+            )
+        elif event.type == "model.response" and event.data.get("has_reasoning"):
+            reasoning_id = self.reasoning_ids.pop(reasoning_key, None)
+            if reasoning_id is not None:
+                self.event("reasoning.complete", {"id": reasoning_id})
+        elif event.type == "verification.start":
             self.event("verification.start", {})
         elif event.type == "progress.updated":
             self.event("progress.update", dict(event.data))

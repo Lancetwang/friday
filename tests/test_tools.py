@@ -18,6 +18,7 @@ from friday.config import DEFAULT_MODEL_CONFIG, load_model_catalog, load_model_c
 from friday.context import _context_text, compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
+from friday.model_options import supports_thinking, thinking_request_kwargs
 from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.skills import discover_skills, skill_routing
@@ -744,6 +745,34 @@ class ResetTests(unittest.TestCase):
         self.assertEqual(DEFAULT_MODEL_CONFIG.max_output_tokens, 65536)
         self.assertEqual(DEFAULT_MODEL_CONFIG.run_token_budget, 2824000)
 
+    def test_deepseek_thinking_effort_maps_to_off_low_high_and_max(self) -> None:
+        self.assertEqual(
+            thinking_request_kwargs(DEFAULT_MODEL_CONFIG.provider, "off"),
+            {"extra_body": {"thinking": {"type": "disabled"}}},
+        )
+        for effort in ("low", "high", "max"):
+            self.assertEqual(
+                thinking_request_kwargs(DEFAULT_MODEL_CONFIG.provider, effort),
+                {
+                    "extra_body": {"thinking": {"type": "enabled"}},
+                    "reasoning_effort": effort,
+                },
+            )
+
+    def test_mimo_thinking_keeps_four_user_levels_over_a_binary_protocol(self) -> None:
+        self.assertTrue(supports_thinking("mimo"))
+        self.assertEqual(
+            thinking_request_kwargs("mimo", "off"),
+            {"extra_body": {"thinking": {"type": "disabled"}}},
+        )
+        for effort in ("low", "high", "max"):
+            self.assertEqual(
+                thinking_request_kwargs("mimo", effort),
+                {"extra_body": {"thinking": {"type": "enabled"}}},
+            )
+        self.assertFalse(supports_thinking("openai"))
+        self.assertEqual(thinking_request_kwargs("openai", "max"), {})
+
     def test_model_profiles_keep_credentials_out_of_the_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -788,6 +817,11 @@ class ResetTests(unittest.TestCase):
                         _agent, context = build_friday(root, stream=False)
 
             self.assertEqual(flow_builder.call_args.kwargs["chat_kwargs"]["max_tokens"], 4321)
+            self.assertEqual(flow_builder.call_args.kwargs["chat_kwargs"]["reasoning_effort"], "high")
+            self.assertEqual(
+                flow_builder.call_args.kwargs["chat_kwargs"]["extra_body"],
+                {"thinking": {"type": "enabled"}},
+            )
             self.assertIn("flow", agent_class.call_args.kwargs)
             self.assertEqual(context.metadata["friday.model_config"]["context_window"], 353000)
             self.assertEqual(context.metadata["friday.model_config"]["run_token_budget"], 2824000)
@@ -1713,13 +1747,22 @@ class ResumeTests(unittest.TestCase):
                 patch("friday.app.Path.home", return_value=home),
                 patch("friday.tools.Path.home", return_value=home),
             ):
-                save_turn(root, "hi", "hello", "s1", snapshot, last_usage={"input_tokens": 42, "output_tokens": 3})
+                save_turn(
+                    root,
+                    "hi",
+                    "hello",
+                    "s1",
+                    snapshot,
+                    last_usage={"input_tokens": 42, "output_tokens": 3},
+                    thinking_effort="max",
+                )
                 _agent, resumed, count = resume_friday(root, stream=False)
 
             messages = resumed.get_messages()
             non_system = [m for m in messages if m.get("role") != "system"]
             self.assertEqual(count, 1)
             self.assertEqual(resumed.metadata["friday.last_usage"]["input_tokens"], 42)
+            self.assertEqual(resumed.metadata["friday.thinking_effort"], "max")
             self.assertEqual(non_system, [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
             self.assertEqual(messages[0]["role"], "system")
             self.assertNotIn("stale prefix", "".join(str(m.get("content", "")) for m in messages if m.get("role") == "system"))

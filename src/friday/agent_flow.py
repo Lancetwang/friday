@@ -59,6 +59,8 @@ def inherit_guarded_run(target: RunContext, source: RunContext) -> None:
     config = source.metadata.get("friday.model_config")
     if isinstance(config, dict):
         target.metadata["friday.model_config"] = dict(config)
+    if isinstance(source.metadata.get("friday.thinking_effort"), str):
+        target.metadata["friday.thinking_effort"] = source.metadata["friday.thinking_effort"]
     target.metadata[GUARD_STATE] = {"event_index": len(target.events), "seen": {}}
     target.metadata.pop(GUARD_STOP_REASON, None)
 

@@ -14,8 +14,16 @@ from agent_core import Agent, RunContext
 
 from friday.agent_flow import build_guarded_flow
 from friday.checkpoint import restore_checkpoint
-from friday.config import ModelConfig, build_model, default_config_text, load_model_config, load_model_environment, output_token_limit
+from friday.config import (
+    ModelConfig,
+    build_model,
+    default_config_text,
+    load_model_config,
+    load_model_environment,
+    output_token_limit,
+)
 from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
+from friday.model_options import DEFAULT_THINKING_EFFORT, normalize_thinking_effort, thinking_request_kwargs
 from friday.prompts import (
     COMPACT_PROMPT,
     default_project_instructions,
@@ -79,6 +87,7 @@ def build_friday(
     *,
     stream: bool = True,
     profile_id: str | None = None,
+    thinking_effort: str = DEFAULT_THINKING_EFFORT,
 ) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
     load_model_environment(root)
@@ -86,13 +95,19 @@ def build_friday(
     friday_dir = migrate_legacy_runtime(root)
     record_project(root)
     config = load_model_config(root, profile_id=profile_id)
+    thinking_effort = normalize_thinking_effort(thinking_effort)
     instructions = build_instructions(root, friday_dir, config)
     tools = build_tools(root, friday_dir)
     agent = Agent(
         flow=build_guarded_flow(
             build_model(config),
             tools,
-            chat_kwargs={"stream": stream, **output_token_limit(config, config.max_output_tokens), "tool_choice": "auto"},
+            chat_kwargs={
+                "stream": stream,
+                **output_token_limit(config, config.max_output_tokens),
+                **thinking_request_kwargs(config.provider, thinking_effort),
+                "tool_choice": "auto",
+            },
         ),
         instructions=instructions,
     )
@@ -101,6 +116,7 @@ def build_friday(
     context.metadata["workspace"] = str(root)
     context.metadata["session_id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
     context.metadata["friday.model_config"] = asdict(config)
+    context.metadata["friday.thinking_effort"] = thinking_effort
     return agent, context
 
 
@@ -179,7 +195,12 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
     workspace = Path(context.metadata["workspace"])
     config = context.metadata.get("friday.model_config")
     profile_id = str(config.get("profile_id") or "") if isinstance(config, dict) else None
-    build_kwargs = {"stream": stream, **({"profile_id": profile_id} if profile_id else {})}
+    thinking_effort = context.metadata.get("friday.thinking_effort")
+    build_kwargs = {
+        "stream": stream,
+        **({"thinking_effort": str(thinking_effort)} if thinking_effort else {}),
+        **({"profile_id": profile_id} if profile_id else {}),
+    }
     new_agent, new_context = build_friday(workspace, **build_kwargs)
     if hasattr(context, "usage") and hasattr(new_context, "usage"):
         # Deliberate aliasing: the rebuilt context accumulates into the same RunUsage
@@ -196,10 +217,17 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
             user_message_times=[dict(item) for item in user_message_times if isinstance(item, dict)]
             if isinstance(user_message_times, list)
             else [],
+            thinking_effort=str(thinking_effort or DEFAULT_THINKING_EFFORT),
         ),
     )
     if session_id:
-        save_session_state(workspace, session_id, new_context.get_messages(), current_progress(new_context))
+        save_session_state(
+            workspace,
+            session_id,
+            new_context.get_messages(),
+            current_progress(new_context),
+            thinking_effort=str(new_context.metadata.get("friday.thinking_effort") or DEFAULT_THINKING_EFFORT),
+        )
     return new_agent, new_context, summary
 
 
@@ -221,11 +249,21 @@ def resume_friday(
     stream: bool = True,
     resume_id: str | None = None,
     profile_id: str | None = None,
+    thinking_effort: str | None = None,
 ) -> tuple[Agent, RunContext, int]:
     root = (workspace or Path.cwd()).resolve()
-    build_kwargs = {"stream": stream, **({"profile_id": profile_id} if profile_id else {})}
-    agent, context = build_friday(root, **build_kwargs)
     snapshot = load_session(root, resume_id)
+    restored_effort = (
+        thinking_effort
+        or (str(snapshot.get("thinking_effort")) if snapshot and snapshot.get("thinking_effort") else None)
+        or DEFAULT_THINKING_EFFORT
+    )
+    build_kwargs = {
+        "stream": stream,
+        "thinking_effort": restored_effort,
+        **({"profile_id": profile_id} if profile_id else {}),
+    }
+    agent, context = build_friday(root, **build_kwargs)
     if not snapshot:
         return agent, context, 0
     # Keep the freshly built system prefix (current rules, memory, environment)
@@ -244,10 +282,15 @@ def undo_friday(
     stream: bool = True,
     force: bool = False,
     profile_id: str | None = None,
+    thinking_effort: str = DEFAULT_THINKING_EFFORT,
 ) -> tuple[Agent, RunContext, dict[str, Any]]:
     root = (workspace or Path.cwd()).resolve()
     restored = restore_checkpoint(root, checkpoint_id=checkpoint_id, force=force)
-    build_kwargs = {"stream": stream, **({"profile_id": profile_id} if profile_id else {})}
+    build_kwargs = {
+        "stream": stream,
+        "thinking_effort": thinking_effort,
+        **({"profile_id": profile_id} if profile_id else {}),
+    }
     agent, context = build_friday(root, **build_kwargs)
     session_id = str(restored.get("session_id") or context.metadata.get("session_id") or "")
     before_progress = restored.get("before_progress")
@@ -262,6 +305,7 @@ def undo_friday(
                 for item in dict(restored.get("before_session") or {}).get("user_message_times", [])
                 if isinstance(item, dict)
             ],
+            thinking_effort=thinking_effort,
         ),
     )
 

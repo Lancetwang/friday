@@ -18,6 +18,7 @@ type Metrics = {
 
 type PermissionMode = 'accept-edits' | 'bypass' | 'dont-ask' | 'manual'
 type ProjectStatus = 'connecting' | 'error' | 'idle' | 'ready'
+type ThinkingEffort = 'high' | 'low' | 'max' | 'off'
 
 const permissionOptions: ReadonlyArray<{
   description: string
@@ -28,6 +29,17 @@ const permissionOptions: ReadonlyArray<{
   { description: 'Allow workspace changes', label: 'Allow edits', value: 'accept-edits' },
   { description: 'Reject risky actions', label: 'Deny risky commands', value: 'dont-ask' },
   { description: 'Run without approval', label: 'Full access', value: 'bypass' }
+]
+
+const thinkingOptions: ReadonlyArray<{
+  description: string
+  label: string
+  value: ThinkingEffort
+}> = [
+  { description: 'Disable model reasoning', label: 'Off', value: 'off' },
+  { description: 'Fast, light reasoning', label: 'Low', value: 'low' },
+  { description: 'Balanced deep reasoning', label: 'High', value: 'high' },
+  { description: 'Maximum reasoning effort', label: 'Max', value: 'max' }
 ]
 
 type Approval = {
@@ -53,6 +65,8 @@ type SessionInfo = {
   model_profile?: string
   model_vision?: boolean
   permission_mode: PermissionMode
+  thinking_effort: ThinkingEffort
+  thinking_supported?: boolean
   session_id?: string
   tools: string[]
 }
@@ -130,17 +144,24 @@ type HistoryItem = {
   tool_call_id?: string
 }
 
+type ThinkingState = {
+  ended?: number
+  error?: boolean
+  started: number
+}
+
 type TimelineItem = {
   arguments?: string
   checkpointId?: string
   createdAt?: string
   id: string
   images?: string[]
-  kind: 'assistant' | 'system' | 'tool' | 'user'
+  kind: 'assistant' | 'reasoning' | 'system' | 'tool' | 'user'
   metrics?: Metrics
   name?: string
   status?: 'approval' | 'done' | 'error' | 'running'
   text: string
+  thinking?: ThinkingState
   toolCallId?: string
 }
 
@@ -207,7 +228,7 @@ function emptyView(path = ''): ProjectView {
     checkpoints: [],
     draft: '',
     guidance: '',
-    info: { cwd: path, model: path ? 'loading' : '', permission_mode: 'manual', tools: [] },
+    info: { cwd: path, model: path ? 'loading' : '', permission_mode: 'manual', thinking_effort: 'high', tools: [] },
     items: [],
     models: emptyModelCatalog,
     pendingApproval: null,
@@ -471,7 +492,39 @@ function App() {
       if (message.method !== 'event' || !message.params) return
       const { payload = {}, type } = message.params
 
-      if (type === 'message.delta') {
+      if (type === 'reasoning.delta') {
+        const reasoningId = String(payload.id || '')
+        const text = String(payload.text || '')
+        if (!reasoningId || !text) return
+        const itemId = `thinking-${reasoningId}`
+        const assistantId = activeAssistants.current.get(workspace)
+        updateView(workspace, current => {
+          if (current.items.some(item => item.id === itemId)) {
+            return {
+              ...current,
+              items: current.items.map(item => item.id === itemId ? { ...item, text: item.text + text } : item)
+            }
+          }
+          const block: TimelineItem = { id: itemId, kind: 'reasoning', text, thinking: { started: Date.now() } }
+          const index = assistantId ? current.items.findIndex(item => item.id === assistantId) : -1
+          return {
+            ...current,
+            items: index < 0
+              ? [...current.items, block]
+              : [...current.items.slice(0, index), block, ...current.items.slice(index)]
+          }
+        })
+      } else if (type === 'reasoning.complete') {
+        const itemId = `thinking-${String(payload.id || '')}`
+        const error = Boolean(payload.error)
+        updateView(workspace, current => ({
+          ...current,
+          items: current.items.map(item =>
+            item.id === itemId && item.thinking && item.thinking.ended == null
+              ? { ...item, thinking: { ...item.thinking, ended: Date.now(), error: error || undefined } }
+              : item)
+        }))
+      } else if (type === 'message.delta') {
         const text = String(payload.text || '')
         let id = activeAssistants.current.get(workspace)
         if (!id) {
@@ -701,6 +754,20 @@ function App() {
         items: [...current.items, { id: nextId('permission'), kind: 'system', text: String(error) }]
       }))
     })
+  }
+
+  const changeThinking = (effort: ThinkingEffort) => {
+    const previous = info.thinking_effort
+    updateView(activeProject, current => ({ ...current, info: { ...current.info, thinking_effort: effort } }))
+    void sendGateway<{ info: SessionInfo }>(activeProject, 'thinking.set', { effort })
+      .then(result => updateView(activeProject, current => ({ ...current, info: result.info })))
+      .catch(error => {
+        updateView(activeProject, current => ({
+          ...current,
+          info: { ...current.info, thinking_effort: previous },
+          items: [...current.items, { id: nextId('thinking'), kind: 'system', text: String(error) }]
+        }))
+      })
   }
 
   const selectModel = (profileId: string) => {
@@ -1013,6 +1080,7 @@ function App() {
   const conversationTitle = selectedSession ? sessionLabel(selectedSession) : 'New conversation'
   const project = isDefaultWorkspace ? 'Personal conversations' : projectLabel(activeProject)
   const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions[0]
+  const thinking = thinkingOptions.find(option => option.value === info.thinking_effort) || thinkingOptions[2]
   const selectedModel = models.profiles.find(profile => profile.id === info.model_profile)
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1396,6 +1464,47 @@ function App() {
                   </button>
                 </div>
               </details>
+              {info.thinking_supported && (
+                <details
+                  className={`permission-picker ${busy ? 'disabled' : ''}`}
+                  key={`${activeProject}-thinking`}
+                  onBlur={event => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute('open')
+                  }}
+                >
+                  <summary
+                    aria-disabled={busy}
+                    aria-label="Thinking effort"
+                    onClick={event => {
+                      if (busy) event.preventDefault()
+                    }}
+                    tabIndex={busy ? -1 : 0}
+                    title="Choose how deeply the model reasons"
+                  >
+                    <span>Thinking: {thinking.label}</span>
+                    <i aria-hidden="true" />
+                  </summary>
+                  <div className="permission-menu">
+                    {thinkingOptions.map(option => (
+                      <button
+                        className={option.value === info.thinking_effort ? 'active' : ''}
+                        key={option.value}
+                        onClick={event => {
+                          event.currentTarget.closest('details')?.removeAttribute('open')
+                          changeThinking(option.value)
+                        }}
+                        type="button"
+                      >
+                        <span className="permission-indicator" />
+                        <span>
+                          <strong>{option.label}</strong>
+                          <small>{option.description}</small>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              )}
               <details
                 className={`permission-picker ${busy ? 'disabled' : ''}`}
                 key={`${activeProject}-permissions`}
@@ -2043,6 +2152,10 @@ function TimelineRow({
     return <div className="system-row">{item.text}</div>
   }
 
+  if (item.kind === 'reasoning') {
+    return <ThinkingRow item={item} />
+  }
+
   if (item.kind === 'tool') {
     return (
       <details className={`tool-row ${item.status}`}>
@@ -2152,6 +2265,44 @@ function TimelineRow({
       </div>
     </article>
   )
+}
+
+function ThinkingRow({ item }: { item: TimelineItem }) {
+  const thinking = item.thinking || { started: Date.now() }
+  const done = thinking.ended != null
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    if (done) return
+    const timer = window.setInterval(() => setNow(Date.now()), 250)
+    return () => window.clearInterval(timer)
+  }, [done])
+
+  const elapsed = Math.max(0, (thinking.ended ?? now) - thinking.started)
+  const label = done
+    ? thinking.error
+      ? `思考中断 · ${formatThinkingDuration(elapsed)}`
+      : `思考了 ${formatThinkingDuration(elapsed)}`
+    : '思考中'
+
+  return (
+    <details className={`thinking-row ${done ? 'done' : 'running'}`}>
+      <summary>
+        <span aria-hidden="true" className="thinking-orb" />
+        <strong>{label}</strong>
+        {!done && <span className="thinking-time">{formatThinkingDuration(elapsed)}</span>}
+      </summary>
+      <div className="thinking-content">{item.text || '…'}</div>
+    </details>
+  )
+}
+
+function formatThinkingDuration(ms: number) {
+  const seconds = Math.max(0, ms / 1000)
+  if (seconds < 60) return seconds < 10 ? `${seconds.toFixed(1)} 秒` : `${Math.round(seconds)} 秒`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds % 60)
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`
 }
 
 function ToolGroup({ items }: { items: TimelineItem[] }) {

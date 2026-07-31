@@ -29,6 +29,7 @@ from typing import Any
 from agent_core import RunContext
 
 from friday.checkpoint import delete_session_checkpoints
+from friday.model_options import DEFAULT_THINKING_EFFORT
 from friday.progress import append_progress_checkpoint, is_progress_checkpoint, restore_progress
 from friday.storage import migrate_legacy_runtime, project_state_dir
 from friday.trace import delete_trace
@@ -47,6 +48,7 @@ class SessionState:
     progress: dict[str, Any] = field(default_factory=dict)
     last_usage: dict[str, Any] | None = None
     user_message_times: list[dict[str, str]] = field(default_factory=list)
+    thinking_effort: str = DEFAULT_THINKING_EFFORT
     turns: int = 0
 
 
@@ -63,6 +65,7 @@ def state_from_snapshot(snapshot: dict[str, Any]) -> SessionState:
         user_message_times=[dict(item) for item in user_message_times if isinstance(item, dict)]
         if isinstance(user_message_times, list)
         else [],
+        thinking_effort=str(snapshot.get("thinking_effort") or DEFAULT_THINKING_EFFORT),
         turns=int(snapshot.get("turns", 0) or 0),
     )
 
@@ -101,6 +104,7 @@ def hydrate(context: RunContext, state: SessionState) -> None:
     if isinstance(state.last_usage, dict):
         context.metadata["friday.last_usage"] = dict(state.last_usage)
     context.metadata[USER_MESSAGE_TIMES_KEY] = [dict(item) for item in state.user_message_times]
+    context.metadata["friday.thinking_effort"] = state.thinking_effort
     append_progress_checkpoint(context)
 
 
@@ -113,6 +117,7 @@ def save_turn(
     progress: dict[str, Any] | None = None,
     last_usage: dict[str, Any] | None = None,
     user_message_times: list[dict[str, str]] | None = None,
+    thinking_effort: str = DEFAULT_THINKING_EFFORT,
 ) -> Path:
     """Persist one snapshot per session, overwritten in place (atomic).
 
@@ -140,6 +145,7 @@ def save_turn(
         "user_message_times": user_message_times
         if isinstance(user_message_times, list)
         else existing.get("user_message_times", []),
+        "thinking_effort": thinking_effort,
     }
     write_session(path, snapshot)
     return path
@@ -166,7 +172,14 @@ def save_progress(workspace: Path, session_id: str, progress: dict[str, Any]) ->
     return path
 
 
-def save_session_state(workspace: Path, session_id: str, messages: list[dict[str, Any]], progress: dict[str, Any]) -> Path | None:
+def save_session_state(
+    workspace: Path,
+    session_id: str,
+    messages: list[dict[str, Any]],
+    progress: dict[str, Any],
+    *,
+    thinking_effort: str = DEFAULT_THINKING_EFFORT,
+) -> Path | None:
     path = project_state_dir(workspace) / "sessions" / f"{session_id}.json"
     existing = read_session(path)
     if not existing:
@@ -175,6 +188,7 @@ def save_session_state(workspace: Path, session_id: str, messages: list[dict[str
         updated=datetime.now().isoformat(timespec="seconds"),
         messages=messages,
         progress=progress,
+        thinking_effort=thinking_effort,
     )
     write_session(path, existing)
     return path

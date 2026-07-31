@@ -10,7 +10,13 @@ from typing import Any, Callable
 from agent_core import Agent, RunContext
 
 from friday.agent_flow import GUARD_STOP_REASON, build_guarded_flow, inherit_guarded_run
-from friday.config import ModelConfig, build_model, load_model_config, output_token_limit
+from friday.config import (
+    ModelConfig,
+    build_model,
+    load_model_config,
+    output_token_limit,
+)
+from friday.model_options import DEFAULT_THINKING_EFFORT, thinking_request_kwargs
 from friday.prompts import SECURITY_NOTES, VERIFIER_NOTES
 from friday.storage import project_state_dir
 from friday.tools import _shell_surface, build_tools, pending_approval
@@ -18,7 +24,12 @@ from friday.tools import _shell_surface, build_tools, pending_approval
 VERIFIER_MAX_STEPS = 10000
 
 
-def build_verifier(workspace: Path, config: ModelConfig | None = None) -> tuple[Agent, RunContext]:
+def build_verifier(
+    workspace: Path,
+    config: ModelConfig | None = None,
+    *,
+    thinking_effort: str = DEFAULT_THINKING_EFFORT,
+) -> tuple[Agent, RunContext]:
     root = workspace.resolve()
     friday_dir = project_state_dir(root)
     config = config or load_model_config(root)
@@ -29,13 +40,19 @@ def build_verifier(workspace: Path, config: ModelConfig | None = None) -> tuple[
         flow=build_guarded_flow(
             build_model(config),
             tools,
-            chat_kwargs={"stream": False, **output_token_limit(config, 900), "tool_choice": "auto"},
+            chat_kwargs={
+                "stream": False,
+                **output_token_limit(config, 900),
+                **thinking_request_kwargs(config.provider, thinking_effort),
+                "tool_choice": "auto",
+            },
         ),
         instructions=f"{SECURITY_NOTES}\n\n{VERIFIER_NOTES}\n\nWorkspace: {root}\nOS: {system}\nShell: {shell}",
     )
     context = agent.new_context()
     context.metadata["workspace"] = str(root)
     context.metadata["friday.model_config"] = asdict(config)
+    context.metadata["friday.thinking_effort"] = thinking_effort
     return agent, context
 
 
@@ -50,7 +67,8 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
     context.emit("verification.start", category="verification", data={"goal_chars": len(goal)})
     config_data = context.metadata.get("friday.model_config")
     config = ModelConfig(**config_data) if isinstance(config_data, dict) else None
-    verifier, verifier_context = build_verifier(workspace, config)
+    thinking_effort = str(context.metadata.get("friday.thinking_effort") or DEFAULT_THINKING_EFFORT)
+    verifier, verifier_context = build_verifier(workspace, config, thinking_effort=thinking_effort)
     verifier_context.usage = context.usage
     if context.on_observation is not None:
         def observe(event: Any) -> None:

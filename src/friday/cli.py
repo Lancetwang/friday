@@ -367,7 +367,7 @@ def _slash(text: str, session: FridaySession) -> None:
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /new, /model [id], /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|bypass], /approve [session], /reject [guidance], /reset, /exit")
+        print("/help, /new, /model [id], /thinking [off|low|high|max], /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|bypass], /approve [session], /reject [guidance], /reset, /exit")
     elif command == "new":
         session.new()
         print("started a new conversation")
@@ -381,6 +381,16 @@ def _slash(text: str, session: FridaySession) -> None:
         select_model_profile(Path.cwd().resolve(), profile_id)
         session.select_model(profile_id)
         print(f"model: {profile_id}")
+    elif command.startswith("thinking"):
+        requested = raw_command[len("thinking") :].strip()
+        if requested:
+            try:
+                session.select_thinking(requested)
+            except ValueError as exc:
+                print(exc)
+                return
+        session.ensure()
+        print(f"thinking effort: {session.thinking_effort}")
     elif command == "context":
         _agent, context = session.ensure()
         print(_context_report(context))

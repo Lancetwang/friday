@@ -1909,6 +1909,89 @@ input[type="checkbox"] {
   animation-delay: 0.3s;
 }
 
+/* Reasoning (model thinking) rows */
+
+.thinking-row {
+  margin: 18px 0;
+  border: 0;
+  background: transparent;
+}
+
+.thinking-row > summary {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin-left: -8px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-radius: var(--radius-m);
+  color: var(--muted);
+  font-size: var(--text-label);
+  list-style: none;
+  transition: color var(--dur-1) ease-out, background-color var(--dur-1) ease-out;
+}
+
+.thinking-row > summary:hover {
+  color: var(--ink);
+  background: var(--fill);
+}
+
+.thinking-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-orb {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.thinking-row.running > summary .thinking-orb {
+  animation: pulse 1.2s infinite ease-in-out;
+}
+
+.thinking-row.done > summary .thinking-orb {
+  background: var(--faint);
+}
+
+.thinking-row > summary strong {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+}
+
+.thinking-row > summary:hover strong {
+  color: var(--ink);
+}
+
+.thinking-row > summary .thinking-time {
+  color: var(--faint);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.thinking-content {
+  max-height: 240px;
+  margin: 4px 0 6px;
+  padding: 2px 4px 8px 15px;
+  overflow-y: auto;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+  scrollbar-color: var(--faint) transparent;
+  scrollbar-width: thin;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.thinking-row[open] > .thinking-content {
+  animation: rise-in var(--dur-2) var(--ease-out) backwards;
+}
+
 /* Approval */
 
 .approval-panel {
@@ -2690,7 +2773,8 @@ input[type="checkbox"] {
 .message,
 .system-row,
 .tool-row,
-.thinking {
+.thinking,
+.thinking-row {
   animation: rise-in var(--dur-3) var(--ease-out) backwards;
 }
 
