@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,8 +13,9 @@ from agent_core import AgentEvent, RunContext
 
 from friday.session import FridaySession
 from friday.app_server import Gateway, session_history, verification_status
-from friday.state import save_turn
+from friday.state import delete_session_tree, fork_session, read_session, resume_choices, save_turn, session_path, session_tree
 from friday.turn import TurnResult
+from friday.turn import TurnCancelled
 
 
 def _turn_result(answer: str, verifications: list[dict] | None = None) -> TurnResult:
@@ -99,7 +102,9 @@ class TuiGatewayTests(unittest.TestCase):
         with patch.object(gateway, "event") as event:
             gateway.on_agent_event(AgentEvent("verification.start", category="verification"))
 
-        event.assert_called_once_with("verification.start", {})
+        payload = event.call_args.args[1]
+        self.assertEqual(event.call_args.args[0], "verification.start")
+        self.assertEqual(payload["session_id"], gateway.session.session_id)
 
     def test_gateway_exposes_reasoning_as_grouped_stream_events(self) -> None:
         gateway = Gateway()
@@ -142,15 +147,13 @@ class TuiGatewayTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(
-            [call.args for call in event.call_args_list],
-            [
-                ("reasoning.delta", {"id": "reasoning-1", "text": "think"}),
-                ("reasoning.complete", {"id": "reasoning-1"}),
-                ("reasoning.delta", {"id": "reasoning-2", "text": "again"}),
-                ("reasoning.complete", {"id": "reasoning-2"}),
-            ],
-        )
+        self.assertEqual([call.args[0] for call in event.call_args_list], [
+            "reasoning.delta", "reasoning.complete", "reasoning.delta", "reasoning.complete"
+        ])
+        self.assertEqual([call.args[1]["id"] for call in event.call_args_list], [
+            "reasoning-1", "reasoning-1", "reasoning-2", "reasoning-2"
+        ])
+        self.assertTrue(all(call.args[1]["session_id"] == gateway.session.session_id for call in event.call_args_list))
 
     def test_message_complete_includes_final_verification(self) -> None:
         gateway = Gateway()
@@ -170,7 +173,84 @@ class TuiGatewayTests(unittest.TestCase):
         with patch.object(gateway, "event") as event:
             gateway.on_agent_event(AgentEvent("progress.updated", category="progress", data=progress))
 
-        event.assert_called_once_with("progress.update", progress)
+        event.assert_called_once_with("progress.update", {**progress, "session_id": gateway.session.session_id})
+
+    def test_background_gateway_can_switch_sessions_while_a_turn_runs(self) -> None:
+        gateway = Gateway(output=io.StringIO(), background=True)
+        first = gateway.session
+        started = threading.Event()
+        release = threading.Event()
+
+        def chat(*_args, **_kwargs):
+            started.set()
+            release.wait(2)
+            return _turn_result("done")
+
+        with patch.object(first, "chat", side_effect=chat):
+            gateway.handle({"id": "chat", "method": "chat.send", "params": {"text": "wait"}})
+            self.assertTrue(started.wait(1))
+            gateway.handle({"id": "new", "method": "session.new"})
+            self.assertNotEqual(gateway.session.session_id, first.session_id)
+            self.assertIn(first.session_id, [choice["id"] for choice in gateway.session_choices()])
+            thread = gateway.runs[first.session_id]
+            release.set()
+            thread.join(2)
+
+    def test_background_gateway_cancels_the_selected_turn(self) -> None:
+        output = io.StringIO()
+        gateway = Gateway(output=output, background=True)
+        session = gateway.session
+        started = threading.Event()
+
+        def chat(*_args, **_kwargs):
+            started.set()
+            while True:
+                session.raise_if_cancelled()
+                time.sleep(0.01)
+
+        with patch.object(session, "chat", side_effect=chat):
+            gateway.handle({"id": "chat", "method": "chat.send", "params": {"text": "wait"}})
+            self.assertTrue(started.wait(1))
+            thread = gateway.runs[session.session_id]
+            gateway.handle({"id": "cancel", "method": "chat.cancel"})
+            thread.join(2)
+
+        self.assertIn('"method": "event"', output.getvalue())
+        self.assertIn('"type": "message.cancelled"', output.getvalue())
+
+    def test_cancelled_turn_restores_the_previous_conversation(self) -> None:
+        session = FridaySession(session_id="s1")
+        session.agent = object()
+        session.context = RunContext(metadata={"workspace": str(Path.cwd()), "session_id": "s1"})
+        session.context.add_message("system", "prefix")
+        session.context.add_message("user", "kept")
+        fresh = RunContext(metadata={"workspace": str(Path.cwd()), "session_id": "s1"})
+        fresh.add_message("system", "fresh prefix")
+
+        with patch("friday.session.run_turn", side_effect=TurnCancelled("stop")):
+            with patch("friday.session.build_friday", return_value=(object(), fresh)):
+                with self.assertRaises(TurnCancelled):
+                    session.chat("discarded")
+
+        self.assertEqual([message["content"] for message in session.context.get_messages()], ["fresh prefix", "kept"])
+
+    def test_forks_are_hidden_from_recent_sessions_and_delete_as_a_subtree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            messages = [
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": "first"},
+                {"role": "user", "content": "two"},
+                {"role": "assistant", "content": "second"},
+            ]
+            save_turn(root, "one", "second", "root", messages)
+            fork = fork_session(root, "root", 1)
+            save_turn(root, "branch", "done", fork["session_id"], fork["messages"])
+
+            self.assertEqual([choice["id"] for choice in resume_choices(root)], ["root"])
+            self.assertEqual(len(session_tree(root, fork["session_id"])["nodes"]), 2)
+            self.assertEqual(read_session(session_path(root, fork["session_id"]))["fork_parent"], "root")
+            self.assertCountEqual(delete_session_tree(root, "root"), ["root", fork["session_id"]])
 
     def test_gateway_correlates_tool_events_by_call_id(self) -> None:
         gateway = Gateway()

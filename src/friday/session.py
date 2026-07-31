@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from threading import Event
 from typing import Any, Callable
 
 from agent_core import Agent, AgentEvent, RunContext
@@ -20,9 +21,9 @@ from friday.checkpoint import finish_pending_checkpoint
 from friday.config import load_model_config
 from friday.model_options import DEFAULT_THINKING_EFFORT, normalize_thinking_effort, supports_thinking
 from friday.progress import current_progress, finish_progress
-from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, conversation_body, hydrate
+from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, conversation_body, hydrate, new_session_id
 from friday.tools import allow_permissions_for_session, approve_pending, pending_approval
-from friday.turn import TurnResult, run_turn
+from friday.turn import TurnCancelled, TurnResult, run_turn
 
 APPROVAL_FOLLOWUP_PROMPT = (
     "The user approved the pending command and it has now executed. "
@@ -46,6 +47,7 @@ class FridaySession:
         on_turn_complete: Callable[[TurnResult], None] | None = None,
         on_approval: Callable[[dict[str, Any]], None] | None = None,
         on_rejection: Callable[[dict[str, Any]], None] | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.workspace = (workspace or Path.cwd()).resolve()
         self.stream = stream
@@ -63,6 +65,8 @@ class FridaySession:
         self.model_profile: str | None = None
         self.thinking_effort: str | None = None
         self.suspended: dict[str, Any] | None = None
+        self.session_id = session_id or new_session_id()
+        self._cancel_event = Event()
 
     def ensure(self) -> tuple[Agent, RunContext]:
         if self.agent is None or self.context is None:
@@ -71,7 +75,7 @@ class FridaySession:
                 **({"profile_id": self.model_profile} if self.model_profile else {}),
                 **({"thinking_effort": self.thinking_effort} if self.thinking_effort else {}),
             }
-            self._adopt(*build_friday(self.workspace, **kwargs))
+            self._adopt(*build_friday(self.workspace, session_id=self.session_id, **kwargs))
         return self.agent, self.context
 
     def progress(self) -> dict[str, Any]:
@@ -88,26 +92,52 @@ class FridaySession:
         images: Sequence[str] = (),
     ) -> TurnResult:
         agent, context = self.ensure()
+        previous = SessionState(
+            session_id=self.session_id,
+            body=conversation_body(context.get_messages()),
+            progress=current_progress(context),
+            last_usage=dict(context.metadata.get("friday.last_usage") or {}),
+            user_message_times=[
+                dict(item)
+                for item in context.metadata.get(USER_MESSAGE_TIMES_KEY, [])
+                if isinstance(item, dict)
+            ],
+            thinking_effort=self.thinking_effort or DEFAULT_THINKING_EFFORT,
+        )
+        self._cancel_event.clear()
+        context.metadata["friday.cancel_event"] = self._cancel_event
         config = context.metadata.get("friday.model_config")
         if images and (not isinstance(config, dict) or not config.get("vision")):
             raise ValueError("The selected model does not support image input.")
         if self.on_turn_start is not None:
             self.on_turn_start(text)
-        result = run_turn(
-            agent,
-            context,
-            text,
-            goal=goal,
-            stream=self.stream,
-            on_delta=self.on_delta,
-            on_verify=self.on_verify,
-            on_progress=self.on_progress,
-            on_context_notice=self.on_context_notice,
-            approval_result=approval_result,
-            user_label=user_label,
-            continuation=continuation,
-            images=images,
-        )
+        try:
+            result = run_turn(
+                agent,
+                context,
+                text,
+                goal=goal,
+                stream=self.stream,
+                on_delta=self._on_delta,
+                on_verify=self.on_verify,
+                on_progress=self.on_progress,
+                on_context_notice=self.on_context_notice,
+                approval_result=approval_result,
+                user_label=user_label,
+                continuation=continuation,
+                images=images,
+            )
+        except TurnCancelled:
+            agent, context = build_friday(
+                self.workspace,
+                stream=self.stream,
+                profile_id=self.model_profile,
+                thinking_effort=self.thinking_effort or DEFAULT_THINKING_EFFORT,
+                session_id=self.session_id,
+            )
+            hydrate(context, previous)
+            self._adopt(agent, context)
+            raise
         self._adopt(result.agent, result.context)
         self.suspended = {"text": text, "goal": goal} if pending_approval(self.workspace).get("pending") else None
         if self.on_turn_complete is not None:
@@ -199,6 +229,14 @@ class FridaySession:
         self.agent = None
         self.context = None
         self.suspended = None
+        self.session_id = new_session_id()
+
+    def cancel(self) -> None:
+        self._cancel_event.set()
+
+    def raise_if_cancelled(self) -> None:
+        if self._cancel_event.is_set():
+            raise TurnCancelled("Request cancelled by user.")
 
     def undo(self, checkpoint_id: str | None = None, *, force: bool = False) -> dict[str, Any]:
         agent, context, restored = undo_friday(
@@ -264,6 +302,8 @@ class FridaySession:
     def _adopt(self, agent: Agent, context: RunContext) -> None:
         self.agent = agent
         self.context = context
+        self.session_id = str(context.metadata.get("session_id") or self.session_id)
+        context.metadata["friday.cancel_event"] = self._cancel_event
         config = context.metadata.get("friday.model_config")
         if isinstance(config, dict) and config.get("profile_id"):
             self.model_profile = str(config["profile_id"])
@@ -272,6 +312,11 @@ class FridaySession:
             self.thinking_effort = effort
         if self.on_event is not None:
             context.on_event = self.on_event
+
+    def _on_delta(self, chunk: str) -> None:
+        self.raise_if_cancelled()
+        if self.on_delta is not None:
+            self.on_delta(chunk)
 
     def _pending_turn(self) -> dict[str, Any] | None:
         """What to continue with after an approval decision.

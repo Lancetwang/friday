@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { open as openUrl } from '@tauri-apps/plugin-shell'
-import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
+import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
@@ -91,6 +91,7 @@ type SessionInfo = {
   thinking_effort: ThinkingEffort
   thinking_supported?: boolean
   session_id?: string
+  running?: boolean
   tools: string[]
 }
 
@@ -124,6 +125,7 @@ type ResumeChoice = {
   assistant: string
   id: string
   objective: string
+  running?: boolean
   status: string
   time: string
   title: string
@@ -160,6 +162,7 @@ type HistoryItem = {
   arguments?: unknown
   images?: string[]
   kind: TimelineItem['kind']
+  message_index?: number
   name?: string
   status?: TimelineItem['status']
   text: string
@@ -178,6 +181,7 @@ type TimelineItem = {
   checkpointId?: string
   createdAt?: string
   id: string
+  forkIndex?: number
   images?: string[]
   kind: 'assistant' | 'reasoning' | 'system' | 'tool' | 'user'
   metrics?: Metrics
@@ -188,6 +192,18 @@ type TimelineItem = {
   toolCallId?: string
 }
 
+type ForkNode = {
+  id: string
+  parent: string
+  time: string
+  title: string
+}
+
+type ForkTree = {
+  nodes: ForkNode[]
+  root: string
+}
+
 type ProjectView = {
   activeSession: string
   attachment: ImageAttachment | null
@@ -195,6 +211,7 @@ type ProjectView = {
   checkpoints: CheckpointChoice[]
   draft: string
   guidance: string
+  forkTree: ForkTree
   info: SessionInfo
   items: TimelineItem[]
   models: ModelCatalog
@@ -251,6 +268,7 @@ function emptyView(path = ''): ProjectView {
     checkpoints: [],
     draft: '',
     guidance: '',
+    forkTree: { nodes: [], root: '' },
     info: { cwd: path, model: path ? 'loading' : '', permission_mode: 'manual', thinking_effort: 'high', tools: [] },
     items: [],
     models: emptyModelCatalog,
@@ -303,6 +321,10 @@ function samePath(left: string, right: string) {
   return pathKey(left) === pathKey(right)
 }
 
+function sessionEventKey(workspace: string, sessionId: string) {
+  return `${pathKey(workspace)}::${sessionId}`
+}
+
 function loadSidebarWidth() {
   return clampSidebarWidth(Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || DEFAULT_SIDEBAR_WIDTH)
 }
@@ -341,6 +363,7 @@ function App() {
   const [previewImage, setPreviewImage] = useState('')
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
+  const activeSessions = useRef(new Map<string, string>())
   const activeAssistants = useRef(new Map<string, string>())
   const timeline = useRef<HTMLElement | null>(null)
   const followOutput = useRef(true)
@@ -351,14 +374,15 @@ function App() {
   const openProjects = useRef(new Set(initialProjects.current.map(pathKey)))
 
   const view = views[activeProject] || emptyView(activeProject)
-  const { activeSession, attachment, busy, checkpoints, draft, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
+  const { activeSession, attachment, busy, checkpoints, draft, forkTree, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
   const isDefaultWorkspace = Boolean(defaultWorkspace && samePath(defaultWorkspace, activeProject))
 
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
-    setViews(current => ({
-      ...current,
-      [workspace]: update(current[workspace] || emptyView(workspace))
-    }))
+    setViews(current => {
+      const next = update(current[workspace] || emptyView(workspace))
+      activeSessions.current.set(pathKey(workspace), next.activeSession)
+      return { ...current, [workspace]: next }
+    })
   }
 
   const rememberProject = (workspace: string) => {
@@ -416,6 +440,10 @@ function App() {
       updateView(workspace, current => ({ ...current, skills: result.skills }))
     })
 
+  const refreshTree = (workspace: string, sessionId?: string) =>
+    sendGateway<ForkTree>(workspace, 'session.tree', { id: sessionId || activeSessions.current.get(pathKey(workspace)) || '' })
+      .then(result => updateView(workspace, current => ({ ...current, forkTree: result })))
+
   const refreshModels = (workspace: string) =>
     sendGateway<ModelCatalog>(workspace, 'model.list').then(result => {
       updateView(workspace, current => ({ ...current, models: result }))
@@ -432,7 +460,7 @@ function App() {
       updateView(workspace, existing => ({
         ...existing,
         activeSession: current.info.session_id || '',
-        busy: false,
+        busy: Boolean(current.info.running),
         checkpoints: checkpointResult.checkpoints,
         info: current.info,
         items: timelineFromHistory(current.history),
@@ -442,6 +470,7 @@ function App() {
         skills: skillResult.skills,
         status: 'ready'
       }))
+      return refreshTree(workspace, current.info.session_id)
     })
 
   useEffect(() => {
@@ -514,13 +543,23 @@ function App() {
 
       if (message.method !== 'event' || !message.params) return
       const { payload = {}, type } = message.params
+      const sessionId = String(payload.session_id || '')
+      const activeSessionId = activeSessions.current.get(pathKey(workspace)) || ''
+      const eventKey = sessionEventKey(workspace, sessionId || activeSessionId)
+      if (sessionId && activeSessionId && sessionId !== activeSessionId) {
+        if (type === 'message.complete' || type === 'message.cancelled') {
+          activeAssistants.current.delete(eventKey)
+          void refreshSessions(workspace).catch(() => undefined)
+        }
+        return
+      }
 
       if (type === 'reasoning.delta') {
         const reasoningId = String(payload.id || '')
         const text = String(payload.text || '')
         if (!reasoningId || !text) return
         const itemId = `thinking-${reasoningId}`
-        const assistantId = activeAssistants.current.get(workspace)
+        const assistantId = activeAssistants.current.get(eventKey)
         updateView(workspace, current => {
           if (current.items.some(item => item.id === itemId)) {
             return {
@@ -549,10 +588,10 @@ function App() {
         }))
       } else if (type === 'message.delta') {
         const text = String(payload.text || '')
-        let id = activeAssistants.current.get(workspace)
+        let id = activeAssistants.current.get(eventKey)
         if (!id) {
           id = nextId('assistant')
-          activeAssistants.current.set(workspace, id)
+          activeAssistants.current.set(eventKey, id)
         }
         updateView(workspace, current => {
           const now = Date.now()
@@ -575,10 +614,12 @@ function App() {
       } else if (type === 'message.complete') {
         const text = String(payload.text || '')
         const metrics = (payload.metrics || {}) as Metrics
-        const sessionId = String(payload.session_id || '')
+        const forkPoints = Array.isArray(payload.fork_points)
+          ? payload.fork_points as Array<{ kind: string; message_index: number }>
+          : []
         const verification = payload.verification as VerificationStatus | undefined
-        const id = activeAssistants.current.get(workspace)
-        activeAssistants.current.delete(workspace)
+        const id = activeAssistants.current.get(eventKey)
+        activeAssistants.current.delete(eventKey)
         updateView(workspace, current => {
           let items: TimelineItem[] = id
             ? current.items.map(item => item.id === id ? { ...item, metrics, text: text || item.text } : item)
@@ -586,6 +627,13 @@ function App() {
           items = verification
             ? items.map(item => item.id === 'verification-status' ? { ...item, text: verificationLabel(verification) } : item)
             : items.filter(item => item.id !== 'verification-status')
+          let forkPoint = 0
+          items = items.map(item => {
+            if (item.kind !== 'user' && item.kind !== 'assistant') return item
+            const point = forkPoints[forkPoint]
+            forkPoint += 1
+            return point?.kind === item.kind ? { ...item, forkIndex: point.message_index } : item
+          })
           return {
             ...current,
             activeSession: sessionId || current.activeSession,
@@ -596,10 +644,21 @@ function App() {
         void Promise.all([
           refreshSessions(workspace),
           refreshCheckpoints(workspace),
-          refreshSkills(workspace)
+          refreshSkills(workspace),
+          refreshTree(workspace, sessionId)
         ]).catch(() => undefined)
+      } else if (type === 'message.cancelled') {
+        activeAssistants.current.delete(eventKey)
+        updateView(workspace, current => ({
+          ...current,
+          busy: false,
+          items: [
+            ...current.items.filter(item => item.id !== 'verification-status'),
+            { id: nextId('cancelled'), kind: 'system', text: 'Request stopped.' }
+          ]
+        }))
       } else if (type === 'tool.start') {
-        const assistantId = activeAssistants.current.get(workspace)
+        const assistantId = activeAssistants.current.get(eventKey)
         const tool: TimelineItem = {
           arguments: JSON.stringify(payload.arguments || {}, null, 2),
           id: nextId('tool'),
@@ -747,6 +806,7 @@ function App() {
     event?.preventDefault()
     const text = draft.trim() || (attachment ? 'Please analyze the attached image.' : '')
     if (!text || busy || pendingApproval || status !== 'ready') return
+    const submittedSession = activeSession
 
     followOutput.current = true
     updateView(activeProject, current => ({
@@ -768,12 +828,22 @@ function App() {
     try {
       await sendGateway(activeProject, 'chat.send', { images: attachment ? [attachment.dataUrl] : [], text })
     } catch (error) {
+      updateView(activeProject, current => current.activeSession !== submittedSession ? current : ({
+          ...current,
+          busy: false,
+          items: [...current.items, { id: nextId('send'), kind: 'system', text: String(error) }]
+        }))
+    }
+  }
+
+  const cancelRequest = () => {
+    if (!busy || !activeSession) return
+    void sendGateway(activeProject, 'chat.cancel', { session_id: activeSession }).catch(error => {
       updateView(activeProject, current => ({
         ...current,
-        busy: false,
-        items: [...current.items, { id: nextId('send'), kind: 'system', text: String(error) }]
+        items: [...current.items, { id: nextId('cancel'), kind: 'system', text: String(error) }]
       }))
-    }
+    })
   }
 
   const changePermission = (mode: PermissionMode) => {
@@ -847,20 +917,21 @@ function App() {
   }
 
   const startNewSessionAt = (workspace: string) => {
-    const current = views[workspace] || emptyView(workspace)
-    if (current.busy || !workspace) return Promise.resolve()
+    if (!workspace) return Promise.resolve()
     setPage('chat')
     updateView(workspace, value => ({ ...value, busy: true }))
     return sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.new').then(result => {
       updateView(workspace, value => ({
         ...value,
-        activeSession: '',
+        activeSession: result.info.session_id || '',
         busy: false,
         checkpoints: [],
+        forkTree: { nodes: [], root: '' },
         info: result.info,
         items: timelineFromHistory(result.history),
         pendingApproval: null
       }))
+      return refreshSessions(workspace)
     }).catch(error => {
       updateView(workspace, value => ({
         ...value,
@@ -895,7 +966,6 @@ function App() {
 
   const resumeSession = async (workspace: string, session: ResumeChoice) => {
     const projectView = views[workspace] || emptyView(workspace)
-    if (projectView.busy) return
     setPage('chat')
     if (!samePath(workspace, activeProject)) {
       const resolved = await selectWorkspace(workspace, projects.some(path => samePath(path, workspace)))
@@ -907,12 +977,12 @@ function App() {
       updateView(workspace, current => ({
         ...current,
         activeSession: result.info.session_id || '',
-        busy: false,
+        busy: Boolean(result.info.running),
         info: result.info,
         items: timelineFromHistory(result.history),
         pendingApproval: result.info.approval?.pending ? result.info.approval : null
       }))
-      void refreshCheckpoints(workspace).catch(() => undefined)
+      void Promise.all([refreshCheckpoints(workspace), refreshTree(workspace, session.id)]).catch(() => undefined)
     }).catch(error => {
       updateView(workspace, current => ({
         ...current,
@@ -1045,9 +1115,9 @@ function App() {
   const deleteConversation = (event: MouseEvent, workspace: string, session: ResumeChoice) => {
     event.stopPropagation()
     if (!window.confirm(`Delete "${sessionLabel(session)}"?`)) return
-    void sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.delete', { id: session.id })
+    void sendGateway<{ deleted: string[]; history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.delete', { id: session.id })
       .then(result => {
-        updateView(workspace, current => session.id === current.activeSession
+        updateView(workspace, current => result.deleted.includes(current.activeSession)
           ? {
               ...current,
               activeSession: result.info.session_id || '',
@@ -1058,7 +1128,7 @@ function App() {
               pendingApproval: null
             }
           : current)
-        return Promise.all([refreshSessions(workspace), refreshCheckpoints(workspace)])
+        return Promise.all([refreshSessions(workspace), refreshCheckpoints(workspace), refreshTree(workspace, result.info.session_id)])
       })
       .catch(error => updateView(workspace, current => ({
         ...current,
@@ -1091,6 +1161,60 @@ function App() {
     })
   }
 
+  const forkConversation = (messageIndex: number) => {
+    if (busy || messageIndex < 0 || !activeSession) return
+    updateView(activeProject, current => ({ ...current, busy: true }))
+    void sendGateway<{ history: HistoryItem[]; info: SessionInfo; tree: ForkTree }>(activeProject, 'session.fork', {
+      id: activeSession,
+      message_index: messageIndex
+    }).then(result => {
+      updateView(activeProject, current => ({
+        ...current,
+        activeSession: result.info.session_id || '',
+        busy: false,
+        checkpoints: [],
+        forkTree: result.tree,
+        info: result.info,
+        items: timelineFromHistory(result.history),
+        pendingApproval: null
+      }))
+      return refreshSessions(activeProject)
+    }).catch(error => {
+      updateView(activeProject, current => ({
+        ...current,
+        busy: false,
+        items: [...current.items, { id: nextId('fork'), kind: 'system', text: String(error) }]
+      }))
+    })
+  }
+
+  const openForkNode = (node: ForkNode) => {
+    void resumeSession(activeProject, {
+      assistant: '', id: node.id, objective: '', status: '', time: node.time, title: node.title, turns: '', user: ''
+    })
+  }
+
+  const deleteForkNode = (node: ForkNode) => {
+    if (!window.confirm(`Delete "${node.title}" and its branches?`)) return
+    void sendGateway<{ deleted: string[]; history: HistoryItem[]; info: SessionInfo }>(activeProject, 'session.delete', { id: node.id })
+      .then(result => {
+        updateView(activeProject, current => ({
+          ...current,
+          activeSession: result.info.session_id || '',
+          busy: Boolean(result.info.running),
+          forkTree: { nodes: [], root: '' },
+          info: result.info,
+          items: timelineFromHistory(result.history),
+          pendingApproval: null
+        }))
+        return Promise.all([refreshSessions(activeProject), refreshTree(activeProject, result.info.session_id)])
+      })
+      .catch(error => updateView(activeProject, current => ({
+        ...current,
+        items: [...current.items, { id: nextId('fork-delete'), kind: 'system', text: String(error) }]
+      })))
+  }
+
   const openSkill = (skill: SkillInfo) => {
     setSkillError('')
     void sendGateway<SkillDetail>(activeProject, 'skill.get', { path: skill.path })
@@ -1109,7 +1233,8 @@ function App() {
   }
 
   const selectedSession = sessions.find(session => session.id === activeSession)
-  const conversationTitle = selectedSession ? sessionLabel(selectedSession) : 'New conversation'
+  const selectedFork = forkTree.nodes.find(node => node.id === activeSession)
+  const conversationTitle = selectedSession ? sessionLabel(selectedSession) : selectedFork?.title || 'New conversation'
   const project = isDefaultWorkspace ? 'Personal conversations' : projectLabel(activeProject)
   const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions.find(option => option.value === 'manual')!
   const thinking = thinkingOptions.find(option => option.value === info.thinking_effort) || thinkingOptions[2]
@@ -1165,19 +1290,19 @@ function App() {
             }}
             value={renaming?.title || ''}
           />
-          <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
+          <small>{session.running ? 'Working…' : `${formatSessionTime(session.time)} · ${session.turns} turns`}</small>
         </div>
       ) : (
-        <button className="session-main" disabled={projectView.busy} onClick={() => void resumeSession(workspace, session)} type="button">
+        <button className="session-main" onClick={() => void resumeSession(workspace, session)} type="button">
           <span>{sessionLabel(session)}</span>
-          <small>{formatSessionTime(session.time)} · {session.turns} turns</small>
+          <small>{session.running ? 'Working…' : `${formatSessionTime(session.time)} · ${session.turns} turns`}</small>
         </button>
       )}
       <div className="session-actions">
-        <button aria-label="Rename conversation" disabled={projectView.busy} onClick={event => beginRenameConversation(event, workspace, session)} title="Rename" type="button">
+        <button aria-label="Rename conversation" onClick={event => beginRenameConversation(event, workspace, session)} title="Rename" type="button">
           <span aria-hidden="true">{'\u270e'}</span>
         </button>
-        <button aria-label="Delete conversation" disabled={projectView.busy} onClick={event => deleteConversation(event, workspace, session)} title="Delete" type="button">
+        <button aria-label="Delete conversation" onClick={event => deleteConversation(event, workspace, session)} title="Delete" type="button">
           <span aria-hidden="true">{'\u00d7'}</span>
         </button>
       </div>
@@ -1246,7 +1371,7 @@ function App() {
                       <div className="project-actions">
                         <button
                           aria-label={`New conversation in ${projectLabel(path)}`}
-                          disabled={isActive && (busy || status !== 'ready')}
+                          disabled={isActive && status !== 'ready'}
                           onClick={event => addProjectSession(event, path)}
                           title="New conversation"
                           type="button"
@@ -1277,7 +1402,7 @@ function App() {
                 <h2>Recent</h2>
                 <button
                   aria-label="New personal conversation"
-                  disabled={isDefaultWorkspace && (busy || status !== 'ready')}
+                  disabled={isDefaultWorkspace && status !== 'ready'}
                   onClick={addDefaultSession}
                   title="New conversation"
                   type="button"
@@ -1337,7 +1462,7 @@ function App() {
           tabIndex={0}
         />
 
-        <main className="workspace">
+        <main className={`workspace ${forkTree.nodes.length > 1 ? 'has-forks' : ''}`}>
         {page === 'skills' ? (
           <SkillBrowser
             detail={skillDetail}
@@ -1373,9 +1498,9 @@ function App() {
           {showWelcome && <WelcomePrompt key={activeProject} />}
           {!showWelcome && groupToolItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
-              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
+              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onFork={forkConversation} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
               : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
-            : <TimelineRow busy={busy} item={item} key={item.id} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
+            : <TimelineRow busy={busy} item={item} key={item.id} onFork={forkConversation} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
           {pendingApproval && (
             <section className="approval-panel">
               <strong>Approval required</strong>
@@ -1403,7 +1528,7 @@ function App() {
               </div>
             </section>
           )}
-          {busy && !activeAssistants.current.get(activeProject) && (
+          {busy && !activeAssistants.current.get(sessionEventKey(activeProject, activeSession)) && (
             <div className="thinking"><span /><span /><span /> Friday is working</div>
           )}
         </section>
@@ -1577,17 +1702,26 @@ function App() {
                 </details>
               )}
               <button
-                aria-label="Send message"
-                className="send-button"
-                disabled={(!draft.trim() && !attachment) || busy || Boolean(pendingApproval) || status !== 'ready'}
-                title="Send"
-                type="submit"
+                aria-label={busy ? 'Stop request' : 'Send message'}
+                className={`send-button ${busy ? 'stop' : ''}`}
+                disabled={!busy && ((!draft.trim() && !attachment) || Boolean(pendingApproval) || status !== 'ready')}
+                onClick={busy ? event => { event.preventDefault(); cancelRequest() } : undefined}
+                title={busy ? 'Stop' : 'Send'}
+                type={busy ? 'button' : 'submit'}
               >
-                {busy ? '…' : '↑'}
+                {busy ? <span className="stop-icon" /> : '↑'}
               </button>
             </div>
           </div>
         </form>
+        {forkTree.nodes.length > 1 && (
+          <ForkMap
+            active={activeSession}
+            onDelete={deleteForkNode}
+            onOpen={openForkNode}
+            tree={forkTree}
+          />
+        )}
         </>
         )}
         </main>
@@ -1635,6 +1769,49 @@ function WelcomePrompt() {
       <span aria-hidden="true">{characters.slice(0, visible).join('')}</span>
       <i aria-hidden="true" />
     </div>
+  )
+}
+
+function ForkMap({
+  active,
+  onDelete,
+  onOpen,
+  tree
+}: {
+  active: string
+  onDelete: (node: ForkNode) => void
+  onOpen: (node: ForkNode) => void
+  tree: ForkTree
+}) {
+  const children = new Map<string, ForkNode[]>()
+  for (const node of tree.nodes) {
+    const parent = node.parent || ''
+    children.set(parent, [...(children.get(parent) || []), node])
+  }
+  const renderNode = (node: ForkNode, depth: number): ReactNode => (
+    <div key={node.id}>
+      <div className={`fork-node ${node.id === active ? 'active' : ''}`} style={{ '--fork-depth': depth } as CSSProperties}>
+        <button className="fork-node-main" onClick={() => onOpen(node)} title={node.title} type="button">
+          <span aria-hidden="true" />
+          <span>{node.title}</span>
+        </button>
+        <button aria-label={`Delete ${node.title} branch`} className="fork-node-delete" onClick={() => onDelete(node)} title="Delete branch" type="button">
+          {'×'}
+        </button>
+      </div>
+      {(children.get(node.id) || []).map(child => renderNode(child, depth + 1))}
+    </div>
+  )
+  const root = tree.nodes.find(node => node.id === tree.root)
+  if (!root) return null
+  return (
+    <aside aria-label="Conversation branches" className="fork-map">
+      <header>
+        <strong>Branches</strong>
+        <span>{tree.nodes.length}</span>
+      </header>
+      <div>{renderNode(root, 0)}</div>
+    </aside>
   )
 }
 
@@ -2052,6 +2229,7 @@ function timelineFromHistory(history: HistoryItem[]) {
   return history.map((item, index): TimelineItem => ({
     arguments: item.arguments == null ? undefined : JSON.stringify(item.arguments, null, 2),
     id: `history-${index}-${item.tool_call_id || item.kind}`,
+    forkIndex: item.message_index,
     images: item.images,
     kind: item.kind,
     name: item.name,
@@ -2154,6 +2332,7 @@ function collectMessageSources(items: TimelineItem[]) {
 function TimelineRow({
   busy,
   item,
+  onFork,
   onOpenLink,
   onPreview,
   onRestore,
@@ -2161,6 +2340,7 @@ function TimelineRow({
 }: {
   busy: boolean
   item: TimelineItem
+  onFork: (messageIndex: number) => void
   onOpenLink: (url: string) => void
   onPreview: (image: string) => void
   onRestore: (checkpointId: string) => void
@@ -2210,7 +2390,7 @@ function TimelineRow({
           </div>
         ) : null}
         {item.metrics && <MetricsLine metrics={item.metrics} />}
-        {(item.kind === 'user' || item.checkpointId || sources?.length) && (
+        {(item.kind === 'user' || item.checkpointId || item.forkIndex != null || sources?.length) && (
           <div className="message-meta">
             {sources && sources.length > 0 && (
               <span className="message-sources">
@@ -2266,6 +2446,17 @@ function TimelineRow({
                 type="button"
               >
                 <span aria-hidden="true" className="restore-icon">{'\u21b6'}</span>
+              </button>
+            )}
+            {(item.kind === 'user' || item.kind === 'assistant') && item.forkIndex != null && (
+              <button
+                aria-label="Fork conversation here"
+                disabled={busy}
+                onClick={() => onFork(item.forkIndex!)}
+                title="Fork conversation here"
+                type="button"
+              >
+                <span aria-hidden="true" className="fork-icon">{'⑂'}</span>
               </button>
             )}
           </div>

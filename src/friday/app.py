@@ -39,6 +39,7 @@ from friday.state import (
     conversation_body,
     hydrate,
     load_session,
+    new_session_id,
     recent_turns,
     resume_choices,
     save_session_state,
@@ -88,6 +89,7 @@ def build_friday(
     stream: bool = True,
     profile_id: str | None = None,
     thinking_effort: str = DEFAULT_THINKING_EFFORT,
+    session_id: str | None = None,
 ) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
     load_model_environment(root)
@@ -114,7 +116,7 @@ def build_friday(
     context = agent.new_context()
     _require_runtime(context)
     context.metadata["workspace"] = str(root)
-    context.metadata["session_id"] = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    context.metadata["session_id"] = session_id or new_session_id()
     context.metadata["friday.model_config"] = asdict(config)
     context.metadata["friday.thinking_effort"] = thinking_effort
     return agent, context
@@ -202,6 +204,8 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
         **({"profile_id": profile_id} if profile_id else {}),
     }
     new_agent, new_context = build_friday(workspace, **build_kwargs)
+    if "friday.cancel_event" in context.metadata:
+        new_context.metadata["friday.cancel_event"] = context.metadata["friday.cancel_event"]
     if hasattr(context, "usage") and hasattr(new_context, "usage"):
         # Deliberate aliasing: the rebuilt context accumulates into the same RunUsage
         # so run-level budget accounting survives compaction.

@@ -22,10 +22,22 @@ from friday.memory import format_memory_result, run_memory_command
 from friday.model_options import supports_thinking
 from friday.session import FridaySession
 from friday.skills import discover_skills, skill_body
-from friday.state import USER_MESSAGE_TIMES_KEY, delete_session, rename_session
+from friday.state import (
+    USER_MESSAGE_TIMES_KEY,
+    conversation_body,
+    delete_session_tree,
+    fork_session,
+    preview,
+    read_session,
+    rename_session,
+    session_path,
+    session_subtree_ids,
+    session_tree,
+)
 from friday.storage import friday_home
 from friday.tools import build_tools, pending_approval, permission_mode, set_permission_mode
 from friday.trace_web import start_trace_server
+from friday.turn import TurnCancelled
 
 _write_lock = threading.Lock()
 _IMAGE_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,", "data:image/gif;base64,")
@@ -39,7 +51,7 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8")
     output = sys.stdout
     sys.stdout = sys.stderr
-    gateway = Gateway(output=output)
+    gateway = Gateway(output=output, background=True)
     gateway.event("gateway.ready", {"cwd": str(Path.cwd().resolve())})
     for line in sys.stdin:
         # Tolerate a UTF-8 BOM from Windows shells piping into the gateway.
@@ -65,34 +77,43 @@ def verification_status(result: dict[str, Any]) -> dict[str, Any]:
 
 
 class Gateway:
-    """JSON-RPC view over one FridaySession: renders events, owns no agent state."""
+    """JSON-RPC view over live Friday sessions in one workspace."""
 
-    def __init__(self, output=None) -> None:
+    def __init__(self, output=None, *, background: bool = False) -> None:
         self.output = output or sys.stdout
+        self.background = background
         self.reasoning_ids: dict[str, str] = {}
         self.reasoning_seq = 0
         self.tool_names: dict[str, str] = {}
+        self.sessions: dict[str, FridaySession] = {}
+        self.runs: dict[str, threading.Thread] = {}
+        self.run_labels: dict[str, str] = {}
         self.session = self._new_session()
+        self.sessions[self.session.session_id] = self.session
 
-    def _new_session(self) -> FridaySession:
-        return FridaySession(
-            stream=True,
-            on_delta=lambda chunk: self.event("message.delta", {"text": chunk}),
-            on_verify=lambda verification: self.event("verification.complete", verification_status(verification)),
-            on_context_notice=lambda notice: self.event("gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"}),
-            on_event=self.on_agent_event,
-            on_turn_start=lambda text: self.event("message.start", {"text": text}),
-            on_turn_complete=lambda result: self.event(
-                "message.complete",
-                {
-                    "text": result.answer,
-                    "metrics": result.metrics,
-                    "progress": result.progress,
-                    "session_id": str(result.context.metadata.get("session_id") or ""),
-                    "verification": verification_status(result.verifications[-1]) if result.verifications else None,
-                },
-            ),
+    def _new_session(self, session_id: str | None = None) -> FridaySession:
+        session = FridaySession(stream=True, session_id=session_id)
+        session.on_delta = lambda chunk: self.session_event(session, "message.delta", {"text": chunk})
+        session.on_verify = lambda verification: self.session_event(
+            session, "verification.complete", verification_status(verification)
         )
+        session.on_context_notice = lambda notice: self.session_event(
+            session, "gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"}
+        )
+        session.on_event = lambda event: self.on_agent_event(event, session)
+        session.on_turn_start = lambda text: self.session_event(session, "message.start", {"text": text})
+        session.on_turn_complete = lambda result: self.session_event(
+            session,
+            "message.complete",
+            {
+                "text": result.answer,
+                "metrics": result.metrics,
+                "progress": result.progress,
+                "fork_points": fork_points(session),
+                "verification": verification_status(result.verifications[-1]) if result.verifications else None,
+            },
+        )
+        return session
 
     def handle(self, msg: dict[str, Any]) -> None:
         rid = msg.get("id")
@@ -103,9 +124,17 @@ class Gateway:
                 self.ok(rid, self.session_info())
             elif method == "chat.send":
                 images = _image_urls(params.get("images"))
-                self.ok(rid, {"text": self.session.chat(str(params.get("text") or ""), images=images).answer})
+                self.run_chat(rid, str(params.get("text") or ""), images=images)
             elif method == "goal.run":
-                self.ok(rid, {"text": self.session.chat(str(params.get("text") or ""), goal=True).answer})
+                self.run_chat(rid, str(params.get("text") or ""), goal=True)
+            elif method == "chat.cancel":
+                session_id = str(params.get("session_id") or self.session.session_id)
+                session = self.sessions.get(session_id)
+                if session is None or session_id not in self.runs:
+                    self.ok(rid, {"cancelled": False})
+                else:
+                    session.cancel()
+                    self.ok(rid, {"cancelled": True, "session_id": session_id})
             elif method == "memory.command":
                 result = run_memory_command(str(params.get("command") or ""), Path.cwd().resolve())
                 self.ok(rid, {"text": format_memory_result(result)})
@@ -168,15 +197,23 @@ class Gateway:
                 removed = self.session.reset(include_user=bool(params.get("global")))
                 self.ok(rid, {"removed": [str(path) for path in removed], "info": self.session_info()})
             elif method == "session.new":
-                self.session.new()
-                self.tool_names.clear()
+                self.session = self._new_session()
+                self.sessions[self.session.session_id] = self.session
                 self.ok(rid, {"info": self.session_info(), "history": []})
             elif method == "session.current":
                 self.ok(rid, {"info": self.session_info(), "history": session_history(self.session)})
             elif method == "session.compact":
                 self.ok(rid, {"text": self.session.compact()})
             elif method == "session.resume":
-                count = self.session.resume(params.get("id"))
+                session_id = str(params.get("id") or "")
+                live = self.sessions.get(session_id)
+                if live is not None:
+                    self.session = live
+                    count = 0
+                else:
+                    self.session = self._new_session(session_id or None)
+                    count = self.session.resume(session_id or None)
+                    self.sessions[self.session.session_id] = self.session
                 self.ok(
                     rid,
                     {
@@ -187,21 +224,63 @@ class Gateway:
                     },
                 )
             elif method == "session.resume_choices":
-                self.ok(rid, {"choices": resume_choices(limit=50)})
+                self.ok(rid, {"choices": self.session_choices()})
+            elif method == "session.tree":
+                self.ok(rid, session_tree(Path.cwd().resolve(), str(params.get("id") or self.session.session_id)))
+            elif method == "session.fork":
+                source_id = str(params.get("id") or self.session.session_id)
+                if source_id in self.runs:
+                    raise RuntimeError("Stop the running request before forking this session.")
+                source = self.sessions.get(source_id)
+                snapshot = fork_session(
+                    Path.cwd().resolve(),
+                    source_id,
+                    int(params.get("message_index", -1)),
+                    messages=source.context.get_messages() if source and source.context is not None else None,
+                )
+                self.session = self._new_session(str(snapshot["session_id"]))
+                self.session.resume(str(snapshot["session_id"]))
+                self.sessions[self.session.session_id] = self.session
+                self.ok(
+                    rid,
+                    {
+                        "history": session_history(self.session),
+                        "info": self.session_info(),
+                        "tree": session_tree(Path.cwd().resolve(), self.session.session_id),
+                    },
+                )
             elif method == "session.rename":
                 session_id = str(params.get("id") or "")
                 data = rename_session(Path.cwd().resolve(), session_id, str(params.get("title") or ""))
                 self.ok(rid, {"id": session_id, "title": data["title"]})
             elif method == "session.delete":
                 session_id = str(params.get("id") or "")
-                delete_session(Path.cwd().resolve(), session_id)
-                if self.session.context is not None and self.session.context.metadata.get("session_id") == session_id:
-                    self.session.new()
-                    self.tool_names.clear()
+                subtree = session_subtree_ids(Path.cwd().resolve(), session_id)
+                if not subtree and session_id in self.sessions:
+                    subtree = [session_id]
+                threads = []
+                for deleted_id in subtree:
+                    live = self.sessions.get(deleted_id)
+                    if live is not None and deleted_id in self.runs:
+                        live.cancel()
+                        threads.append(self.runs[deleted_id])
+                for thread in threads:
+                    thread.join(5)
+                if any(thread.is_alive() for thread in threads):
+                    raise RuntimeError("A running command did not stop; the session was not deleted.")
+                persisted = delete_session_tree(Path.cwd().resolve(), session_id)
+                deleted = list(dict.fromkeys([*subtree, *persisted]))
+                for deleted_id in deleted:
+                    live = self.sessions.pop(deleted_id, None)
+                    if live is not None:
+                        live.cancel()
+                if self.session.session_id in deleted:
+                    self.session = self._new_session()
+                    self.sessions[self.session.session_id] = self.session
                 self.ok(
                     rid,
                     {
-                        "deleted": session_id,
+                        "deleted": deleted,
                         "info": self.session_info(),
                         "history": session_history(self.session),
                     },
@@ -209,6 +288,8 @@ class Gateway:
             elif method == "checkpoint.list":
                 self.ok(rid, {"checkpoints": checkpoint_choices(Path.cwd().resolve(), limit=50)})
             elif method == "checkpoint.undo":
+                if self.runs:
+                    raise RuntimeError("Stop running requests before restoring a checkpoint.")
                 restored = self.session.undo(params.get("id"), force=bool(params.get("force")))
                 self.ok(
                     rid,
@@ -267,6 +348,64 @@ class Gateway:
             self.reasoning_ids.clear()
             self.err(rid, str(exc))
 
+    def run_chat(self, rid: Any, text: str, *, goal: bool = False, images: list[str] | None = None) -> None:
+        session = self.session
+        session_id = session.session_id
+        if session_id in self.runs:
+            self.err(rid, "This session already has a request in progress.")
+            return
+        self.run_labels[session_id] = text
+
+        def work() -> None:
+            try:
+                kwargs: dict[str, Any] = {"images": images or []}
+                if goal:
+                    kwargs["goal"] = True
+                result = session.chat(text, **kwargs)
+                self.ok(rid, {"text": result.answer, "session_id": session_id})
+            except TurnCancelled:
+                self.session_event(session, "message.cancelled", {})
+                self.ok(rid, {"cancelled": True, "session_id": session_id})
+            except Exception as exc:
+                self._finish_reasoning(session, error=True)
+                self.err(rid, str(exc))
+            finally:
+                self.runs.pop(session_id, None)
+                self.run_labels.pop(session_id, None)
+
+        thread = threading.Thread(target=work, name=f"friday-{session_id}", daemon=True)
+        self.runs[session_id] = thread
+        if self.background:
+            thread.start()
+        else:
+            work()
+
+    def session_choices(self) -> list[dict[str, Any]]:
+        choices = resume_choices(limit=50)
+        by_id = {str(choice["id"]): choice for choice in choices}
+        for session_id in self.runs:
+            if session_id in by_id:
+                by_id[session_id]["running"] = True
+                continue
+            snapshot = read_session(session_path(Path.cwd().resolve(), session_id))
+            if snapshot and snapshot.get("fork_parent"):
+                continue
+            choices.insert(
+                0,
+                {
+                    "assistant": "",
+                    "id": session_id,
+                    "objective": "",
+                    "running": True,
+                    "status": "working",
+                    "time": "",
+                    "title": "",
+                    "turns": "0",
+                    "user": preview(self.run_labels.get(session_id, "New conversation")),
+                },
+            )
+        return choices
+
     def session_info(self) -> dict[str, Any]:
         catalog = load_model_catalog(Path.cwd().resolve())
         config = load_model_config(Path.cwd().resolve(), profile_id=self.session.model_profile)
@@ -274,9 +413,7 @@ class Gateway:
             (item for item in catalog["profiles"] if item["id"] == config.profile_id),
             {},
         )
-        session_id = ""
-        if self.session.context is not None:
-            session_id = str(self.session.context.metadata.get("session_id") or "")
+        session_id = self.session.session_id
         return {
             "cwd": str(Path.cwd().resolve()),
             "model": f"{config.provider}/{config.model}",
@@ -290,35 +427,40 @@ class Gateway:
             "progress": self.session.progress(),
             "approval": pending_approval(),
             "session_id": session_id,
+            "running": session_id in self.runs,
             "tools": [tool.name for tool in build_tools(Path.cwd().resolve())],
         }
 
-    def on_agent_event(self, event: AgentEvent) -> None:
-        reasoning_key = f"{event.run_id}:{event.step}"
+    def on_agent_event(self, event: AgentEvent, session: FridaySession | None = None) -> None:
+        session = session or self.session
+        session.raise_if_cancelled()
+        reasoning_key = f"{session.session_id}:{event.run_id}:{event.step}"
         if event.type == "model.reasoning.delta":
             reasoning_id = self.reasoning_ids.get(reasoning_key)
             if reasoning_id is None:
                 self.reasoning_seq += 1
                 reasoning_id = f"reasoning-{self.reasoning_seq}"
                 self.reasoning_ids[reasoning_key] = reasoning_id
-            self.event(
+            self.session_event(
+                session,
                 "reasoning.delta",
                 {"id": reasoning_id, "text": str(event.data.get("content") or "")},
             )
         elif event.type == "model.response" and event.data.get("has_reasoning"):
             reasoning_id = self.reasoning_ids.pop(reasoning_key, None)
             if reasoning_id is not None:
-                self.event("reasoning.complete", {"id": reasoning_id})
+                self.session_event(session, "reasoning.complete", {"id": reasoning_id})
         elif event.type == "verification.start":
-            self.event("verification.start", {})
+            self.session_event(session, "verification.start", {})
         elif event.type == "progress.updated":
-            self.event("progress.update", dict(event.data))
+            self.session_event(session, "progress.update", dict(event.data))
         elif event.type == "tool.call":
             call_id = str(event.data.get("tool_call_id") or "")
             name = str(event.data.get("name") or "")
             if call_id:
-                self.tool_names[call_id] = name
-            self.event(
+                self.tool_names[f"{session.session_id}:{call_id}"] = name
+            self.session_event(
+                session,
                 "tool.start",
                 {
                     "tool_call_id": call_id,
@@ -336,18 +478,29 @@ class Gateway:
             except json.JSONDecodeError:
                 value = None
             approval = value if isinstance(value, dict) and value.get("approval_required") else None
-            self.event(
+            self.session_event(
+                session,
                 "tool.complete",
                 {
                     "tool_call_id": call_id,
-                    "name": self.tool_names.pop(call_id, ""),
+                    "name": self.tool_names.pop(f"{session.session_id}:{call_id}", ""),
                     "error": bool(event.data.get("is_error")),
                     "content": content,
                     "approval": approval,
                 },
             )
         elif event.type == "approval.pending":
-            self.event("approval.pending", dict(event.data))
+            self.session_event(session, "approval.pending", dict(event.data))
+
+    def _finish_reasoning(self, session: FridaySession, *, error: bool = False) -> None:
+        prefix = f"{session.session_id}:"
+        for key, reasoning_id in list(self.reasoning_ids.items()):
+            if key.startswith(prefix):
+                self.session_event(session, "reasoning.complete", {"id": reasoning_id, "error": error})
+                self.reasoning_ids.pop(key, None)
+
+    def session_event(self, session: FridaySession, event_type: str, payload: dict[str, Any]) -> None:
+        self.event(event_type, {**payload, "session_id": session.session_id})
 
     def event(self, event_type: str, payload: dict[str, Any]) -> None:
         self.write({"jsonrpc": "2.0", "method": "event", "params": {"type": event_type, "payload": payload}})
@@ -370,13 +523,18 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     tools: dict[str, int] = {}
     assistant_parts: list[str] = []
+    assistant_index = -1
 
     def flush_assistant() -> None:
+        nonlocal assistant_index
         if assistant_parts:
-            history.append({"kind": "assistant", "text": "\n\n".join(assistant_parts)})
+            history.append(
+                {"kind": "assistant", "message_index": assistant_index, "text": "\n\n".join(assistant_parts)}
+            )
             assistant_parts.clear()
+            assistant_index = -1
 
-    for message in session.context.get_messages():
+    for message_index, message in enumerate(conversation_body(session.context.get_messages())):
         role = message.get("role")
         content = _message_text(message.get("content"))
         if role == "user" and content:
@@ -385,6 +543,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                 {
                     "images": _message_images(message.get("content")),
                     "kind": "user",
+                    "message_index": message_index,
                     "text": content,
                 }
             )
@@ -404,6 +563,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                     {
                         "arguments": arguments,
                         "kind": "tool",
+                        "message_index": message_index,
                         "name": str(function.get("name") or "Tool"),
                         "status": "running",
                         "text": "",
@@ -412,6 +572,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                 )
             if content:
                 assistant_parts.append(content)
+                assistant_index = message_index
         elif role == "tool":
             call_id = str(message.get("tool_call_id") or "")
             index = tools.get(call_id)
@@ -422,6 +583,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                     {
                         "arguments": {},
                         "kind": "tool",
+                        "message_index": message_index,
                         "name": "Tool",
                         "status": "done",
                         "text": content,
@@ -442,6 +604,14 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                 item["timestamp"] = str(record.get("time") or "")
                 break
     return history
+
+
+def fork_points(session: FridaySession) -> list[dict[str, Any]]:
+    return [
+        {"kind": item["kind"], "message_index": item["message_index"]}
+        for item in session_history(session)
+        if item["kind"] in {"user", "assistant"} and "message_index" in item
+    ]
 
 
 def _image_urls(value: Any) -> list[str]:

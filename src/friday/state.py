@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from agent_core import RunContext
 
@@ -37,6 +38,10 @@ from friday.trace import delete_trace
 RECENT_CONVERSATION_LIMIT = 10
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 USER_MESSAGE_TIMES_KEY = "friday.user_message_times"
+
+
+def new_session_id() -> str:
+    return datetime.now().strftime("%Y%m%d%H%M%S%f") + "-" + uuid4().hex[:8]
 
 
 @dataclass
@@ -127,11 +132,16 @@ def save_turn(
     """
     sessions = project_state_dir(workspace) / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
-    sid = session_id or datetime.now().strftime("%Y%m%d%H%M%S%f")
+    sid = session_id or new_session_id()
     path = sessions / f"{sid}.json"
     existing = read_session(path) or {}
     now = datetime.now().isoformat(timespec="seconds")
     snapshot = {
+        **{
+            key: existing[key]
+            for key in ("fork_parent", "fork_root", "fork_message_index")
+            if key in existing
+        },
         "session_id": sid,
         "created": existing.get("created") or now,
         "updated": now,
@@ -208,7 +218,7 @@ def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dic
     choices: list[dict[str, str]] = []
     for path in reversed(session_files(root)[-limit:]):
         data = read_session(path)
-        if not data:
+        if not data or data.get("fork_parent"):
             continue
         progress = data.get("progress") if isinstance(data.get("progress"), dict) else {}
         choices.append(
@@ -251,6 +261,89 @@ def delete_session(workspace: Path, session_id: str) -> None:
     if tool_results.exists():
         shutil.rmtree(tool_results)
     path.unlink()
+
+
+def fork_session(
+    workspace: Path,
+    source_session_id: str,
+    message_index: int,
+    *,
+    messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    source = read_session(session_path(workspace, source_session_id))
+    if source is None:
+        raise FileNotFoundError(f"Session not found: {source_session_id}")
+    body = conversation_body(messages if messages is not None else source.get("messages", []))
+    if message_index < 0 or message_index >= len(body):
+        raise ValueError("Fork point is outside the conversation.")
+    copied = body[: message_index + 1]
+    session_id = new_session_id()
+    now = datetime.now().isoformat(timespec="seconds")
+    user_count = sum(message.get("role") == "user" for message in copied)
+    snapshot = {
+        "session_id": session_id,
+        "created": now,
+        "updated": now,
+        "title": f"Fork of {source.get('title') or source.get('user') or source_session_id}",
+        "turns": user_count,
+        "user": source.get("user", ""),
+        "assistant": "",
+        "messages": copied,
+        "progress": {},
+        "last_usage": {},
+        "user_message_times": list(source.get("user_message_times", []))[:user_count],
+        "thinking_effort": source.get("thinking_effort", DEFAULT_THINKING_EFFORT),
+        "fork_parent": source_session_id,
+        "fork_root": source.get("fork_root") or source_session_id,
+        "fork_message_index": message_index,
+    }
+    write_session(session_path(workspace, session_id), snapshot)
+    return snapshot
+
+
+def session_tree(workspace: Path, session_id: str) -> dict[str, Any]:
+    sessions = [data for path in session_files(workspace) if (data := read_session(path))]
+    current = next((data for data in sessions if data.get("session_id") == session_id), None)
+    if current is None:
+        return {"root": "", "nodes": []}
+    root = str(current.get("fork_root") or current.get("session_id") or "")
+    nodes = [
+        {
+            "id": str(data.get("session_id") or ""),
+            "parent": str(data.get("fork_parent") or ""),
+            "title": preview(str(data.get("title") or data.get("user") or "Conversation"), 80),
+            "time": str(data.get("updated") or ""),
+        }
+        for data in sessions
+        if data.get("session_id") == root or data.get("fork_root") == root
+    ]
+    return {"root": root, "nodes": nodes}
+
+
+def delete_session_tree(workspace: Path, session_id: str) -> list[str]:
+    deleted = session_subtree_ids(workspace, session_id)
+    for current in reversed(deleted):
+        path = session_path(workspace, current)
+        if path.exists():
+            delete_session(workspace, current)
+    return deleted
+
+
+def session_subtree_ids(workspace: Path, session_id: str) -> list[str]:
+    sessions = [data for path in session_files(workspace) if (data := read_session(path))]
+    children: dict[str, list[str]] = {}
+    for data in sessions:
+        parent = str(data.get("fork_parent") or "")
+        if parent:
+            children.setdefault(parent, []).append(str(data.get("session_id") or ""))
+    pending = [session_id]
+    found: list[str] = []
+    while pending:
+        current = pending.pop()
+        pending.extend(children.get(current, []))
+        if session_path(workspace, current).exists():
+            found.append(current)
+    return found
 
 
 def session_path(workspace: Path, session_id: str) -> Path:

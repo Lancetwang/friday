@@ -12,7 +12,7 @@ from agent_core import Agent, RunContext
 
 from friday.agent_flow import begin_guarded_run
 from friday.app import prepare_context_for_chat
-from friday.checkpoint import begin_checkpoint, finish_checkpoint
+from friday.checkpoint import begin_checkpoint, discard_checkpoint, finish_checkpoint
 from friday.context import token_estimate
 from friday.loop import AGENT_MAX_STEPS, run_loop
 from friday.memory import capture_user_memory, relevant_memory
@@ -31,6 +31,10 @@ class TurnResult:
     metrics: dict[str, Any]
     progress: dict[str, Any]
     context_notice: str = ""
+
+
+class TurnCancelled(RuntimeError):
+    pass
 
 
 def run_turn(
@@ -156,9 +160,13 @@ def run_turn(
             verifications,
         )
     except BaseException as exc:
-        finish_live_trace(live_path, turn_id, status="error")
+        cancelled = isinstance(exc, TurnCancelled)
+        finish_live_trace(live_path, turn_id, status="cancelled" if cancelled else "error")
         try:
-            finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
+            if cancelled:
+                discard_checkpoint(workspace, checkpoint_id)
+            else:
+                finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
         except Exception as checkpoint_error:
             exc.add_note(f"Friday could not finalize the recovery checkpoint: {checkpoint_error}")
         context.events.clear()

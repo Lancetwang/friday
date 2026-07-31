@@ -866,10 +866,106 @@ input[type="checkbox"] {
    ============================================================ */
 
 .workspace {
+  position: relative;
   display: flex;
   height: 100%;
   flex-direction: column;
   background: var(--canvas);
+}
+
+.workspace.has-forks .timeline {
+  padding-right: max(210px, calc((100% - 660px) / 2));
+}
+
+.workspace.has-forks .composer {
+  margin-right: max(200px, calc((100% - 690px) / 2));
+}
+
+.fork-map {
+  position: absolute;
+  z-index: 3;
+  top: 78px;
+  right: 14px;
+  width: clamp(160px, 18vw, 220px);
+  max-height: calc(100% - 180px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-1);
+  backdrop-filter: blur(18px);
+}
+
+.fork-map header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 8px;
+  color: var(--muted);
+  font-size: var(--text-caption);
+}
+
+.fork-map header strong {
+  color: var(--ink-soft);
+  font-weight: var(--weight-semibold);
+}
+
+.fork-node {
+  display: flex;
+  align-items: center;
+  padding-left: calc(var(--fork-depth) * 12px);
+  border-radius: var(--radius-m);
+}
+
+.fork-node:hover,
+.fork-node.active {
+  background: var(--fill-strong);
+}
+
+.fork-node-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 4px;
+  color: var(--ink-soft);
+  text-align: left;
+}
+
+.fork-node-main > span:first-child {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border: 1px solid var(--faint);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.fork-node.active .fork-node-main > span:first-child {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.fork-node-main > span:last-child {
+  overflow: hidden;
+  font-size: var(--text-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fork-node-delete {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  color: transparent;
+  font-size: var(--text-ui);
+}
+
+.fork-node:hover .fork-node-delete,
+.fork-node-delete:focus-visible {
+  color: var(--muted);
 }
 
 .topbar {
@@ -2473,6 +2569,17 @@ input[type="checkbox"] {
   cursor: default;
   color: var(--faint);
   background: var(--fill-strong);
+}
+
+.composer-footer .send-button.stop {
+  background: var(--ink);
+}
+
+.stop-icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--on-ink);
 }
 
 /* ============================================================

@@ -518,16 +518,31 @@ def _run_shell(
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         start_new_session=os.name != "nt",
     )
-    try:
-        output, _ = process.communicate(timeout=max(1, timeout_seconds))
-    except subprocess.TimeoutExpired as error:
-        _terminate_process_tree(process)
+    deadline = time.monotonic() + max(1, timeout_seconds)
+    cancel_event = None
+    context = get_current_context()
+    if context is not None:
+        cancel_event = context.metadata.get("friday.cancel_event")
+    while True:
         try:
-            output, _ = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            output = _timeout_output(error)
-        return _shell_result(workspace, output, max_chars, exit_code=None, timed_out=True, friday_dir=friday_dir)
+            output, _ = process.communicate(timeout=min(0.2, max(0.01, deadline - time.monotonic())))
+            break
+        except subprocess.TimeoutExpired as error:
+            if cancel_event is not None and cancel_event.is_set():
+                _terminate_process_tree(process)
+                process.communicate(timeout=5)
+                from friday.turn import TurnCancelled
+
+                raise TurnCancelled("Request cancelled by user.")
+            if time.monotonic() < deadline:
+                continue
+            _terminate_process_tree(process)
+            try:
+                output, _ = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                output = _timeout_output(error)
+            return _shell_result(workspace, output, max_chars, exit_code=None, timed_out=True, friday_dir=friday_dir)
     return _shell_result(
         workspace,
         output,

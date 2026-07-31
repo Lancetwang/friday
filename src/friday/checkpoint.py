@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -15,6 +16,7 @@ from friday.trace import load_trace, load_trace_object
 SCHEMA_VERSION = 1
 ACTIVE_STATES = {"pending", "ready"}
 MAX_CHECKPOINTS = 50
+_snapshot_lock = threading.Lock()
 
 
 def begin_checkpoint(
@@ -76,6 +78,14 @@ def finish_pending_checkpoint(workspace: Path, *, pending: bool) -> dict[str, An
     root = workspace.resolve()
     entry = _latest_entry(root, states={"pending"})
     return finish_checkpoint(root, str(entry["id"]), pending=pending) if entry else None
+
+
+def discard_checkpoint(workspace: Path, checkpoint_id: str) -> None:
+    root = workspace.resolve()
+    entry = _entry(root, checkpoint_id)
+    entry.update(state="cancelled", updated=datetime.now().isoformat(timespec="seconds"))
+    _write_entry(root, entry)
+    _remove_checkpoint(root, entry)
 
 
 def checkpoint_choices(workspace: Path | None = None, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -163,18 +173,19 @@ def _before_messages(entry: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _snapshot(workspace: Path) -> str:
-    _ensure_repo(workspace)
-    _git(workspace, "add", "-u")
-    untracked = _git(workspace, "ls-files", "--others", "--exclude-standard", "-z")
-    if untracked:
-        _git_input(
-            workspace,
-            untracked,
-            "add",
-            "--pathspec-from-file=-",
-            "--pathspec-file-nul",
-        )
-    return _git(workspace, "write-tree").strip()
+    with _snapshot_lock:
+        _ensure_repo(workspace)
+        _git(workspace, "add", "-u")
+        untracked = _git(workspace, "ls-files", "--others", "--exclude-standard", "-z")
+        if untracked:
+            _git_input(
+                workspace,
+                untracked,
+                "add",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            )
+        return _git(workspace, "write-tree").strip()
 
 
 def _restore_tree(workspace: Path, current_tree: str, target_tree: str) -> None:
