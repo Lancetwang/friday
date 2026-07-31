@@ -1849,10 +1849,28 @@ function ForkMap({
 }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(FORK_MAP_KEY) === 'collapsed')
   const [hovered, setHovered] = useState<string | null>(null)
+  const dismissTimer = useRef<number | null>(null)
   const { edges, height, positions, width } = layoutForkTree(tree)
   const hoveredNode = hovered ? tree.nodes.find(node => node.id === hovered) : undefined
   const hoveredPos = hovered ? positions.get(hovered) : undefined
   const hoveredParent = hoveredNode?.parent ? tree.nodes.find(node => node.id === hoveredNode.parent) : undefined
+
+  useEffect(() => () => {
+    if (dismissTimer.current !== null) window.clearTimeout(dismissTimer.current)
+  }, [])
+
+  const showTip = (id: string) => {
+    if (dismissTimer.current !== null) {
+      window.clearTimeout(dismissTimer.current)
+      dismissTimer.current = null
+    }
+    setHovered(id)
+  }
+
+  const dismissTip = () => {
+    if (dismissTimer.current !== null) window.clearTimeout(dismissTimer.current)
+    dismissTimer.current = window.setTimeout(() => setHovered(null), 300)
+  }
 
   const setCollapsedPersisted = (value: boolean) => {
     setCollapsed(value)
@@ -1907,8 +1925,8 @@ function ForkMap({
                 className={classes}
                 key={node.id}
                 onClick={() => onOpen(node)}
-                onMouseEnter={() => setHovered(node.id)}
-                onMouseLeave={() => setHovered(current => (current === node.id ? null : current))}
+                onMouseEnter={() => showTip(node.id)}
+                onMouseLeave={dismissTip}
                 transform={`translate(${pos.x}, ${pos.y})`}
               >
                 <circle className="fork-node-hit" r="13" />
@@ -1921,8 +1939,8 @@ function ForkMap({
       {hoveredNode && hoveredPos && (
         <div
           className="fork-tip"
-          onMouseEnter={() => setHovered(hoveredNode.id)}
-          onMouseLeave={() => setHovered(null)}
+          onMouseEnter={() => showTip(hoveredNode.id)}
+          onMouseLeave={dismissTip}
           style={{ top: hoveredPos.y + 30 } as CSSProperties}
         >
           <p>{hoveredNode.id === tree.root ? '主会话' : 'Fork 会话'}</p>
