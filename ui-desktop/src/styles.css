@@ -870,19 +870,6 @@ input[type="checkbox"] {
   background: var(--canvas);
 }
 
-.workspace-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-
-.chat-column {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-}
-
 .topbar {
   z-index: 2;
   display: flex;
@@ -1482,108 +1469,8 @@ input[type="checkbox"] {
 }
 
 /* ============================================================
-   Web preview panel & message sources
+   Message sources
    ============================================================ */
-
-.preview-panel {
-  display: flex;
-  min-width: 0;
-  flex: 0 0 clamp(360px, 42%, 620px);
-  flex-direction: column;
-  border-left: 1px solid var(--line);
-  background: var(--canvas);
-  animation: preview-in var(--dur-3) var(--ease-out) backwards;
-}
-
-.preview-bar {
-  display: flex;
-  min-height: 46px;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 0 8px 0 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.preview-bar .globe-icon {
-  width: 13px;
-  height: 13px;
-  flex: 0 0 auto;
-  color: var(--muted);
-  stroke: currentColor;
-  stroke-width: 1.6;
-}
-
-.preview-host {
-  color: var(--ink);
-  font-size: var(--text-label);
-  font-weight: var(--weight-semibold);
-  white-space: nowrap;
-}
-
-.preview-url {
-  overflow: hidden;
-  min-width: 0;
-  flex: 1;
-  color: var(--faint);
-  font-size: var(--text-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.preview-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 2px;
-}
-
-.preview-actions button {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-m);
-  color: var(--muted);
-  background: transparent;
-  font-size: 17px;
-}
-
-.preview-actions button:hover {
-  color: var(--ink);
-  background: var(--fill);
-}
-
-.preview-actions .external-icon,
-.preview-actions .browser-icon {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.preview-frame {
-  min-height: 0;
-  flex: 1;
-  border: 0;
-  background: var(--surface);
-}
-
-@keyframes preview-in {
-  0% {
-    opacity: 0;
-    transform: translateX(24px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-/* Sources chip inside message meta */
 
 .message-sources {
   position: relative;
@@ -1630,17 +1517,30 @@ input[type="checkbox"] {
   border-radius: 14px;
   background: var(--surface);
   box-shadow: var(--shadow-2);
+  visibility: hidden;
   opacity: 0;
-  pointer-events: none;
   transform: translateY(-3px);
-  transition: opacity var(--dur-1) ease-out, transform var(--dur-2) var(--ease-out);
+  transition:
+    opacity var(--dur-1) ease-out,
+    transform var(--dur-2) var(--ease-out),
+    visibility 0s linear 160ms;
+}
+
+.sources-popover::before {
+  position: absolute;
+  top: -8px;
+  right: 0;
+  left: 0;
+  height: 8px;
+  content: "";
 }
 
 .message-sources:hover .sources-popover,
 .message-sources:focus-within .sources-popover {
+  visibility: visible;
   opacity: 1;
-  pointer-events: auto;
   transform: translateY(0);
+  transition-delay: 0s;
 }
 
 .sources-popover > p {

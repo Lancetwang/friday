@@ -1,7 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { open } from '@tauri-apps/plugin-dialog'
 import { open as openUrl } from '@tauri-apps/plugin-shell'
 import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
@@ -296,7 +295,6 @@ function App() {
   const [skillQuery, setSkillQuery] = useState('')
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [previewImage, setPreviewImage] = useState('')
-  const [previewUrl, setPreviewUrl] = useState('')
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
   const activeAssistants = useRef(new Map<string, string>())
@@ -413,19 +411,9 @@ function App() {
     setRenaming(null)
     setModelSettingsOpen(false)
     setPreviewImage('')
-    setPreviewUrl('')
     setSkillDetail(null)
     setSkillError('')
   }, [activeProject, projects])
-
-  useEffect(() => {
-    if (!previewUrl) return
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setPreviewUrl('')
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [previewUrl])
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
@@ -1251,22 +1239,16 @@ function App() {
 
         <main className="workspace">
         {page === 'skills' ? (
-        <div className="workspace-body">
           <SkillBrowser
             detail={skillDetail}
             error={skillError}
             onClose={() => setSkillDetail(null)}
             onOpen={openSkill}
-            onOpenLink={url => {
-              setPreviewUrl(url)
-              setSkillDetail(null)
-            }}
+            onOpenLink={openLinkExternally}
             onQueryChange={setSkillQuery}
             query={skillQuery}
             skills={skills}
           />
-          {previewUrl && <PreviewPanel onClose={() => setPreviewUrl('')} url={previewUrl} />}
-        </div>
         ) : (
         <>
         <header className="topbar">
@@ -1276,8 +1258,6 @@ function App() {
           </div>
         </header>
 
-        <div className="workspace-body">
-        <div className="chat-column">
         <section
           className={`timeline ${showWelcome ? 'empty' : ''}`}
           aria-live="polite"
@@ -1293,9 +1273,9 @@ function App() {
           {showWelcome && <WelcomePrompt key={activeProject} />}
           {!showWelcome && groupToolItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
-              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onOpenLink={setPreviewUrl} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
+              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
               : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
-            : <TimelineRow busy={busy} item={item} key={item.id} onOpenLink={setPreviewUrl} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
+            : <TimelineRow busy={busy} item={item} key={item.id} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
           {pendingApproval && (
             <section className="approval-panel">
               <strong>Approval required</strong>
@@ -1467,9 +1447,6 @@ function App() {
             </div>
           </div>
         </form>
-        </div>
-        {previewUrl && <PreviewPanel onClose={() => setPreviewUrl('')} url={previewUrl} />}
-        </div>
         </>
         )}
         </main>
@@ -1550,62 +1527,8 @@ function GlobeIcon() {
   )
 }
 
-function ExternalIcon() {
-  return (
-    <svg aria-hidden="true" className="external-icon" fill="none" viewBox="0 0 24 24">
-      <path d="M7 17 17 7M9 7h8v8" />
-    </svg>
-  )
-}
-
-function BrowserIcon() {
-  return (
-    <svg aria-hidden="true" className="browser-icon" fill="none" viewBox="0 0 24 24">
-      <rect height="13.5" rx="2.5" width="17" x="3.5" y="5.5" />
-      <path d="M3.5 9.5h17" />
-      <path d="M6.5 7.5h.01M9 7.5h.01" />
-    </svg>
-  )
-}
-
-function PreviewPanel({ onClose, url }: { onClose: () => void; url: string }) {
-  const host = hostOf(url)
-  const openExternal = () => {
-    try {
-      new WebviewWindow(`preview-${Date.now()}`, { title: host || 'Preview', url, width: 1100, height: 740 })
-    } catch {
-      window.open(url, '_blank')
-    }
-  }
-  const openInBrowser = () => void openUrl(url).catch(() => window.open(url, '_blank'))
-  return (
-    <aside className="preview-panel">
-      <div className="preview-bar">
-        <GlobeIcon />
-        <span className="preview-host">{host || url}</span>
-        <span className="preview-url" title={url}>{url}</span>
-        <div className="preview-actions">
-          <button aria-label="用默认浏览器打开" onClick={openInBrowser} title="用默认浏览器打开" type="button">
-            <BrowserIcon />
-          </button>
-          <button aria-label="在新窗口打开" onClick={openExternal} title="在新窗口打开" type="button">
-            <ExternalIcon />
-          </button>
-          <button aria-label="关闭预览" onClick={onClose} title="关闭预览 (Esc)" type="button">
-            {'\u00d7'}
-          </button>
-        </div>
-      </div>
-      <iframe
-        className="preview-frame"
-        key={url}
-        referrerPolicy="no-referrer"
-        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-        src={url}
-        title={`Preview of ${host || url}`}
-      />
-    </aside>
-  )
+function openLinkExternally(url: string) {
+  void openUrl(url).catch(() => window.open(url, '_blank'))
 }
 
 function SunIcon() {
