@@ -47,9 +47,9 @@ const permissionOptions: ReadonlyArray<{
   label: string
   value: PermissionMode
 }> = [
+  { description: 'Reject risky actions', label: 'Deny risky commands', value: 'dont-ask' },
   { description: 'Ask before risky actions', label: 'Request approval', value: 'manual' },
   { description: 'Allow workspace changes', label: 'Allow edits', value: 'accept-edits' },
-  { description: 'Reject risky actions', label: 'Deny risky commands', value: 'dont-ask' },
   { description: 'Run without approval', label: 'Full access', value: 'bypass' }
 ]
 
@@ -1110,7 +1110,7 @@ function App() {
   const selectedSession = sessions.find(session => session.id === activeSession)
   const conversationTitle = selectedSession ? sessionLabel(selectedSession) : 'New conversation'
   const project = isDefaultWorkspace ? 'Personal conversations' : projectLabel(activeProject)
-  const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions[0]
+  const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions.find(option => option.value === 'manual')!
   const thinking = thinkingOptions.find(option => option.value === info.thinking_effort) || thinkingOptions[2]
   const selectedModel = models.profiles.find(profile => profile.id === info.model_profile)
 

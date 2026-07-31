@@ -2299,18 +2299,26 @@ input[type="checkbox"] {
   z-index: 20;
   display: grid;
   width: 210px;
+  max-height: min(340px, 55vh);
   gap: 2px;
   padding: 5px;
+  overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius-l);
   background: var(--surface);
   box-shadow: var(--shadow-2);
   font-size: var(--text-caption);
+  scrollbar-color: var(--faint) transparent;
+  scrollbar-width: thin;
+}
+
+.model-menu,
+.composer-footer > .permission-picker > .permission-menu {
+  left: 0;
+  right: auto;
 }
 
 .model-menu {
-  left: 0;
-  right: auto;
   width: 224px;
 }
 
