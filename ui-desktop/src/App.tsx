@@ -1430,7 +1430,7 @@ function App() {
               })
             }}
             placeholder={pendingApproval ? 'Resolve the pending approval first...' : status === 'ready' ? 'Ask Friday to do something...' : 'Starting Friday...'}
-            rows={3}
+            rows={2}
             value={draft}
           />
           <div className="composer-footer">

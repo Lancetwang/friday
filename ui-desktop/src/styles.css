@@ -895,7 +895,6 @@ input[type="checkbox"] {
   color: var(--ink);
   font-size: var(--text-ui);
   font-weight: var(--weight-semibold);
-  letter-spacing: -0.006em;
   line-height: var(--leading-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1136,7 +1135,6 @@ input[type="checkbox"] {
   margin: 18px 0 6px;
   font-size: var(--text-title);
   font-weight: var(--weight-semibold);
-  letter-spacing: -0.014em;
   overflow-wrap: anywhere;
 }
 
@@ -1221,7 +1219,6 @@ input[type="checkbox"] {
   color: var(--ink);
   font-size: clamp(1.5rem, 3.2vw, var(--text-hero));
   font-weight: var(--weight-medium);
-  letter-spacing: -0.022em;
 }
 
 .welcome-prompt i {
@@ -1629,7 +1626,6 @@ input[type="checkbox"] {
 .message-text h3,
 .message-text h4 {
   margin: 22px 0 10px;
-  letter-spacing: -0.01em;
   line-height: var(--leading-tight);
 }
 
@@ -2111,10 +2107,10 @@ input[type="checkbox"] {
 
 .composer {
   z-index: 2;
-  margin: 0 max(24px, calc((100% - 930px) / 2)) 20px;
-  padding: 14px 16px 12px;
+  margin: 0 max(24px, calc((100% - 930px) / 2)) 16px;
+  padding: 12px 16px 10px;
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-2);
   transition: border-color var(--dur-2) ease-out, box-shadow var(--dur-2) var(--ease-out);
@@ -2161,9 +2157,9 @@ input[type="checkbox"] {
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 62px;
+  min-height: 42px;
   resize: none;
-  padding: 2px 2px 10px;
+  padding: 2px 2px 6px;
   border: 0;
   outline: 0;
   color: var(--ink);
@@ -2180,7 +2176,7 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 34px;
+  min-height: 30px;
 }
 
 .composer-footer > span {

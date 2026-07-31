@@ -459,7 +459,7 @@ main{height:calc(100vh - 52px);display:grid;grid-template-columns:256px minmax(4
 .msg.user .msg-role{color:var(--accent)}
 .msg-content{min-width:0;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.65}
 .msg-content.streaming:after{content:"";display:inline-block;width:2px;height:1em;margin-left:3px;border-radius:1px;background:var(--accent);vertical-align:-2px;animation:blink .9s steps(1) infinite}
-.msg-content .heading{display:block;margin:10px 0 3px;font-size:14px;font-weight:650;letter-spacing:-.008em}
+.msg-content .heading{display:block;margin:10px 0 3px;font-size:14px;font-weight:650}
 .msg-content .ev{padding:1px 5px;border-radius:5px;background:var(--accent-soft);color:var(--accent-ink);font:11px var(--mono)}
 form{display:grid;grid-template-columns:1fr auto;gap:4px 10px;margin:0 14px 14px;padding:10px 10px 10px 12px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow-2);transition:border-color .14s ease-out}
 form:focus-within{border-color:var(--line-strong)}
