@@ -1213,8 +1213,15 @@ function App() {
 
   const deleteForkNode = (node: ForkNode) => {
     if (!window.confirm(`Delete "${node.title}" and its branches?`)) return
+    const fallback = treeContains(forkTree, node.id, activeSession)
+      ? forkTree.nodes.find(item => item.id === node.parent)
+      : undefined
     void sendGateway<{ deleted: string[]; history: HistoryItem[]; info: SessionInfo }>(activeProject, 'session.delete', { id: node.id })
       .then(result => {
+        if (fallback) {
+          openForkNode(fallback)
+          return
+        }
         updateView(activeProject, current => ({
           ...current,
           activeSession: result.info.session_id || '',
@@ -1790,6 +1797,15 @@ function WelcomePrompt() {
 }
 
 const FORK_MAP_KEY = 'friday.desktop.forkMap'
+
+function treeContains(tree: ForkTree, ancestorId: string, nodeId: string) {
+  let cursor: string | undefined = nodeId
+  while (cursor) {
+    if (cursor === ancestorId) return true
+    cursor = tree.nodes.find(node => node.id === cursor)?.parent
+  }
+  return false
+}
 
 function layoutForkTree(tree: ForkTree) {
   const children = new Map<string, ForkNode[]>()
