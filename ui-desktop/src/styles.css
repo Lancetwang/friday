@@ -1721,12 +1721,6 @@ input[type="checkbox"] {
   text-decoration-color: currentColor;
 }
 
-.message-text .katex,
-.thinking-content .katex,
-.skill-content .katex {
-  line-height: normal;
-}
-
 .message-text .katex-display {
   margin: 16px 0;
   padding: 4px 2px;

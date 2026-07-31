@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 
 import fridayAvatar from './assets/friday-avatar.svg'
+import { normalizeMarkdownMath } from './markdown'
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath]
 const markdownRehypePlugins = [rehypeKatex]
@@ -1940,7 +1941,7 @@ function SkillBrowser({
                 rehypePlugins={markdownRehypePlugins}
                 remarkPlugins={markdownRemarkPlugins}
               >
-                {detail.content}
+                {normalizeMarkdownMath(detail.content)}
               </ReactMarkdown>
             </div>
           </article>
@@ -2196,7 +2197,7 @@ function TimelineRow({
             rehypePlugins={markdownRehypePlugins}
             remarkPlugins={markdownRemarkPlugins}
           >
-            {item.text}
+            {normalizeMarkdownMath(item.text)}
           </ReactMarkdown>
         </div>
         {item.images?.length ? (
@@ -2305,7 +2306,7 @@ function ThinkingRow({ item, onOpenLink }: { item: TimelineItem; onOpenLink: (ur
           rehypePlugins={markdownRehypePlugins}
           remarkPlugins={markdownRemarkPlugins}
         >
-          {item.text || '…'}
+          {normalizeMarkdownMath(item.text || '…')}
         </ReactMarkdown>
       </div>
     </details>

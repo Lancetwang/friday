@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --port 1420",
     "build": "tsc --noEmit && vite build",
+    "test:math": "node --experimental-strip-types scripts/test-markdown.ts",
     "desktop": "npm run sidecar && tauri dev",
     "bundle": "npm run sidecar && tauri build",
     "sidecar": "powershell -ExecutionPolicy Bypass -File scripts/build-sidecar.ps1",
@@ -16,7 +17,7 @@
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-shell": "^2.3.5",
-    "katex": "^0.18.1",
+    "katex": "^0.16.47",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
