@@ -584,7 +584,7 @@ def _dangerous_shell(command: str) -> str:
         (r"\b(remove-item|rm|del|erase|rmdir|rd)\b", "deletes files or directories"),
         (r"\b(git\s+(reset|clean))\b", "can discard git state"),
         (r"\b(set-content|add-content|out-file|new-item|move-item|rename-item)\b", "writes or moves files"),
-        (r"\b(format-volume|format|mkfs|dd|shutdown|restart-computer|stop-computer)\b", "can damage the system"),
+        (r"\b(format-volume|format(?!-)|mkfs|dd|shutdown|restart-computer|stop-computer)\b", "can damage the system"),
     ]
     for pattern, reason in checks:
         if re.search(pattern, lowered):

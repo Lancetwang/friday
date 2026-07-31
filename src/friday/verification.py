@@ -13,7 +13,7 @@ from friday.agent_flow import GUARD_STOP_REASON, build_guarded_flow, inherit_gua
 from friday.config import ModelConfig, build_model, load_model_config, output_token_limit
 from friday.prompts import SECURITY_NOTES, VERIFIER_NOTES
 from friday.storage import project_state_dir
-from friday.tools import build_tools, pending_approval
+from friday.tools import _shell_surface, build_tools, pending_approval
 
 VERIFIER_MAX_STEPS = 10000
 
@@ -44,17 +44,9 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
     if not force and not needs_verification(events):
         return None
     workspace = Path(context.metadata["workspace"])
-    approval = pending_approval(workspace)
-    if approval.get("pending"):
-        return {
-            "approval_required": True,
-            "verdict": "inconclusive",
-            "blocked": False,
-            "evidence": [f"Pending approval for: {approval.get('command', '')}"],
-            "feedback": "Approve or reject the pending command before continuing verification.",
-            "passed": False,
-            "required": True,
-        }
+    approval_result = _pending_approval_result(workspace)
+    if approval_result:
+        return approval_result
     context.emit("verification.start", category="verification", data={"goal_chars": len(goal)})
     config_data = context.metadata.get("friday.model_config")
     config = ModelConfig(**config_data) if isinstance(config_data, dict) else None
@@ -71,6 +63,9 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
         raw = verifier.chat(verification_prompt(goal, events), context=verifier_context, max_steps=VERIFIER_MAX_STEPS, stream=False)
     except Exception as exc:
         return {"verdict": "inconclusive", "blocked": False, "error": True, "evidence": [], "feedback": f"Verifier failed: {exc}", "next_check": "", "passed": False, "required": True}
+    approval_result = _pending_approval_result(workspace)
+    if approval_result:
+        return approval_result
     parsed = parse_verification(raw)
     guard_reason = verifier_context.metadata.get(GUARD_STOP_REASON)
     if isinstance(guard_reason, str):
@@ -102,9 +97,24 @@ def needs_verification(events: list[dict[str, Any]]) -> bool:
 
 
 def bash_may_write(command: str) -> bool:
-    lowered = command.lower()
+    lowered = _shell_surface(command).lower()
     checked = re.sub(r"(?:(?:&|\*|\d+)\s*)?>{1,2}\s*(?:\$null\b|/dev/null\b|nul\b|&\d+\b)", "", lowered)
     return bool(re.search(r"\b(set-content|add-content|out-file|new-item|move-item|rename-item|rm|del|remove-item)\b|(^|[^><])>{1,2}(?![=>&])", checked))
+
+
+def _pending_approval_result(workspace: Path) -> dict[str, Any] | None:
+    approval = pending_approval(workspace)
+    if not approval.get("pending"):
+        return None
+    return {
+        "approval_required": True,
+        "verdict": "inconclusive",
+        "blocked": False,
+        "evidence": [f"Pending approval for: {approval.get('command', '')}"],
+        "feedback": "Approve or reject the pending command before continuing verification.",
+        "passed": False,
+        "required": True,
+    }
 
 
 def verification_prompt(goal: str, events: list[dict[str, Any]]) -> str:

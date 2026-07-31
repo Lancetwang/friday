@@ -24,7 +24,7 @@ from friday.skills import discover_skills, skill_routing
 from friday.state import delete_session, rename_session
 from friday.storage import project_state_dir, workspace_key
 from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, _permission_decision, allow_permissions_for_session, approve_pending, build_tools, pending_approval
-from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt
+from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt, verify_friday
 
 
 class ToolTests(unittest.TestCase):
@@ -219,10 +219,14 @@ class ToolTests(unittest.TestCase):
                 null_redirect = _permission_decision(friday_dir, "friday skill list --json 2>$null")
                 stream_redirect = _permission_decision(friday_dir, "python task.py 2>&1")
                 file_redirect = _permission_decision(friday_dir, "python task.py > output.txt")
+                format_table = _permission_decision(friday_dir, "Get-ChildItem | Format-Table -AutoSize")
+                format_drive = _permission_decision(friday_dir, "format C:")
 
         self.assertEqual(null_redirect[0], "allow")
         self.assertEqual(stream_redirect[0], "allow")
         self.assertEqual(file_redirect[0], "approval")
+        self.assertEqual(format_table[0], "allow")
+        self.assertEqual(format_drive[0], "approval")
 
     def test_session_approval_skips_prompts_but_preserves_deny_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1400,13 +1404,32 @@ class VerificationTests(unittest.TestCase):
         write_events = [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}]
         bash_write_events = [{"type": "tool.call", "data": {"name": "Bash", "arguments": {"command": "Set-Content x.py hi"}}}]
         bash_read_events = [{"type": "tool.call", "data": {"name": "Bash", "arguments": {"command": 'friday memory status 2>$null; friday memory list 2>/dev/null; friday session list 2>&1'}}}]
+        bash_display_events = [{"type": "tool.call", "data": {"name": "Bash", "arguments": {"command": 'Write-Output "provider -> base_url"'}}}]
         bash_redirect_events = [{"type": "tool.call", "data": {"name": "Bash", "arguments": {"command": "Get-ChildItem > files.txt"}}}]
 
         self.assertFalse(needs_verification(read_events))
         self.assertFalse(needs_verification(bash_read_events))
+        self.assertFalse(needs_verification(bash_display_events))
         self.assertTrue(needs_verification(write_events))
         self.assertTrue(needs_verification(bash_write_events))
         self.assertTrue(needs_verification(bash_redirect_events))
+
+    def test_verifier_reports_approval_created_during_its_run(self) -> None:
+        context = RunContext(metadata={"workspace": str(Path.cwd())})
+        verifier = Mock()
+        verifier.chat.return_value = ""
+        verifier_context = RunContext(metadata={"workspace": str(Path.cwd())})
+        pending = {"pending": True, "command": "restricted command"}
+
+        with (
+            patch("friday.verification.pending_approval", side_effect=[{"pending": False}, pending]),
+            patch("friday.verification.build_verifier", return_value=(verifier, verifier_context)),
+            patch("friday.verification.inherit_guarded_run"),
+        ):
+            result = verify_friday("verify delivery", context, 0, force=True)
+
+        self.assertTrue(result["approval_required"])
+        self.assertNotIn("error", result)
 
     def test_verifier_prompt_excludes_main_answer(self) -> None:
         prompt = verification_prompt("fix the bug", [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}])
