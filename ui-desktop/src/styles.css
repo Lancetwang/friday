@@ -992,6 +992,7 @@ input[type="checkbox"] {
 .fork-tip {
   position: absolute;
   z-index: 5;
+  right: calc(100% + 8px);
   display: grid;
   width: 210px;
   gap: 3px;

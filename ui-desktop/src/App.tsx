@@ -1799,23 +1799,23 @@ function layoutForkTree(tree: ForkTree) {
   }
   const positions = new Map<string, { x: number; y: number }>()
   const edges: Array<{ d: string; key: string }> = []
-  const colWidth = 84
-  const rowHeight = 34
-  const padX = 18
+  const colWidth = 30
+  const rowHeight = 48
+  const padX = 20
   const padY = 20
   let leaf = 0
   const place = (node: ForkNode, depth: number): number => {
     const kids = children.get(node.id) || []
-    let row: number
+    let column: number
     if (!kids.length) {
-      row = leaf
+      column = leaf
       leaf += 1
     } else {
-      const rows = kids.map(kid => place(kid, depth + 1))
-      row = (rows[0]! + rows[rows.length - 1]!) / 2
+      const columns = kids.map(kid => place(kid, depth + 1))
+      column = (columns[0]! + columns[columns.length - 1]!) / 2
     }
-    positions.set(node.id, { x: padX + depth * colWidth, y: padY + row * rowHeight })
-    return row
+    positions.set(node.id, { x: padX + column * colWidth, y: padY + depth * rowHeight })
+    return column
   }
   const root = tree.nodes.find(node => node.id === tree.root)
   if (root) place(root, 0)
@@ -1824,15 +1824,15 @@ function layoutForkTree(tree: ForkTree) {
     const from = positions.get(node.parent)
     const to = positions.get(node.id)
     if (!from || !to) continue
-    const midX = (from.x + to.x) / 2
-    edges.push({ d: `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`, key: node.id })
+    const midY = (from.y + to.y) / 2
+    edges.push({ d: `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`, key: node.id })
   }
-  const maxX = Math.max(0, ...tree.nodes.map(node => positions.get(node.id)?.x ?? 0))
+  const maxY = Math.max(0, ...tree.nodes.map(node => positions.get(node.id)?.y ?? 0))
   return {
     edges,
-    height: Math.max(56, padY * 2 + Math.max(0, leaf - 1) * rowHeight),
+    height: maxY + padY + 18,
     positions,
-    width: Math.max(104, maxX + padX + 18)
+    width: Math.max(52, padX * 2 + Math.max(0, leaf - 1) * colWidth)
   }
 }
 
@@ -1923,12 +1923,7 @@ function ForkMap({
           className="fork-tip"
           onMouseEnter={() => setHovered(hoveredNode.id)}
           onMouseLeave={() => setHovered(null)}
-          style={{
-            top: hoveredPos.y + 34,
-            ...(hoveredPos.x > width * 0.58
-              ? { right: width - hoveredPos.x + 24 }
-              : { left: hoveredPos.x + 24 })
-          } as CSSProperties}
+          style={{ top: hoveredPos.y + 30 } as CSSProperties}
         >
           <p>{hoveredNode.id === tree.root ? '主会话' : 'Fork 会话'}</p>
           <strong>{hoveredNode.title || 'Untitled conversation'}</strong>
