@@ -1723,6 +1723,27 @@ input[type="checkbox"] {
   text-decoration-color: currentColor;
 }
 
+.message-text .katex {
+  font-size: 1.05em;
+}
+
+.message-text .katex-display {
+  margin: 16px 0;
+  padding: 4px 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.message-text p > .katex:only-child {
+  font-size: 1.05em;
+}
+
+.skill-content .katex-display {
+  margin: 14px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .metrics {
   margin-top: 10px;
   color: var(--faint);

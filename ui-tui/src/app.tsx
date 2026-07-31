@@ -87,6 +87,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         })
       } else if (event.type === 'message.delta') {
         setStreaming(text => text + event.payload.text)
+        setMessages(items => closeOpenThinking(items, activeTurn.current))
       } else if (event.type === 'message.complete') {
         if (event.payload.text) {
           setMessages(items => [...items, { metrics: event.payload.metrics, role: 'assistant', text: event.payload.text }])
@@ -575,6 +576,23 @@ function completeThinking(messages: UiMessage[], turnId: string | null, id: stri
     ...message,
     thinking: (message.thinking ?? []).map(block =>
       block.id === id && block.ended == null ? { ...block, ended: Date.now(), error: error || undefined } : block)
+  }
+  return next
+}
+
+function closeOpenThinking(messages: UiMessage[], turnId: string | null) {
+  const index = turnIndex(messages, turnId)
+  if (index === -1) {
+    return messages
+  }
+  const message = messages[index]!
+  if (!message.thinking?.some(block => block.ended == null)) {
+    return messages
+  }
+  const next = [...messages]
+  next[index] = {
+    ...message,
+    thinking: message.thinking!.map(block => block.ended == null ? { ...block, ended: Date.now() } : block)
   }
   return next
 }

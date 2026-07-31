@@ -5,9 +5,14 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { open as openUrl } from '@tauri-apps/plugin-shell'
 import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
 
 import fridayAvatar from './assets/friday-avatar.svg'
+
+const markdownRemarkPlugins = [remarkGfm, remarkMath]
+const markdownRehypePlugins = [rehypeKatex]
 
 type Metrics = {
   elapsed_ms?: number
@@ -532,12 +537,21 @@ function App() {
           activeAssistants.current.set(workspace, id)
         }
         updateView(workspace, current => {
-          const found = current.items.some(item => item.id === id)
+          const now = Date.now()
+          let found = false
+          const items = current.items.map(item => {
+            if (item.kind === 'reasoning' && item.thinking && item.thinking.ended == null) {
+              return { ...item, thinking: { ...item.thinking, ended: now } }
+            }
+            if (item.id === id) {
+              found = true
+              return { ...item, text: item.text + text }
+            }
+            return item
+          })
           return {
             ...current,
-            items: found
-              ? current.items.map(item => item.id === id ? { ...item, text: item.text + text } : item)
-              : [...current.items, { id, kind: 'assistant', text }]
+            items: found ? items : [...items, { id, kind: 'assistant', text }]
           }
         })
       } else if (type === 'message.complete') {
@@ -1919,7 +1933,8 @@ function SkillBrowser({
                     />
                   )
                 }}
-                remarkPlugins={[remarkGfm]}
+                rehypePlugins={markdownRehypePlugins}
+                remarkPlugins={markdownRemarkPlugins}
               >
                 {detail.content}
               </ReactMarkdown>
@@ -2187,7 +2202,8 @@ function TimelineRow({
                 />
               )
             }}
-            remarkPlugins={[remarkGfm]}
+            rehypePlugins={markdownRehypePlugins}
+            remarkPlugins={markdownRemarkPlugins}
           >
             {item.text}
           </ReactMarkdown>
