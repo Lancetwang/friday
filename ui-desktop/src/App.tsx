@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { open } from '@tauri-apps/plugin-dialog'
 import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -294,6 +295,7 @@ function App() {
   const [skillQuery, setSkillQuery] = useState('')
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [previewImage, setPreviewImage] = useState('')
+  const [previewUrl, setPreviewUrl] = useState('')
   const [views, setViews] = useState<Record<string, ProjectView>>({})
   const activeProjectRef = useRef(activeProject)
   const activeAssistants = useRef(new Map<string, string>())
@@ -410,9 +412,19 @@ function App() {
     setRenaming(null)
     setModelSettingsOpen(false)
     setPreviewImage('')
+    setPreviewUrl('')
     setSkillDetail(null)
     setSkillError('')
   }, [activeProject, projects])
+
+  useEffect(() => {
+    if (!previewUrl) return
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewUrl('')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [previewUrl])
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
@@ -1085,6 +1097,7 @@ function App() {
   }
 
   const timelineItems = bindCheckpoints(items, checkpoints, activeSession)
+  const sourcesByMessage = collectMessageSources(timelineItems)
   const showWelcome = status === 'ready' && !activeSession && !timelineItems.length && !pendingApproval && !busy
 
   return (
@@ -1237,15 +1250,22 @@ function App() {
 
         <main className="workspace">
         {page === 'skills' ? (
+        <div className="workspace-body">
           <SkillBrowser
             detail={skillDetail}
             error={skillError}
             onClose={() => setSkillDetail(null)}
             onOpen={openSkill}
+            onOpenLink={url => {
+              setPreviewUrl(url)
+              setSkillDetail(null)
+            }}
             onQueryChange={setSkillQuery}
             query={skillQuery}
             skills={skills}
           />
+          {previewUrl && <PreviewPanel onClose={() => setPreviewUrl('')} url={previewUrl} />}
+        </div>
         ) : (
         <>
         <header className="topbar">
@@ -1255,6 +1275,8 @@ function App() {
           </div>
         </header>
 
+        <div className="workspace-body">
+        <div className="chat-column">
         <section
           className={`timeline ${showWelcome ? 'empty' : ''}`}
           aria-live="polite"
@@ -1270,9 +1292,9 @@ function App() {
           {showWelcome && <WelcomePrompt key={activeProject} />}
           {!showWelcome && groupToolItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
-              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onPreview={setPreviewImage} onRestore={restoreCheckpoint} />
+              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onOpenLink={setPreviewUrl} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
               : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
-            : <TimelineRow busy={busy} item={item} key={item.id} onPreview={setPreviewImage} onRestore={restoreCheckpoint} />)}
+            : <TimelineRow busy={busy} item={item} key={item.id} onOpenLink={setPreviewUrl} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
           {pendingApproval && (
             <section className="approval-panel">
               <strong>Approval required</strong>
@@ -1444,6 +1466,9 @@ function App() {
             </div>
           </div>
         </form>
+        </div>
+        {previewUrl && <PreviewPanel onClose={() => setPreviewUrl('')} url={previewUrl} />}
+        </div>
         </>
         )}
         </main>
@@ -1512,6 +1537,59 @@ function VisionIcon() {
       <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
       <circle cx="12" cy="12" r="2.6" />
     </svg>
+  )
+}
+
+function GlobeIcon() {
+  return (
+    <svg aria-hidden="true" className="globe-icon" fill="none" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5s-1.3 6.2-3.9 8.5c-2.6-2.3-3.9-5.2-3.9-8.5s1.3-6.2 3.9-8.5Z" />
+    </svg>
+  )
+}
+
+function ExternalIcon() {
+  return (
+    <svg aria-hidden="true" className="external-icon" fill="none" viewBox="0 0 24 24">
+      <path d="M7 17 17 7M9 7h8v8" />
+    </svg>
+  )
+}
+
+function PreviewPanel({ onClose, url }: { onClose: () => void; url: string }) {
+  const host = hostOf(url)
+  const openExternal = () => {
+    try {
+      new WebviewWindow(`preview-${Date.now()}`, { title: host || 'Preview', url, width: 1100, height: 740 })
+    } catch {
+      window.open(url, '_blank')
+    }
+  }
+  return (
+    <aside className="preview-panel">
+      <div className="preview-bar">
+        <GlobeIcon />
+        <span className="preview-host">{host || url}</span>
+        <span className="preview-url" title={url}>{url}</span>
+        <div className="preview-actions">
+          <button aria-label="在新窗口打开" onClick={openExternal} title="在新窗口打开" type="button">
+            <ExternalIcon />
+          </button>
+          <button aria-label="关闭预览" onClick={onClose} title="关闭预览 (Esc)" type="button">
+            {'\u00d7'}
+          </button>
+        </div>
+      </div>
+      <iframe
+        className="preview-frame"
+        key={url}
+        referrerPolicy="no-referrer"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+        src={url}
+        title={`Preview of ${host || url}`}
+      />
+    </aside>
   )
 }
 
@@ -1709,6 +1787,7 @@ function SkillBrowser({
   error,
   onClose,
   onOpen,
+  onOpenLink,
   onQueryChange,
   query,
   skills
@@ -1717,6 +1796,7 @@ function SkillBrowser({
   error: string
   onClose: () => void
   onOpen: (skill: SkillInfo) => void
+  onOpenLink: (url: string) => void
   onQueryChange: (query: string) => void
   query: string
   skills: SkillInfo[]
@@ -1777,7 +1857,25 @@ function SkillBrowser({
             <p>{detail.skill.description}</p>
             <small>{detail.skill.scope} · {detail.skill.path}</small>
             <div className="skill-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.content}</ReactMarkdown>
+              <ReactMarkdown
+                components={{
+                  a: ({ node: _node, ...props }) => (
+                    <a
+                      {...props}
+                      onClick={event => {
+                        const href = props.href || ''
+                        if (/^https?:\/\//.test(href)) {
+                          event.preventDefault()
+                          onOpenLink(href)
+                        }
+                      }}
+                    />
+                  )
+                }}
+                remarkPlugins={[remarkGfm]}
+              >
+                {detail.content}
+              </ReactMarkdown>
             </div>
           </article>
         </div>
@@ -1897,16 +1995,103 @@ function timelineFromHistory(history: HistoryItem[]) {
   }))
 }
 
+type WebSource = {
+  title: string
+  url: string
+}
+
+function hostOf(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+
+function cleanSourceUrl(url: string) {
+  return url.replace(/[)\].,;:!?'"]+$/, '')
+}
+
+function normalizeSourceUrl(url: string) {
+  return cleanSourceUrl(url).replace(/\/+$/, '').toLowerCase()
+}
+
+function markdownLinks(text: string): WebSource[] {
+  const links: WebSource[] = []
+  for (const match of text.matchAll(/\[([^\]]{1,120})\]\((https?:\/\/[^)\s]+)\)/g)) {
+    links.push({ title: match[1]!.trim(), url: cleanSourceUrl(match[2]!) })
+  }
+  return links
+}
+
+function bareUrls(text: string): string[] {
+  const urls: string[] = []
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"')\]]+/g)) {
+    urls.push(cleanSourceUrl(match[0]))
+  }
+  return urls
+}
+
+function toolSources(item: TimelineItem): WebSource[] {
+  const name = (item.name || '').toLowerCase()
+  if (name !== 'websearch' && name !== 'webfetch') return []
+  const sources: WebSource[] = []
+  if (name === 'webfetch') {
+    try {
+      const parsed = JSON.parse(item.arguments || '{}') as { url?: unknown }
+      if (typeof parsed.url === 'string' && /^https?:\/\//.test(parsed.url)) {
+        sources.push({ title: hostOf(parsed.url), url: parsed.url })
+      }
+    } catch {
+      // Arguments may not be JSON; fall through to text extraction.
+    }
+  }
+  sources.push(...markdownLinks(item.text || ''))
+  for (const url of bareUrls(item.text || '')) sources.push({ title: hostOf(url), url })
+  return sources
+}
+
+function collectMessageSources(items: TimelineItem[]) {
+  const result = new Map<string, WebSource[]>()
+  let pending: WebSource[] = []
+  for (const item of items) {
+    if (item.kind === 'user') {
+      pending = []
+      continue
+    }
+    if (item.kind === 'tool') {
+      pending.push(...toolSources(item))
+      continue
+    }
+    if (item.kind !== 'assistant') continue
+    const seen = new Set<string>()
+    const merged: WebSource[] = []
+    for (const source of [...markdownLinks(item.text), ...pending]) {
+      const key = normalizeSourceUrl(source.url)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      merged.push({ title: source.title || hostOf(source.url) || source.url, url: cleanSourceUrl(source.url) })
+    }
+    if (merged.length) result.set(item.id, merged.slice(0, 8))
+    pending = []
+  }
+  return result
+}
+
 function TimelineRow({
   busy,
   item,
+  onOpenLink,
   onPreview,
-  onRestore
+  onRestore,
+  sources
 }: {
   busy: boolean
   item: TimelineItem
+  onOpenLink: (url: string) => void
   onPreview: (image: string) => void
   onRestore: (checkpointId: string) => void
+  sources?: WebSource[]
 }) {
   const [copied, setCopied] = useState(false)
 
@@ -1930,7 +2115,25 @@ function TimelineRow({
     <article className={`message ${item.kind}`}>
       <div className="message-body">
         <div className="message-text">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
+          <ReactMarkdown
+            components={{
+              a: ({ node: _node, ...props }) => (
+                <a
+                  {...props}
+                  onClick={event => {
+                    const href = props.href || ''
+                    if (/^https?:\/\//.test(href)) {
+                      event.preventDefault()
+                      onOpenLink(href)
+                    }
+                  }}
+                />
+              )
+            }}
+            remarkPlugins={[remarkGfm]}
+          >
+            {item.text}
+          </ReactMarkdown>
         </div>
         {item.images?.length ? (
           <div className="message-images">
@@ -1942,8 +2145,32 @@ function TimelineRow({
           </div>
         ) : null}
         {item.metrics && <MetricsLine metrics={item.metrics} />}
-        {(item.kind === 'user' || item.checkpointId) && (
+        {(item.kind === 'user' || item.checkpointId || sources?.length) && (
           <div className="message-meta">
+            {sources && sources.length > 0 && (
+              <span className="message-sources">
+                <button aria-label={`参考了 ${sources.length} 个页面`} className="sources-chip" type="button">
+                  <GlobeIcon />
+                  <span>{sources.length}</span>
+                </button>
+                <span className="sources-popover" role="tooltip">
+                  <p>参考了 {sources.length} 个页面</p>
+                  {sources.map(source => (
+                    <button
+                      className="source-item"
+                      key={source.url}
+                      onClick={() => onOpenLink(source.url)}
+                      title={source.url}
+                      type="button"
+                    >
+                      <span aria-hidden="true" className="source-dot" />
+                      <span className="source-title">{source.title}</span>
+                      <span className="source-host">{hostOf(source.url)}</span>
+                    </button>
+                  ))}
+                </span>
+              </span>
+            )}
             {item.kind === 'user' && item.createdAt && (
               <time dateTime={item.createdAt}>
                 {formatMessageTime(item.createdAt)}
