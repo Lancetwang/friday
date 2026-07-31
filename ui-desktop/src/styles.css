@@ -34,6 +34,7 @@
   --accent: #bf6f4c;
   --accent-ink: #a55c3c;
   --accent-soft: rgba(191, 111, 76, 0.12);
+  --caution: #c9932c;
   --success: #2e9e5e;
   --danger: #d94830;
   --danger-soft: rgba(217, 72, 48, 0.1);
@@ -111,6 +112,7 @@
   --accent: #cf8560;
   --accent-ink: #dc9d7d;
   --accent-soft: rgba(207, 133, 96, 0.15);
+  --caution: #d9a84e;
   --success: #55b87e;
   --danger: #e5604a;
   --danger-soft: rgba(229, 96, 74, 0.14);
@@ -2224,11 +2226,6 @@ input[type="checkbox"] {
   min-height: 30px;
 }
 
-.composer-footer > span {
-  color: var(--faint);
-  font-size: var(--text-micro);
-}
-
 .model-picker,
 .permission-picker {
   position: relative;
@@ -2420,23 +2417,43 @@ input[type="checkbox"] {
   border-radius: 50%;
 }
 
-.permission-menu button.active .permission-indicator {
+.permission-indicator.mode-dont-ask {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.permission-indicator.mode-manual {
+  border-color: var(--caution);
+  background: var(--caution);
+}
+
+.permission-indicator.mode-accept-edits {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.permission-indicator.mode-bypass {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.permission-menu button.active .permission-indicator:not([class*="mode-"]) {
   border-color: var(--ink);
   background: var(--ink);
 }
 
 .composer-footer .send-button {
   display: grid;
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
   place-items: center;
   padding: 0;
   border: 0;
   border-radius: 50%;
   color: var(--on-ink);
   background: var(--ink);
-  font-size: 19px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1;
 }
@@ -2917,10 +2934,6 @@ input[type="checkbox"] {
   .composer {
     margin-right: 14px;
     margin-left: 14px;
-  }
-
-  .composer-footer > span {
-    display: none;
   }
 
   .model-settings-body {

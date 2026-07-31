@@ -1446,12 +1446,51 @@ function App() {
                 }))
               })
             }}
-            placeholder={pendingApproval ? 'Resolve the pending approval first...' : status === 'ready' ? 'Ask Friday to do something...' : 'Starting Friday...'}
+            placeholder={pendingApproval ? 'Resolve the pending approval first...' : status === 'ready' ? 'Ask Friday to do something (Enter to send · Shift+Enter for a new line)' : 'Starting Friday...'}
             rows={2}
             value={draft}
           />
           <div className="composer-footer">
-            <span>Enter to send · Shift+Enter for a new line</span>
+            <details
+              className={`permission-picker ${busy ? 'disabled' : ''}`}
+              key={`${activeProject}-permissions`}
+              onBlur={event => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute('open')
+              }}
+            >
+              <summary
+                aria-disabled={busy}
+                aria-label="Permission mode"
+                onClick={event => {
+                  if (busy) event.preventDefault()
+                }}
+                tabIndex={busy ? -1 : 0}
+                title="Choose how Friday handles risky commands"
+              >
+                <span aria-hidden="true" className={`permission-indicator mode-${info.permission_mode}`} />
+                <span>{permission.label}</span>
+                <i aria-hidden="true" />
+              </summary>
+              <div className="permission-menu">
+                {permissionOptions.map(option => (
+                  <button
+                    className={option.value === info.permission_mode ? 'active' : ''}
+                    key={option.value}
+                    onClick={event => {
+                      event.currentTarget.closest('details')?.removeAttribute('open')
+                      changePermission(option.value)
+                    }}
+                    type="button"
+                  >
+                    <span className={`permission-indicator mode-${option.value}`} />
+                    <span>
+                      <strong>{option.label}</strong>
+                      <small>{option.description}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </details>
             <div className="composer-actions">
               <details
                 className={`model-picker ${busy ? 'disabled' : ''}`}
@@ -1536,45 +1575,6 @@ function App() {
                   </div>
                 </details>
               )}
-              <details
-                className={`permission-picker ${busy ? 'disabled' : ''}`}
-                key={`${activeProject}-permissions`}
-                onBlur={event => {
-                  if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute('open')
-                }}
-              >
-                <summary
-                  aria-disabled={busy}
-                  aria-label="Permission mode"
-                  onClick={event => {
-                    if (busy) event.preventDefault()
-                  }}
-                  tabIndex={busy ? -1 : 0}
-                  title="Choose how Friday handles risky commands"
-                >
-                  <span>{permission.label}</span>
-                  <i aria-hidden="true" />
-                </summary>
-                <div className="permission-menu">
-                  {permissionOptions.map(option => (
-                    <button
-                      className={option.value === info.permission_mode ? 'active' : ''}
-                      key={option.value}
-                      onClick={event => {
-                        event.currentTarget.closest('details')?.removeAttribute('open')
-                        changePermission(option.value)
-                      }}
-                      type="button"
-                    >
-                      <span className="permission-indicator" />
-                      <span>
-                        <strong>{option.label}</strong>
-                        <small>{option.description}</small>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </details>
               <button
                 aria-label="Send message"
                 className="send-button"
