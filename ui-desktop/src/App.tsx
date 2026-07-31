@@ -2007,23 +2007,6 @@ function VisionIcon() {
   )
 }
 
-function EyeIcon() {
-  return (
-    <svg aria-hidden="true" className="eye-icon" fill="none" viewBox="0 0 24 24">
-      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
-      <circle cx="12" cy="12" r="2.6" />
-    </svg>
-  )
-}
-
-function EyeOffIcon() {
-  return (
-    <svg aria-hidden="true" className="eye-icon" fill="none" viewBox="0 0 24 24">
-      <path d="M4 5.5 20 19M9.9 5.2A9.4 9.4 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3 3.9M6.1 7.4A16 16 0 0 0 2.5 12s3.5 7 9.5 7a9 9 0 0 0 4-.9M9.5 10a2.8 2.8 0 0 0 4 3.9" />
-    </svg>
-  )
-}
-
 function GlobeIcon() {
   return (
     <svg aria-hidden="true" className="globe-icon" fill="none" viewBox="0 0 24 24">
@@ -2139,84 +2122,89 @@ function ModelSettings({
               <div>
                 <h3>{selectedId ? 'Model configuration' : 'New model'}</h3>
               </div>
-              {vision && (
-                <span className="vision-pill">
-                  <VisionIcon />
-                  Vision
-                </span>
-              )}
+              {vision && <small className="vision-note">vision supported</small>}
             </div>
-            <label>
+            <label className="line-field">
               <span>Name</span>
-              <input required value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} />
+              <span className="field-line">
+                <input required value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} />
+              </span>
             </label>
             <fieldset className="provider-field">
               <legend>Provider</legend>
-              <div className="provider-cards">
-                {catalog.providers.map(item => (
-                  <button
-                    aria-pressed={item.id === draft.provider}
-                    className={`provider-card ${item.id === draft.provider ? 'active' : ''}`}
-                    key={item.id}
-                    onClick={() => setDraft(current => ({
-                      ...current,
-                      base_url: item.base_url,
-                      model: item.models[0]?.id || '',
-                      provider: item.id
-                    }))}
-                    type="button"
-                  >
-                    <strong>{item.label}</strong>
-                    <small>{hostOf(item.base_url) || item.base_url}</small>
-                  </button>
-                ))}
+              <div className="provider-list">
+                {catalog.providers.map(item => {
+                  const active = item.id === draft.provider
+                  return (
+                    <div className={`provider-item ${active ? 'active' : ''}`} key={item.id}>
+                      <button
+                        aria-expanded={active}
+                        aria-pressed={active}
+                        className="provider-row"
+                        onClick={() => setDraft(current => ({
+                          ...current,
+                          base_url: item.base_url,
+                          model: item.models[0]?.id || current.model,
+                          provider: item.id
+                        }))}
+                        type="button"
+                      >
+                        <strong>{item.label}</strong>
+                        <small>{hostOf(item.base_url) || item.base_url}</small>
+                      </button>
+                      <div className="provider-config" inert={!active}>
+                        <div className="provider-config-inner">
+                          <label className="line-field">
+                            <span>Base URL</span>
+                            <span className="field-line">
+                              <input required type="url" value={draft.base_url} onChange={event => setDraft(current => ({ ...current, base_url: event.target.value }))} />
+                            </span>
+                          </label>
+                          <label className="line-field">
+                            <span>Model</span>
+                            <span className="field-line">
+                              <input required value={draft.model} onChange={event => setDraft(current => ({ ...current, model: event.target.value }))} />
+                            </span>
+                          </label>
+                          <label className="line-field">
+                            <span>API key</span>
+                            <span className="field-line">
+                              <input
+                                autoComplete="off"
+                                placeholder={selectedId ? 'Leave blank to keep the saved key' : 'Required unless set in the environment'}
+                                type={showKey ? 'text' : 'password'}
+                                value={apiKey}
+                                onChange={event => {
+                                  setApiKey(event.target.value)
+                                  if (event.target.value) setClearApiKey(false)
+                                }}
+                              />
+                              <button
+                                aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                                className="line-action"
+                                onClick={() => setShowKey(value => !value)}
+                                type="button"
+                              >
+                                {showKey ? 'hide' : 'show'}
+                              </button>
+                            </span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </fieldset>
-            <label>
-              <span>Model</span>
-              <input
-                list={`models-${draft.provider}`}
-                required
-                value={draft.model}
-                onChange={event => setDraft(current => ({ ...current, model: event.target.value }))}
-              />
-              <datalist id={`models-${draft.provider}`}>
-                {provider?.models.map(item => <option key={item.id} value={item.id} />)}
-              </datalist>
-            </label>
-            <label>
-              <span>Base URL</span>
-              <input required type="url" value={draft.base_url} onChange={event => setDraft(current => ({ ...current, base_url: event.target.value }))} />
-            </label>
-            <label>
-              <span>API key</span>
-              <div className="field-input">
-                <input
-                  autoComplete="off"
-                  placeholder={selectedId ? 'Leave blank to keep the saved key' : 'Required unless set in the environment'}
-                  type={showKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={event => {
-                    setApiKey(event.target.value)
-                    if (event.target.value) setClearApiKey(false)
-                  }}
-                />
-                <button
-                  aria-label={showKey ? 'Hide API key' : 'Show API key'}
-                  className="key-eye"
-                  onClick={() => setShowKey(value => !value)}
-                  title={showKey ? 'Hide API key' : 'Show API key'}
-                  type="button"
-                >
-                  {showKey ? <EyeOffIcon /> : <EyeIcon />}
-                </button>
-              </div>
-            </label>
             {selectedId && (
-              <label className="clear-key">
-                <input checked={clearApiKey} onChange={event => setClearApiKey(event.target.checked)} type="checkbox" />
-                <span>Remove saved API key</span>
-              </label>
+              <button
+                aria-pressed={clearApiKey}
+                className={`quiet-toggle ${clearApiKey ? 'on' : ''}`}
+                onClick={() => setClearApiKey(value => !value)}
+                type="button"
+              >
+                {clearApiKey ? 'Will remove the saved key' : 'Remove saved API key'}
+              </button>
             )}
             {error && <div className="model-settings-error">{error}</div>}
             <footer>

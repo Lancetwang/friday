@@ -2942,36 +2942,12 @@ input[type="checkbox"] {
   gap: 5px;
 }
 
-.model-settings form > label:not(.clear-key) {
-  display: grid;
-  gap: 5px;
-}
-
 .model-settings label > span,
 .provider-field legend {
   color: var(--muted);
   font-size: var(--text-caption);
   font-weight: var(--weight-medium);
   line-height: var(--leading-control);
-}
-
-.model-settings input {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-m);
-  outline: 0;
-  color: var(--ink);
-  background: var(--field);
-  font-size: var(--text-control);
-  transition: border-color var(--dur-1) ease-out, box-shadow var(--dur-1) ease-out;
-}
-
-.model-settings input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .provider-field {
@@ -2986,48 +2962,35 @@ input[type="checkbox"] {
   padding: 0;
 }
 
-.provider-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
+/* Provider rows — one quiet line each, config unfolds inline */
+
+.provider-list {
+  border-bottom: 1px solid var(--line);
 }
 
-.provider-card {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+.provider-item + .provider-item {
+  border-top: 1px solid var(--line);
+}
+
+.provider-row {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 2px;
+  border: 0;
   color: var(--ink);
-  background: var(--field);
+  background: transparent;
   text-align: left;
-  transition: border-color var(--dur-1) ease-out, background-color var(--dur-1) ease-out, box-shadow var(--dur-1) ease-out;
 }
 
-.provider-card:hover {
-  border-color: var(--line-strong);
-}
-
-.provider-card.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.provider-card strong {
-  overflow: hidden;
+.provider-row strong {
   font-size: var(--text-control);
-  font-weight: var(--weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: var(--weight-medium);
 }
 
-.provider-card.active strong {
-  color: var(--accent-ink);
-}
-
-.provider-card small {
+.provider-row small {
   overflow: hidden;
   color: var(--faint);
   font-family: var(--font-mono);
@@ -3036,72 +2999,150 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
-.field-input {
-  position: relative;
+.provider-row:hover {
+  animation: row-nudge 320ms var(--ease-out);
 }
 
-.field-input input {
-  padding-right: 38px;
+.provider-item.active .provider-row strong {
+  color: var(--accent-ink);
 }
 
-.key-eye {
-  position: absolute;
-  top: 50%;
-  right: 4px;
+.provider-config {
   display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  padding: 0;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--dur-3) var(--ease),
+    opacity var(--dur-2) ease-out;
+}
+
+.provider-item.active .provider-config {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.provider-config-inner {
+  display: grid;
+  min-height: 0;
+  gap: 9px;
+  overflow: hidden;
+  padding: 4px 2px 12px;
+}
+
+@keyframes row-nudge {
+  0% {
+    transform: translateX(0);
+  }
+  32% {
+    transform: translateX(3px);
+  }
+  62% {
+    transform: translateX(-1px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* Underline fields — label left, hairline right, accent sweep on focus */
+
+.line-field {
+  display: grid;
+  align-items: baseline;
+  column-gap: 12px;
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.line-field > span:first-child {
+  color: var(--muted);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.field-line {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.field-line input {
+  min-width: 0;
+  flex: 1;
+  height: 32px;
+  padding: 0 2px 6px;
   border: 0;
-  border-radius: var(--radius-s);
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: var(--text-control);
+  transition: border-color var(--dur-1) ease-out;
+}
+
+.field-line input::placeholder {
+  color: var(--faint);
+}
+
+.field-line::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: var(--accent);
+  content: "";
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-3) var(--ease-out);
+}
+
+.field-line:focus-within::after {
+  transform: scaleX(1);
+}
+
+.line-action {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border: 0;
   color: var(--muted);
   background: transparent;
-  transform: translateY(-50%);
-}
-
-.key-eye:hover {
-  color: var(--ink);
-  background: var(--fill);
-}
-
-.eye-icon {
-  width: 15px;
-  height: 15px;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.vision-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  color: var(--accent-ink);
-  background: var(--accent-soft);
+  font-family: var(--font-mono);
   font-size: var(--text-micro);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
-.vision-pill .vision-icon {
-  width: 11px;
-  height: 11px;
+.line-action:hover {
+  color: var(--ink);
 }
 
-.model-settings .clear-key {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+.quiet-toggle {
+  justify-self: start;
+  padding: 0 2px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: var(--text-caption);
 }
 
-.model-settings .clear-key input {
-  width: 14px;
-  height: 14px;
+.quiet-toggle:hover {
+  color: var(--danger);
+}
+
+.quiet-toggle.on {
+  color: var(--danger);
+}
+
+.quiet-toggle.on::before {
+  content: "· ";
+}
+
+.vision-note {
+  align-self: center;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
 }
 
 .model-settings-error {
@@ -3308,10 +3349,6 @@ input[type="checkbox"] {
 
   .model-settings-body {
     grid-template-columns: 180px minmax(0, 1fr);
-  }
-
-  .provider-cards {
-    grid-template-columns: 1fr;
   }
 }
 
