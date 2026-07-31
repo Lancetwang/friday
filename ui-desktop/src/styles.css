@@ -1992,9 +1992,8 @@ input[type="checkbox"] {
 .thinking-content {
   max-height: 240px;
   margin: 4px 0 6px;
-  padding: 2px 4px 8px 15px;
+  padding: 2px 4px 8px 22px;
   overflow-y: auto;
-  border-left: 2px solid var(--line);
   color: var(--muted);
   font-size: var(--text-label);
   line-height: var(--leading-body);
