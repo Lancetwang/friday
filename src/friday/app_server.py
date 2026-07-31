@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -46,14 +48,11 @@ _MAX_TOTAL_IMAGE_CHARS = 20_000_000
 
 
 def main() -> None:
-    for stream in (sys.stdin, sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8")
-    output = sys.stdout
+    output = _Utf8Output(sys.stdout.buffer)
     sys.stdout = sys.stderr
     gateway = Gateway(output=output, background=True)
     gateway.event("gateway.ready", {"cwd": str(Path.cwd().resolve())})
-    for line in sys.stdin:
+    for line in _request_lines(sys.stdin.fileno()):
         # Tolerate a UTF-8 BOM from Windows shells piping into the gateway.
         line = line.lstrip("\ufeff")
         if line.strip():
@@ -66,6 +65,38 @@ def main() -> None:
                 gateway.err(None, "invalid JSON-RPC request: expected an object")
                 continue
             gateway.handle(message)
+
+
+class _Utf8Output:
+    def __init__(self, output: Any) -> None:
+        self.output = output
+
+    def write(self, value: str) -> None:
+        self.output.write(value.encode("utf-8"))
+
+    def flush(self) -> None:
+        self.output.flush()
+
+
+def _request_lines(fd: int):
+    """Read desktop RPC without blocking the Agent worker on Windows pipes."""
+    os.set_blocking(fd, False)
+    pending = bytearray()
+    while True:
+        try:
+            chunk = os.read(fd, 64 * 1024)
+        except BlockingIOError:
+            time.sleep(0.01)
+            continue
+        if not chunk:
+            break
+        pending.extend(chunk)
+        while (end := pending.find(b"\n")) >= 0:
+            raw = bytes(pending[:end]).rstrip(b"\r")
+            del pending[: end + 1]
+            yield raw.decode("utf-8")
+    if pending:
+        yield bytes(pending).rstrip(b"\r").decode("utf-8")
 
 
 def verification_status(result: dict[str, Any]) -> dict[str, Any]:
@@ -372,6 +403,7 @@ class Gateway:
             finally:
                 self.runs.pop(session_id, None)
                 self.run_labels.pop(session_id, None)
+                self.session_event(session, "session.updated", {"running": False})
 
         thread = threading.Thread(target=work, name=f"friday-{session_id}", daemon=True)
         self.runs[session_id] = thread

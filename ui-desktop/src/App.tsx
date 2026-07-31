@@ -208,6 +208,7 @@ type ProjectView = {
   activeSession: string
   attachment: ImageAttachment | null
   busy: boolean
+  cancelling: boolean
   checkpoints: CheckpointChoice[]
   draft: string
   guidance: string
@@ -265,6 +266,7 @@ function emptyView(path = ''): ProjectView {
     activeSession: '',
     attachment: null,
     busy: false,
+    cancelling: false,
     checkpoints: [],
     draft: '',
     guidance: '',
@@ -374,7 +376,7 @@ function App() {
   const openProjects = useRef(new Set(initialProjects.current.map(pathKey)))
 
   const view = views[activeProject] || emptyView(activeProject)
-  const { activeSession, attachment, busy, checkpoints, draft, forkTree, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
+  const { activeSession, attachment, busy, cancelling, checkpoints, draft, forkTree, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
   const isDefaultWorkspace = Boolean(defaultWorkspace && samePath(defaultWorkspace, activeProject))
 
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
@@ -547,7 +549,7 @@ function App() {
       const activeSessionId = activeSessions.current.get(pathKey(workspace)) || ''
       const eventKey = sessionEventKey(workspace, sessionId || activeSessionId)
       if (sessionId && activeSessionId && sessionId !== activeSessionId) {
-        if (type === 'message.complete' || type === 'message.cancelled') {
+        if (type === 'message.complete' || type === 'message.cancelled' || type === 'session.updated') {
           activeAssistants.current.delete(eventKey)
           void refreshSessions(workspace).catch(() => undefined)
         }
@@ -638,6 +640,7 @@ function App() {
             ...current,
             activeSession: sessionId || current.activeSession,
             busy: false,
+            cancelling: false,
             items
           }
         })
@@ -652,11 +655,14 @@ function App() {
         updateView(workspace, current => ({
           ...current,
           busy: false,
+          cancelling: false,
           items: [
             ...current.items.filter(item => item.id !== 'verification-status'),
             { id: nextId('cancelled'), kind: 'system', text: 'Request stopped.' }
           ]
         }))
+      } else if (type === 'session.updated') {
+        void refreshSessions(workspace).catch(() => undefined)
       } else if (type === 'tool.start') {
         const assistantId = activeAssistants.current.get(eventKey)
         const tool: TimelineItem = {
@@ -813,6 +819,7 @@ function App() {
       ...current,
       attachment: null,
       busy: true,
+      cancelling: false,
       draft: '',
       items: [
         ...current.items,
@@ -831,19 +838,27 @@ function App() {
       updateView(activeProject, current => current.activeSession !== submittedSession ? current : ({
           ...current,
           busy: false,
+          cancelling: false,
           items: [...current.items, { id: nextId('send'), kind: 'system', text: String(error) }]
         }))
     }
   }
 
   const cancelRequest = () => {
-    if (!busy || !activeSession) return
-    void sendGateway(activeProject, 'chat.cancel', { session_id: activeSession }).catch(error => {
-      updateView(activeProject, current => ({
-        ...current,
-        items: [...current.items, { id: nextId('cancel'), kind: 'system', text: String(error) }]
-      }))
-    })
+    if (!busy || cancelling || !activeSession) return
+    updateView(activeProject, current => ({ ...current, cancelling: true }))
+    void sendGateway<{ cancelled: boolean }>(activeProject, 'chat.cancel', { session_id: activeSession })
+      .then(result => {
+        if (result.cancelled) return
+        updateView(activeProject, current => ({ ...current, busy: false, cancelling: false }))
+      })
+      .catch(error => {
+        updateView(activeProject, current => ({
+          ...current,
+          cancelling: false,
+          items: [...current.items, { id: nextId('cancel'), kind: 'system', text: String(error) }]
+        }))
+      })
   }
 
   const changePermission = (mode: PermissionMode) => {
@@ -919,12 +934,13 @@ function App() {
   const startNewSessionAt = (workspace: string) => {
     if (!workspace) return Promise.resolve()
     setPage('chat')
-    updateView(workspace, value => ({ ...value, busy: true }))
+    updateView(workspace, value => ({ ...value, busy: true, cancelling: false }))
     return sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.new').then(result => {
       updateView(workspace, value => ({
         ...value,
         activeSession: result.info.session_id || '',
         busy: false,
+        cancelling: false,
         checkpoints: [],
         forkTree: { nodes: [], root: '' },
         info: result.info,
@@ -936,6 +952,7 @@ function App() {
       updateView(workspace, value => ({
         ...value,
         busy: false,
+        cancelling: false,
         items: [...value.items, { id: nextId('session'), kind: 'system', text: String(error) }]
       }))
     })
@@ -1702,11 +1719,11 @@ function App() {
                 </details>
               )}
               <button
-                aria-label={busy ? 'Stop request' : 'Send message'}
+                aria-label={busy ? cancelling ? 'Stopping request' : 'Stop request' : 'Send message'}
                 className={`send-button ${busy ? 'stop' : ''}`}
-                disabled={!busy && ((!draft.trim() && !attachment) || Boolean(pendingApproval) || status !== 'ready')}
+                disabled={cancelling || (!busy && ((!draft.trim() && !attachment) || Boolean(pendingApproval) || status !== 'ready'))}
                 onClick={busy ? event => { event.preventDefault(); cancelRequest() } : undefined}
-                title={busy ? 'Stop' : 'Send'}
+                title={busy ? cancelling ? 'Stopping' : 'Stop' : 'Send'}
                 type={busy ? 'button' : 'submit'}
               >
                 {busy ? <span className="stop-icon" /> : '↑'}

@@ -104,7 +104,6 @@ class FridaySession:
             ],
             thinking_effort=self.thinking_effort or DEFAULT_THINKING_EFFORT,
         )
-        self._cancel_event.clear()
         context.metadata["friday.cancel_event"] = self._cancel_event
         config = context.metadata.get("friday.model_config")
         if images and (not isinstance(config, dict) or not config.get("vision")):
@@ -137,6 +136,7 @@ class FridaySession:
             )
             hydrate(context, previous)
             self._adopt(agent, context)
+            self._cancel_event.clear()
             raise
         self._adopt(result.agent, result.context)
         self.suspended = {"text": text, "goal": goal} if pending_approval(self.workspace).get("pending") else None

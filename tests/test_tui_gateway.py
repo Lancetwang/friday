@@ -12,7 +12,7 @@ from unittest.mock import patch
 from agent_core import AgentEvent, RunContext
 
 from friday.session import FridaySession
-from friday.app_server import Gateway, session_history, verification_status
+from friday.app_server import Gateway, _request_lines, session_history, verification_status
 from friday.state import delete_session_tree, fork_session, read_session, resume_choices, save_turn, session_path, session_tree
 from friday.turn import TurnResult
 from friday.turn import TurnCancelled
@@ -30,6 +30,19 @@ def _turn_result(answer: str, verifications: list[dict] | None = None) -> TurnRe
 
 
 class TuiGatewayTests(unittest.TestCase):
+    def test_gateway_request_reader_does_not_block_workers_and_preserves_utf8(self) -> None:
+        read_fd, write_fd = os.pipe()
+        try:
+            os.write(write_fd, b'{"text":"\xe4\xbd\xa0\xe5\xa5\xbd"}\n{"ok":true}\n')
+            os.close(write_fd)
+            write_fd = -1
+
+            self.assertEqual(list(_request_lines(read_fd)), ['{"text":"\u4f60\u597d"}', '{"ok":true}'])
+        finally:
+            os.close(read_fd)
+            if write_fd >= 0:
+                os.close(write_fd)
+
     def test_gateway_passes_valid_image_data_to_the_session(self) -> None:
         gateway = Gateway()
         image = "data:image/png;base64,aW1hZ2U="
@@ -217,6 +230,7 @@ class TuiGatewayTests(unittest.TestCase):
 
         self.assertIn('"method": "event"', output.getvalue())
         self.assertIn('"type": "message.cancelled"', output.getvalue())
+        self.assertIn('"type": "session.updated"', output.getvalue())
 
     def test_cancelled_turn_restores_the_previous_conversation(self) -> None:
         session = FridaySession(session_id="s1")
@@ -227,12 +241,19 @@ class TuiGatewayTests(unittest.TestCase):
         fresh = RunContext(metadata={"workspace": str(Path.cwd()), "session_id": "s1"})
         fresh.add_message("system", "fresh prefix")
 
-        with patch("friday.session.run_turn", side_effect=TurnCancelled("stop")):
+        session.cancel()
+
+        def cancelled(_agent, context, _text, **_kwargs):
+            self.assertTrue(context.metadata["friday.cancel_event"].is_set())
+            raise TurnCancelled("stop")
+
+        with patch("friday.session.run_turn", side_effect=cancelled):
             with patch("friday.session.build_friday", return_value=(object(), fresh)):
                 with self.assertRaises(TurnCancelled):
                     session.chat("discarded")
 
         self.assertEqual([message["content"] for message in session.context.get_messages()], ["fresh prefix", "kept"])
+        self.assertFalse(session._cancel_event.is_set())
 
     def test_forks_are_hidden_from_recent_sessions_and_delete_as_a_subtree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
