@@ -933,8 +933,6 @@ input[type="checkbox"] {
 .fork-graph-scroll {
   min-height: 0;
   overflow: auto;
-  scrollbar-color: var(--faint) transparent;
-  scrollbar-width: thin;
 }
 
 .fork-graph {
@@ -2233,8 +2231,6 @@ input[type="checkbox"] {
   font-family: var(--font-serif);
   font-size: var(--text-label);
   line-height: var(--leading-body);
-  scrollbar-color: var(--faint) transparent;
-  scrollbar-width: thin;
   overflow-wrap: anywhere;
 }
 
@@ -2542,8 +2538,6 @@ input[type="checkbox"] {
   background: var(--surface);
   box-shadow: var(--shadow-2);
   font-size: var(--text-caption);
-  scrollbar-color: var(--faint) transparent;
-  scrollbar-width: thin;
 }
 
 .model-menu,
@@ -2932,25 +2926,22 @@ input[type="checkbox"] {
 
 /* Provider rows — one quiet line each, config unfolds inline */
 
-.provider-list {
-  border-bottom: 1px solid var(--line);
-}
-
-.provider-item + .provider-item {
-  border-top: 1px solid var(--line);
-}
-
 .provider-row {
   display: flex;
   width: 100%;
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  padding: 9px 2px;
+  padding: 10px 2px;
   border: 0;
   color: var(--ink);
   background: transparent;
   text-align: left;
+  transition: transform 400ms cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+
+.provider-row:hover {
+  transform: translateX(4px);
 }
 
 .provider-row strong {
@@ -2965,13 +2956,10 @@ input[type="checkbox"] {
   font-size: var(--text-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color var(--dur-1) ease-out;
 }
 
-.provider-row:hover {
-  animation: row-nudge 320ms var(--ease-out);
-}
-
-.provider-item.active .provider-row strong {
+.provider-item.selected .provider-row strong {
   color: var(--accent-ink);
 }
 
@@ -2984,7 +2972,7 @@ input[type="checkbox"] {
     opacity var(--dur-2) ease-out;
 }
 
-.provider-item.active .provider-config {
+.provider-item.expanded .provider-config {
   grid-template-rows: 1fr;
   opacity: 1;
 }
@@ -2995,21 +2983,6 @@ input[type="checkbox"] {
   gap: 9px;
   overflow: hidden;
   padding: 4px 2px 12px;
-}
-
-@keyframes row-nudge {
-  0% {
-    transform: translateX(0);
-  }
-  32% {
-    transform: translateX(3px);
-  }
-  62% {
-    transform: translateX(-1px);
-  }
-  100% {
-    transform: translateX(0);
-  }
 }
 
 /* Underline fields — label left, hairline right, accent sweep on focus */
@@ -3160,65 +3133,39 @@ input[type="checkbox"] {
    Scrollbars
    ============================================================ */
 
-.timeline,
-.sidebar-tree,
-.skills-page,
-.skill-content,
-.tool-details pre,
-.model-settings-body > aside,
-.model-settings form,
-.message-text pre {
-  scrollbar-color: var(--faint) transparent;
+* {
+  scrollbar-color: transparent transparent;
   scrollbar-width: thin;
 }
 
-.timeline::-webkit-scrollbar,
-.sidebar-tree::-webkit-scrollbar,
-.skills-page::-webkit-scrollbar,
-.skill-content::-webkit-scrollbar,
-.tool-details pre::-webkit-scrollbar,
-.model-settings-body > aside::-webkit-scrollbar,
-.model-settings form::-webkit-scrollbar,
-.message-text pre::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+html.scrolling * {
+  scrollbar-color: color-mix(in srgb, var(--ink) 22%, transparent) transparent;
 }
 
-.timeline::-webkit-scrollbar-thumb,
-.sidebar-tree::-webkit-scrollbar-thumb,
-.skills-page::-webkit-scrollbar-thumb,
-.skill-content::-webkit-scrollbar-thumb,
-.tool-details pre::-webkit-scrollbar-thumb,
-.model-settings-body > aside::-webkit-scrollbar-thumb,
-.model-settings form::-webkit-scrollbar-thumb,
-.message-text pre::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 8px;
-  background: var(--faint);
-  background-clip: padding-box;
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-.timeline::-webkit-scrollbar-thumb:hover,
-.sidebar-tree::-webkit-scrollbar-thumb:hover,
-.skills-page::-webkit-scrollbar-thumb:hover,
-.skill-content::-webkit-scrollbar-thumb:hover,
-.tool-details pre::-webkit-scrollbar-thumb:hover,
-.model-settings-body > aside::-webkit-scrollbar-thumb:hover,
-.model-settings form::-webkit-scrollbar-thumb:hover,
-.message-text pre::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
-  background-clip: padding-box;
-}
-
-.timeline::-webkit-scrollbar-track,
-.sidebar-tree::-webkit-scrollbar-track,
-.skills-page::-webkit-scrollbar-track,
-.skill-content::-webkit-scrollbar-track,
-.tool-details pre::-webkit-scrollbar-track,
-.model-settings-body > aside::-webkit-scrollbar-track,
-.model-settings form::-webkit-scrollbar-track,
-.message-text pre::-webkit-scrollbar-track {
+*::-webkit-scrollbar-track {
   background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  background-clip: padding-box;
+  transition: background-color var(--dur-2) ease-out;
+}
+
+html.scrolling *::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--ink) 22%, transparent);
+}
+
+html.scrolling *::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--ink) 34%, transparent);
 }
 
 /* ============================================================

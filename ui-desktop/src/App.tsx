@@ -509,6 +509,20 @@ function App() {
   }, [])
 
   useEffect(() => {
+    let timer = 0
+    const onScroll = () => {
+      document.documentElement.classList.add('scrolling')
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => document.documentElement.classList.remove('scrolling'), 700)
+    }
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('scroll', onScroll, { capture: true })
+    }
+  }, [])
+
+  useEffect(() => {
     let unlisten: UnlistenFn | undefined
     let unlistenExit: UnlistenFn | undefined
     let disposed = false
@@ -2053,6 +2067,7 @@ function ModelSettings({
   const [apiKey, setApiKey] = useState('')
   const [clearApiKey, setClearApiKey] = useState(false)
   const [showKey, setShowKey] = useState(false)
+  const [expandedProvider, setExpandedProvider] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const provider = catalog.providers.find(item => item.id === draft.provider) || catalog.providers[0]
@@ -2063,6 +2078,7 @@ function ModelSettings({
     setDraft(modelDraft(profile, catalog.providers[0]))
     setApiKey('')
     setClearApiKey(false)
+    setExpandedProvider('')
     setError('')
   }
 
@@ -2134,25 +2150,31 @@ function ModelSettings({
               <legend>Provider</legend>
               <div className="provider-list">
                 {catalog.providers.map(item => {
-                  const active = item.id === draft.provider
+                  const selected = item.id === draft.provider
+                  const expanded = item.id === expandedProvider
                   return (
-                    <div className={`provider-item ${active ? 'active' : ''}`} key={item.id}>
+                    <div className={`provider-item ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} key={item.id}>
                       <button
-                        aria-expanded={active}
-                        aria-pressed={active}
+                        aria-expanded={expanded}
+                        aria-pressed={selected}
                         className="provider-row"
-                        onClick={() => setDraft(current => ({
-                          ...current,
-                          base_url: item.base_url,
-                          model: item.models[0]?.id || current.model,
-                          provider: item.id
-                        }))}
+                        onClick={() => {
+                          setExpandedProvider(current => current === item.id ? '' : item.id)
+                          if (!selected) {
+                            setDraft(current => ({
+                              ...current,
+                              base_url: item.base_url,
+                              model: item.models[0]?.id || current.model,
+                              provider: item.id
+                            }))
+                          }
+                        }}
                         type="button"
                       >
                         <strong>{item.label}</strong>
                         <small>{hostOf(item.base_url) || item.base_url}</small>
                       </button>
-                      <div className="provider-config" inert={!active}>
+                      <div className="provider-config" inert={!expanded}>
                         <div className="provider-config-inner">
                           <label className="line-field">
                             <span>Base URL</span>
