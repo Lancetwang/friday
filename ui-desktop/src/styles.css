@@ -874,35 +874,38 @@ input[type="checkbox"] {
 }
 
 .workspace.has-forks .timeline {
-  padding-right: max(210px, calc((100% - 660px) / 2));
+  padding-right: max(230px, calc((100% - 660px) / 2));
 }
 
 .workspace.has-forks .composer {
-  margin-right: max(200px, calc((100% - 690px) / 2));
+  margin-right: max(220px, calc((100% - 690px) / 2));
 }
+
+/* Fork topology graph */
 
 .fork-map {
   position: absolute;
   z-index: 3;
-  top: 78px;
+  top: 74px;
   right: 14px;
-  width: clamp(160px, 18vw, 220px);
-  max-height: calc(100% - 180px);
-  overflow: auto;
-  padding: 10px;
+  display: flex;
+  max-width: clamp(220px, 26vw, 360px);
+  max-height: calc(100% - 170px);
+  flex-direction: column;
+  padding: 10px 10px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius-l);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-2);
   backdrop-filter: blur(18px);
 }
 
 .fork-map header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   padding: 2px 4px 8px;
-  color: var(--muted);
+  color: var(--faint);
   font-size: var(--text-caption);
 }
 
@@ -911,61 +914,201 @@ input[type="checkbox"] {
   font-weight: var(--weight-semibold);
 }
 
-.fork-node {
-  display: flex;
-  align-items: center;
-  padding-left: calc(var(--fork-depth) * 12px);
-  border-radius: var(--radius-m);
+.fork-map header > span {
+  font-variant-numeric: tabular-nums;
 }
 
-.fork-node:hover,
-.fork-node.active {
-  background: var(--fill-strong);
+.fork-map-collapse {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-s);
+  color: var(--muted);
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
 }
 
-.fork-node-main {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 4px;
-  color: var(--ink-soft);
-  text-align: left;
+.fork-map-collapse:hover {
+  color: var(--ink);
+  background: var(--fill);
 }
 
-.fork-node-main > span:first-child {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border: 1px solid var(--faint);
-  border-radius: 50%;
+.fork-graph-scroll {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--faint) transparent;
+  scrollbar-width: thin;
+}
+
+.fork-graph {
+  display: block;
+}
+
+.fork-edge {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+
+.fork-graph-node {
+  cursor: pointer;
+}
+
+.fork-node-hit {
+  fill: transparent;
+}
+
+.fork-node-dot {
+  fill: var(--surface);
+  stroke: var(--faint);
+  stroke-width: 1.6;
+  transition:
+    fill var(--dur-1) ease-out,
+    stroke var(--dur-1) ease-out,
+    r var(--dur-2) var(--ease-out);
+}
+
+.fork-graph-node:hover .fork-node-dot {
+  stroke: var(--ink);
+  r: 7px;
+}
+
+.fork-graph-node.root .fork-node-dot {
+  stroke: var(--ink);
+}
+
+.fork-graph-node.active .fork-node-dot {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+/* Hover tooltip */
+
+.fork-tip {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  width: 210px;
+  gap: 3px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
   background: var(--surface);
+  box-shadow: var(--shadow-2);
+  animation: rise-in var(--dur-2) var(--ease-out) backwards;
 }
 
-.fork-node.active .fork-node-main > span:first-child {
-  border-color: var(--ink);
-  background: var(--ink);
+.fork-tip > p {
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.fork-node-main > span:last-child {
+.fork-tip > strong {
+  display: -webkit-box;
   overflow: hidden;
-  font-size: var(--text-caption);
+  color: var(--ink);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-control);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.fork-tip-parent {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.fork-node-delete {
-  width: 22px;
-  height: 22px;
-  flex: 0 0 auto;
-  color: transparent;
-  font-size: var(--text-ui);
+.fork-tip-meta {
+  color: var(--faint);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
 }
 
-.fork-node:hover .fork-node-delete,
-.fork-node-delete:focus-visible {
+.fork-tip-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.fork-tip-actions button {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.fork-tip-actions button:hover {
+  border-color: var(--line-strong);
+}
+
+.fork-tip-actions .danger {
+  color: var(--danger);
+}
+
+.fork-tip-actions .danger:hover {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
+}
+
+/* Collapsed chip */
+
+.fork-chip {
+  position: absolute;
+  z-index: 3;
+  top: 74px;
+  right: 14px;
+  display: flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
   color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-1);
+  backdrop-filter: blur(18px);
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.fork-chip:hover {
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.fork-chip .branch-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.branch-icon {
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.message-meta .branch-icon {
+  width: 12px;
+  height: 12px;
 }
 
 .topbar {

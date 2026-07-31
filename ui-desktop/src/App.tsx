@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { open as openUrl } from '@tauri-apps/plugin-shell'
-import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
@@ -1789,6 +1789,53 @@ function WelcomePrompt() {
   )
 }
 
+const FORK_MAP_KEY = 'friday.desktop.forkMap'
+
+function layoutForkTree(tree: ForkTree) {
+  const children = new Map<string, ForkNode[]>()
+  for (const node of tree.nodes) {
+    const parent = node.parent || ''
+    children.set(parent, [...(children.get(parent) || []), node])
+  }
+  const positions = new Map<string, { x: number; y: number }>()
+  const edges: Array<{ d: string; key: string }> = []
+  const colWidth = 84
+  const rowHeight = 34
+  const padX = 18
+  const padY = 20
+  let leaf = 0
+  const place = (node: ForkNode, depth: number): number => {
+    const kids = children.get(node.id) || []
+    let row: number
+    if (!kids.length) {
+      row = leaf
+      leaf += 1
+    } else {
+      const rows = kids.map(kid => place(kid, depth + 1))
+      row = (rows[0]! + rows[rows.length - 1]!) / 2
+    }
+    positions.set(node.id, { x: padX + depth * colWidth, y: padY + row * rowHeight })
+    return row
+  }
+  const root = tree.nodes.find(node => node.id === tree.root)
+  if (root) place(root, 0)
+  for (const node of tree.nodes) {
+    if (!node.parent) continue
+    const from = positions.get(node.parent)
+    const to = positions.get(node.id)
+    if (!from || !to) continue
+    const midX = (from.x + to.x) / 2
+    edges.push({ d: `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`, key: node.id })
+  }
+  const maxX = Math.max(0, ...tree.nodes.map(node => positions.get(node.id)?.x ?? 0))
+  return {
+    edges,
+    height: Math.max(56, padY * 2 + Math.max(0, leaf - 1) * rowHeight),
+    positions,
+    width: Math.max(104, maxX + padX + 18)
+  }
+}
+
 function ForkMap({
   active,
   onDelete,
@@ -1800,35 +1847,113 @@ function ForkMap({
   onOpen: (node: ForkNode) => void
   tree: ForkTree
 }) {
-  const children = new Map<string, ForkNode[]>()
-  for (const node of tree.nodes) {
-    const parent = node.parent || ''
-    children.set(parent, [...(children.get(parent) || []), node])
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(FORK_MAP_KEY) === 'collapsed')
+  const [hovered, setHovered] = useState<string | null>(null)
+  const { edges, height, positions, width } = layoutForkTree(tree)
+  const hoveredNode = hovered ? tree.nodes.find(node => node.id === hovered) : undefined
+  const hoveredPos = hovered ? positions.get(hovered) : undefined
+  const hoveredParent = hoveredNode?.parent ? tree.nodes.find(node => node.id === hoveredNode.parent) : undefined
+
+  const setCollapsedPersisted = (value: boolean) => {
+    setCollapsed(value)
+    localStorage.setItem(FORK_MAP_KEY, value ? 'collapsed' : 'expanded')
   }
-  const renderNode = (node: ForkNode, depth: number): ReactNode => (
-    <div key={node.id}>
-      <div className={`fork-node ${node.id === active ? 'active' : ''}`} style={{ '--fork-depth': depth } as CSSProperties}>
-        <button className="fork-node-main" onClick={() => onOpen(node)} title={node.title} type="button">
-          <span aria-hidden="true" />
-          <span>{node.title}</span>
-        </button>
-        <button aria-label={`Delete ${node.title} branch`} className="fork-node-delete" onClick={() => onDelete(node)} title="Delete branch" type="button">
-          {'×'}
-        </button>
-      </div>
-      {(children.get(node.id) || []).map(child => renderNode(child, depth + 1))}
-    </div>
-  )
-  const root = tree.nodes.find(node => node.id === tree.root)
-  if (!root) return null
+
+  if (collapsed) {
+    return (
+      <button
+        aria-label="展开会话分支图"
+        className="fork-chip"
+        onClick={() => setCollapsedPersisted(false)}
+        title="展开会话分支图"
+        type="button"
+      >
+        <BranchIcon />
+        <span>{tree.nodes.length}</span>
+      </button>
+    )
+  }
+
   return (
     <aside aria-label="Conversation branches" className="fork-map">
       <header>
         <strong>Branches</strong>
         <span>{tree.nodes.length}</span>
+        <button
+          aria-label="收起分支图"
+          className="fork-map-collapse"
+          onClick={() => setCollapsedPersisted(true)}
+          title="收起分支图"
+          type="button"
+        >
+          {'\u2212'}
+        </button>
       </header>
-      <div>{renderNode(root, 0)}</div>
+      <div className="fork-graph-scroll">
+        <svg className="fork-graph" height={height} viewBox={`0 0 ${width} ${height}`} width={width}>
+          {edges.map(edge => (
+            <path className="fork-edge" d={edge.d} key={edge.key} />
+          ))}
+          {tree.nodes.map(node => {
+            const pos = positions.get(node.id)
+            if (!pos) return null
+            const classes = [
+              'fork-graph-node',
+              node.id === active ? 'active' : '',
+              node.id === tree.root ? 'root' : ''
+            ].filter(Boolean).join(' ')
+            return (
+              <g
+                className={classes}
+                key={node.id}
+                onClick={() => onOpen(node)}
+                onMouseEnter={() => setHovered(node.id)}
+                onMouseLeave={() => setHovered(current => (current === node.id ? null : current))}
+                transform={`translate(${pos.x}, ${pos.y})`}
+              >
+                <circle className="fork-node-hit" r="13" />
+                <circle className="fork-node-dot" r="5.5" />
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+      {hoveredNode && hoveredPos && (
+        <div
+          className="fork-tip"
+          onMouseEnter={() => setHovered(hoveredNode.id)}
+          onMouseLeave={() => setHovered(null)}
+          style={{
+            top: hoveredPos.y + 34,
+            ...(hoveredPos.x > width * 0.58
+              ? { right: width - hoveredPos.x + 24 }
+              : { left: hoveredPos.x + 24 })
+          } as CSSProperties}
+        >
+          <p>{hoveredNode.id === tree.root ? '主会话' : 'Fork 会话'}</p>
+          <strong>{hoveredNode.title || 'Untitled conversation'}</strong>
+          {hoveredParent && <span className="fork-tip-parent">从「{hoveredParent.title}」分出</span>}
+          <span className="fork-tip-meta">{formatSessionTime(hoveredNode.time)}</span>
+          <div className="fork-tip-actions">
+            <button onClick={() => onOpen(hoveredNode)} type="button">打开</button>
+            {hoveredNode.id !== tree.root && (
+              <button className="danger" onClick={() => onDelete(hoveredNode)} type="button">删除</button>
+            )}
+          </div>
+        </div>
+      )}
     </aside>
+  )
+}
+
+function BranchIcon() {
+  return (
+    <svg aria-hidden="true" className="branch-icon" fill="none" viewBox="0 0 24 24">
+      <circle cx="6.5" cy="5.5" r="2.2" />
+      <circle cx="6.5" cy="18.5" r="2.2" />
+      <circle cx="17.5" cy="7.5" r="2.2" />
+      <path d="M6.5 7.7v8.6M17.5 9.7c0 4.2-4 4.8-7.4 4.8" />
+    </svg>
   )
 }
 
@@ -2473,7 +2598,7 @@ function TimelineRow({
                 title="Fork conversation here"
                 type="button"
               >
-                <span aria-hidden="true" className="fork-icon">{'⑂'}</span>
+                <BranchIcon />
               </button>
             )}
           </div>
