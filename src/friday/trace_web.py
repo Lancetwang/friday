@@ -369,29 +369,29 @@ HTML = r"""<!doctype html>
 <style>
 :root{
   color-scheme:light;
-  --canvas:#f5f1e6;--surface:#fcfaf2;
-  --ink:#26241f;--ink-soft:rgba(38,36,31,.78);--muted:rgba(38,36,31,.55);--faint:rgba(38,36,31,.36);
-  --line:rgba(38,36,31,.1);--line-strong:rgba(38,36,31,.19);
-  --fill:rgba(38,36,31,.045);--fill-strong:rgba(38,36,31,.075);
+  --canvas:#efefeb;--surface:#f7f7f3;
+  --ink:#23262a;--ink-soft:rgba(35,38,42,.78);--muted:rgba(35,38,42,.55);--faint:rgba(35,38,42,.36);
+  --line:rgba(35,38,42,.1);--line-strong:rgba(35,38,42,.19);
+  --fill:rgba(35,38,42,.045);--fill-strong:rgba(35,38,42,.075);
   --accent:#2b51b5;--accent-ink:#24439a;--accent-soft:rgba(43,81,181,.1);
   --green:#2e9e5e;--red:#d94830;
-  --code-bg:rgba(38,36,31,.045);
-  --shadow-1:0 1px 1px rgba(38,36,31,.05);
-  --shadow-2:0 1px 3px rgba(38,36,31,.05),0 10px 24px -10px rgba(38,36,31,.1);
+  --code-bg:rgba(35,38,42,.045);
+  --shadow-1:0 1px 1px rgba(35,38,42,.05);
+  --shadow-2:0 1px 3px rgba(35,38,42,.05),0 10px 24px -10px rgba(35,38,42,.1);
   --mono:"JetBrains Mono","Cascadia Code",Consolas,monospace;
-  --serif:Georgia,"Times New Roman",KaiTi,STKaiti,"Songti SC",SimSun,serif;
+  --serif:Georgia,"Noto Serif SC","Source Han Serif SC","Songti SC",SimSun,serif;
   font-family:system-ui,-apple-system,"Segoe UI Variable Text","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei UI",sans-serif;
   color:var(--ink);background:var(--canvas)
 }
 [data-theme="dark"]{
   color-scheme:dark;
-  --canvas:#1a1712;--surface:#221e17;
-  --ink:#e6e1d4;--ink-soft:rgba(230,225,212,.78);--muted:rgba(230,225,212,.55);--faint:rgba(230,225,212,.36);
-  --line:rgba(230,225,212,.09);--line-strong:rgba(230,225,212,.18);
-  --fill:rgba(230,225,212,.05);--fill-strong:rgba(230,225,212,.09);
+  --canvas:#151719;--surface:#1d1f22;
+  --ink:#e3e5e8;--ink-soft:rgba(227,229,232,.78);--muted:rgba(227,229,232,.55);--faint:rgba(227,229,232,.36);
+  --line:rgba(227,229,232,.09);--line-strong:rgba(227,229,232,.18);
+  --fill:rgba(227,229,232,.05);--fill-strong:rgba(227,229,232,.09);
   --accent:#8da4ec;--accent-ink:#a5b7f1;--accent-soft:rgba(141,164,236,.15);
   --green:#55b87e;--red:#e5604a;
-  --code-bg:rgba(230,225,212,.06);
+  --code-bg:rgba(227,229,232,.06);
   --shadow-1:0 1px 2px rgba(0,0,0,.3);
   --shadow-2:0 1px 4px rgba(0,0,0,.32),0 10px 24px -10px rgba(0,0,0,.48)
 }

@@ -496,7 +496,7 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1a1712' : '#f5f1e6')
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#151719' : '#efefeb')
     localStorage.setItem(THEME_KEY, theme)
   }, [theme])
 
@@ -2007,6 +2007,23 @@ function VisionIcon() {
   )
 }
 
+function EyeIcon() {
+  return (
+    <svg aria-hidden="true" className="eye-icon" fill="none" viewBox="0 0 24 24">
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+      <circle cx="12" cy="12" r="2.6" />
+    </svg>
+  )
+}
+
+function EyeOffIcon() {
+  return (
+    <svg aria-hidden="true" className="eye-icon" fill="none" viewBox="0 0 24 24">
+      <path d="M4 5.5 20 19M9.9 5.2A9.4 9.4 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3 3.9M6.1 7.4A16 16 0 0 0 2.5 12s3.5 7 9.5 7a9 9 0 0 0 4-.9M9.5 10a2.8 2.8 0 0 0 4 3.9" />
+    </svg>
+  )
+}
+
 function GlobeIcon() {
   return (
     <svg aria-hidden="true" className="globe-icon" fill="none" viewBox="0 0 24 24">
@@ -2052,6 +2069,7 @@ function ModelSettings({
   const [draft, setDraft] = useState<ModelDraft>(() => modelDraft(catalog.profiles.find(item => item.id === catalog.active)))
   const [apiKey, setApiKey] = useState('')
   const [clearApiKey, setClearApiKey] = useState(false)
+  const [showKey, setShowKey] = useState(false)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const provider = catalog.providers.find(item => item.id === draft.provider) || catalog.providers[0]
@@ -2120,8 +2138,13 @@ function ModelSettings({
             <div className="model-form-heading">
               <div>
                 <h3>{selectedId ? 'Model configuration' : 'New model'}</h3>
-                <p>{vision ? 'Vision supported' : 'Text model'}{vision && <VisionIcon />}</p>
               </div>
+              {vision && (
+                <span className="vision-pill">
+                  <VisionIcon />
+                  Vision
+                </span>
+              )}
             </div>
             <label>
               <span>Name</span>
@@ -2129,11 +2152,11 @@ function ModelSettings({
             </label>
             <fieldset className="provider-field">
               <legend>Provider</legend>
-              <div className="provider-picker">
+              <div className="provider-cards">
                 {catalog.providers.map(item => (
                   <button
                     aria-pressed={item.id === draft.provider}
-                    className={item.id === draft.provider ? 'active' : ''}
+                    className={`provider-card ${item.id === draft.provider ? 'active' : ''}`}
                     key={item.id}
                     onClick={() => setDraft(current => ({
                       ...current,
@@ -2144,7 +2167,7 @@ function ModelSettings({
                     type="button"
                   >
                     <strong>{item.label}</strong>
-                    <small>{item.models.length} suggested models</small>
+                    <small>{hostOf(item.base_url) || item.base_url}</small>
                   </button>
                 ))}
               </div>
@@ -2167,16 +2190,27 @@ function ModelSettings({
             </label>
             <label>
               <span>API key</span>
-              <input
-                autoComplete="off"
-                placeholder={selectedId ? 'Leave blank to keep the saved key' : 'Required unless set in the environment'}
-                type="password"
-                value={apiKey}
-                onChange={event => {
-                  setApiKey(event.target.value)
-                  if (event.target.value) setClearApiKey(false)
-                }}
-              />
+              <div className="field-input">
+                <input
+                  autoComplete="off"
+                  placeholder={selectedId ? 'Leave blank to keep the saved key' : 'Required unless set in the environment'}
+                  type={showKey ? 'text' : 'password'}
+                  value={apiKey}
+                  onChange={event => {
+                    setApiKey(event.target.value)
+                    if (event.target.value) setClearApiKey(false)
+                  }}
+                />
+                <button
+                  aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                  className="key-eye"
+                  onClick={() => setShowKey(value => !value)}
+                  title={showKey ? 'Hide API key' : 'Show API key'}
+                  type="button"
+                >
+                  {showKey ? <EyeOffIcon /> : <EyeIcon />}
+                </button>
+              </div>
             </label>
             {selectedId && (
               <label className="clear-key">
