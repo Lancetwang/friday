@@ -7,8 +7,8 @@ import { Markdown, type Theme } from './markdown.js'
 import type { GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
 
 const theme: Theme = {
-  accent: '#C97B5A',
-  code: '#C97B5A',
+  accent: '#4F6CD8',
+  code: '#4F6CD8',
   dim: '#8A857D',
   error: '#E5534B',
   ok: '#3FB950',

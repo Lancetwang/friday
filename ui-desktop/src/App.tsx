@@ -496,7 +496,7 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#171714' : '#fafaf8')
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1a1712' : '#f5f1e6')
     localStorage.setItem(THEME_KEY, theme)
   }, [theme])
 
