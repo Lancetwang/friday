@@ -2343,7 +2343,7 @@ function WindowTitlebar() {
 
   return (
     <header
-      className="window-titlebar"
+      className="titlebar-overlay"
       data-tauri-drag-region
       onDoubleClick={event => {
         if (!(event.target as HTMLElement).closest('.window-controls')) void appWindow.toggleMaximize()
@@ -2354,19 +2354,22 @@ function WindowTitlebar() {
         <span data-tauri-drag-region>Friday</span>
       </div>
       <div className="window-controls">
-        <button aria-label="Minimize" onClick={() => void appWindow.minimize()} title="Minimize" type="button">
-          <span aria-hidden="true" className="window-minimize" />
+        <button aria-label="Minimize" className="win-dot win-minimize" onClick={() => void appWindow.minimize()} title="Minimize" type="button">
+          <svg aria-hidden="true" viewBox="0 0 12 12"><path d="M2.5 6h7" /></svg>
         </button>
         <button
           aria-label={maximized ? 'Restore window' : 'Maximize window'}
+          className="win-dot win-maximize"
           onClick={() => void appWindow.toggleMaximize()}
           title={maximized ? 'Restore' : 'Maximize'}
           type="button"
         >
-          <span aria-hidden="true" className={maximized ? 'window-restore' : 'window-maximize'} />
+          {maximized
+            ? <svg aria-hidden="true" viewBox="0 0 12 12"><rect height="6" rx="0.8" width="6" x="1.8" y="4.2" /><path d="M4.2 4.2V1.8h6v6H7.8" /></svg>
+            : <svg aria-hidden="true" viewBox="0 0 12 12"><path d="M6 2.5v7M2.5 6h7" /></svg>}
         </button>
-        <button className="window-close" aria-label="Close" onClick={() => void appWindow.close()} title="Close" type="button">
-          <span aria-hidden="true" className="window-close-glyph" />
+        <button aria-label="Close" className="win-dot win-close" onClick={() => void appWindow.close()} title="Close" type="button">
+          <svg aria-hidden="true" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3 3 9" /></svg>
         </button>
       </div>
     </header>
