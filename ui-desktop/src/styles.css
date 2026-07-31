@@ -1329,7 +1329,7 @@ input[type="checkbox"] {
   left: 0;
 }
 
-.message-meta button {
+.message-meta > button {
   position: relative;
   display: grid;
   width: 22px;
@@ -1347,8 +1347,8 @@ input[type="checkbox"] {
   line-height: 1;
 }
 
-.message-meta button:hover,
-.message-meta button:focus-visible {
+.message-meta > button:hover,
+.message-meta > button:focus-visible {
   color: var(--ink);
   background: var(--fill);
 }
@@ -1374,8 +1374,8 @@ input[type="checkbox"] {
   background: var(--canvas);
 }
 
-.message-meta button.copied .copy-icon::before,
-.message-meta button.copied .copy-icon::after {
+.message-meta > button.copied .copy-icon::before,
+.message-meta > button.copied .copy-icon::after {
   border-color: var(--success);
 }
 
@@ -1555,7 +1555,8 @@ input[type="checkbox"] {
   background: var(--fill);
 }
 
-.preview-actions .external-icon {
+.preview-actions .external-icon,
+.preview-actions .browser-icon {
   width: 13px;
   height: 13px;
   stroke: currentColor;
@@ -1622,11 +1623,11 @@ input[type="checkbox"] {
   left: 0;
   z-index: 30;
   display: grid;
-  width: 268px;
+  width: 284px;
   gap: 1px;
-  padding: 8px;
+  padding: 6px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-l);
+  border-radius: 14px;
   background: var(--surface);
   box-shadow: var(--shadow-2);
   opacity: 0;
@@ -1643,7 +1644,9 @@ input[type="checkbox"] {
 }
 
 .sources-popover > p {
-  margin: 2px 4px 7px;
+  margin: 0;
+  padding: 6px 8px 7px;
+  border-bottom: 1px solid var(--line);
   color: var(--faint);
   font-size: var(--text-micro);
   font-weight: var(--weight-semibold);
@@ -1652,17 +1655,21 @@ input[type="checkbox"] {
 }
 
 .source-item {
-  display: flex;
+  display: grid;
   width: 100%;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  column-gap: 9px;
+  grid-template-columns: 6px minmax(0, 1fr);
+  padding: 7px 8px;
   border: 0;
   border-radius: var(--radius-m);
   color: var(--ink);
   background: transparent;
-  font-size: var(--text-label);
   text-align: left;
+}
+
+.source-item:first-of-type {
+  margin-top: 4px;
 }
 
 .source-item:hover {
@@ -1670,9 +1677,10 @@ input[type="checkbox"] {
 }
 
 .source-dot {
-  width: 5px;
-  height: 5px;
-  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  grid-row: 1 / span 2;
+  align-self: center;
   border-radius: 50%;
   background: var(--accent);
 }
@@ -1680,18 +1688,19 @@ input[type="checkbox"] {
 .source-title {
   overflow: hidden;
   min-width: 0;
-  flex: 1;
+  font-size: var(--text-label);
   font-weight: var(--weight-medium);
+  line-height: var(--leading-control);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .source-host {
   overflow: hidden;
-  max-width: 92px;
-  flex: 0 0 auto;
+  min-width: 0;
   color: var(--faint);
   font-size: var(--text-micro);
+  line-height: var(--leading-control);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

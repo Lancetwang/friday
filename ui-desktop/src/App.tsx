@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { open } from '@tauri-apps/plugin-dialog'
+import { open as openUrl } from '@tauri-apps/plugin-shell'
 import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -1557,6 +1558,16 @@ function ExternalIcon() {
   )
 }
 
+function BrowserIcon() {
+  return (
+    <svg aria-hidden="true" className="browser-icon" fill="none" viewBox="0 0 24 24">
+      <rect height="13.5" rx="2.5" width="17" x="3.5" y="5.5" />
+      <path d="M3.5 9.5h17" />
+      <path d="M6.5 7.5h.01M9 7.5h.01" />
+    </svg>
+  )
+}
+
 function PreviewPanel({ onClose, url }: { onClose: () => void; url: string }) {
   const host = hostOf(url)
   const openExternal = () => {
@@ -1566,6 +1577,7 @@ function PreviewPanel({ onClose, url }: { onClose: () => void; url: string }) {
       window.open(url, '_blank')
     }
   }
+  const openInBrowser = () => void openUrl(url).catch(() => window.open(url, '_blank'))
   return (
     <aside className="preview-panel">
       <div className="preview-bar">
@@ -1573,6 +1585,9 @@ function PreviewPanel({ onClose, url }: { onClose: () => void; url: string }) {
         <span className="preview-host">{host || url}</span>
         <span className="preview-url" title={url}>{url}</span>
         <div className="preview-actions">
+          <button aria-label="用默认浏览器打开" onClick={openInBrowser} title="用默认浏览器打开" type="button">
+            <BrowserIcon />
+          </button>
           <button aria-label="在新窗口打开" onClick={openExternal} title="在新窗口打开" type="button">
             <ExternalIcon />
           </button>
@@ -2012,6 +2027,12 @@ function cleanSourceUrl(url: string) {
   return url.replace(/[)\].,;:!?'"]+$/, '')
 }
 
+function normalizeSourceTitle(title: string, url: string) {
+  const clean = title.trim()
+  if (!clean || /^https?:\/\//i.test(clean)) return hostOf(url) || url
+  return clean
+}
+
 function normalizeSourceUrl(url: string) {
   return cleanSourceUrl(url).replace(/\/+$/, '').toLowerCase()
 }
@@ -2070,7 +2091,7 @@ function collectMessageSources(items: TimelineItem[]) {
       const key = normalizeSourceUrl(source.url)
       if (!key || seen.has(key)) continue
       seen.add(key)
-      merged.push({ title: source.title || hostOf(source.url) || source.url, url: cleanSourceUrl(source.url) })
+      merged.push({ title: normalizeSourceTitle(source.title, source.url), url: cleanSourceUrl(source.url) })
     }
     if (merged.length) result.set(item.id, merged.slice(0, 8))
     pending = []
