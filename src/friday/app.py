@@ -172,8 +172,8 @@ def build_instructions(workspace: Path, friday_dir: Path | None = None, config: 
         # Workspace-specific tail: varies per project, kept after the global prefix.
         ("Skills", skill_routing()),
         ("Project Instructions", "\n\n".join(_project_instruction_files(workspace))),
-        ("Environment", _embedded_markdown(environment(workspace, config))),
         ("Project Memory", _embedded_markdown(_read_optional(friday_dir / "MEMORY.md") or _read_optional(workspace / ".friday" / "MEMORY.md"))),
+        ("Environment", _embedded_markdown(environment(workspace, config))),
     ]
     return "\n\n".join(f"## {title}\n{body.strip()}" for title, body in parts if body.strip())
 
