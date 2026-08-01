@@ -55,6 +55,25 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual(set(restored["changed_paths"]), {"created.txt", "original.txt"})
             self.assertEqual(checkpoint_choices(root), [])
 
+    def test_checkpoint_does_not_require_git_on_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch("shutil.which", return_value=None):
+            root = Path(tmp)
+            path = root / "work.txt"
+            ignored = root / "generated" / "cache.txt"
+            ignored.parent.mkdir()
+            (root / ".gitignore").write_text("generated/\n", encoding="utf-8")
+            path.write_text("before", encoding="utf-8")
+            ignored.write_text("before", encoding="utf-8")
+            checkpoint_id = self._begin(root)
+            path.write_text("after", encoding="utf-8")
+            ignored.write_text("after", encoding="utf-8")
+            finish_checkpoint(root, checkpoint_id, pending=False)
+
+            restore_checkpoint(root)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "before")
+            self.assertEqual(ignored.read_text(encoding="utf-8"), "after")
+
     def test_checkpoint_reports_previewable_artifacts_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

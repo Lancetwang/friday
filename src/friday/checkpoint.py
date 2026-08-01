@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
-import subprocess
 import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
+
+from dulwich import porcelain
+from dulwich.diff_tree import tree_changes
+from dulwich.ignore import IgnoreFilterManager
+from dulwich.index import build_file_from_blob
+from dulwich.object_store import iter_tree_contents
+from dulwich.objects import Blob
+from dulwich.repo import Repo
+from dulwich.worktree import WorkTree
 
 from friday.storage import checkpoint_dir, project_state_dir
 from friday.trace import load_trace, load_trace_object
@@ -207,18 +216,9 @@ def _before_messages(entry: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _snapshot(workspace: Path) -> str:
     with _snapshot_lock:
-        _ensure_repo(workspace)
-        _git(workspace, "add", "-u")
-        untracked = _git(workspace, "ls-files", "--others", "--exclude-standard", "-z")
-        if untracked:
-            _git_input(
-                workspace,
-                untracked,
-                "add",
-                "--pathspec-from-file=-",
-                "--pathspec-file-nul",
-            )
-        return _git(workspace, "write-tree").strip()
+        with _open_repo(workspace) as repo:
+            _stage_workspace(repo, workspace)
+            return repo.open_index().commit(repo.object_store).decode("ascii")
 
 
 def _restore_tree(workspace: Path, current_tree: str, target_tree: str) -> None:
@@ -234,17 +234,32 @@ def _restore_tree(workspace: Path, current_tree: str, target_tree: str) -> None:
             path.unlink()
         elif path.exists():
             raise RuntimeError(f"Cannot safely replace directory while restoring: {relative}")
-    _git(workspace, "read-tree", target_tree)
     restored = sorted(changed & target_paths)
-    if restored:
-        _git_input(
-            workspace,
-            "\0".join(restored) + "\0",
-            "checkout-index",
-            "--force",
-            "--stdin",
-            "-z",
-        )
+    with _open_repo(workspace) as repo:
+        target_entries = {
+            _decode_path(entry.path): entry
+            for entry in iter_tree_contents(repo.object_store, target_tree.encode("ascii"))
+            if entry.path is not None
+        }
+        for relative in restored:
+            path = workspace / Path(*PurePosixPath(relative).parts)
+            parent = path.parent.resolve()
+            if parent != workspace and workspace not in parent.parents:
+                raise RuntimeError(f"Checkpoint path escapes workspace: {relative}")
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.exists():
+                raise RuntimeError(f"Cannot safely replace directory while restoring: {relative}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            entry = target_entries[relative]
+            blob = repo.object_store[entry.sha]
+            if not isinstance(blob, Blob):
+                raise RuntimeError(f"Checkpoint object is not a file: {relative}")
+            build_file_from_blob(blob, entry.mode, path, honor_filemode=False)
+        _stage_workspace(repo, workspace)
+        restored_tree = repo.open_index().commit(repo.object_store).decode("ascii")
+        if restored_tree != target_tree:
+            raise RuntimeError("Could not restore the checkpoint exactly.")
     for relative in removed:
         parent = (workspace / Path(*PurePosixPath(relative).parts)).parent
         while parent != workspace and parent.exists():
@@ -256,51 +271,55 @@ def _restore_tree(workspace: Path, current_tree: str, target_tree: str) -> None:
 
 
 def _diff_paths(workspace: Path, left: str, right: str) -> list[str]:
-    output = _git(workspace, "diff", "--name-only", "-z", left, right)
-    return sorted(path for path in output.split("\0") if path)
+    with _open_repo(workspace) as repo:
+        paths = {
+            _decode_path(entry.path)
+            for change in tree_changes(
+                repo.object_store,
+                left.encode("ascii"),
+                right.encode("ascii"),
+            )
+            for entry in (change.old, change.new)
+            if entry is not None and entry.path is not None
+        }
+    return sorted(paths)
 
 
 def _tree_paths(workspace: Path, tree: str) -> list[str]:
-    output = _git(workspace, "ls-tree", "-r", "--name-only", "-z", tree)
-    return [path for path in output.split("\0") if path]
+    with _open_repo(workspace) as repo:
+        return [
+            _decode_path(entry.path)
+            for entry in iter_tree_contents(repo.object_store, tree.encode("ascii"))
+            if entry.path is not None
+        ]
 
 
 def _ensure_repo(workspace: Path) -> None:
     repo = _repo_dir(workspace)
-    git = shutil.which("git")
-    if not git:
-        raise RuntimeError("Friday checkpoints require Git on PATH.")
-
     repaired_refs = False
     if all((repo / name).exists() for name in ("HEAD", "config", "objects")):
         repaired_refs = not (repo / "refs").exists()
         (repo / "refs" / "heads").mkdir(parents=True, exist_ok=True)
         (repo / "refs" / "tags").mkdir(parents=True, exist_ok=True)
-
-    check = subprocess.run(
-        [git, f"--git-dir={repo}", "rev-parse", "--git-dir"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if check.returncode:
+    try:
+        opened = Repo(repo)
+    except Exception:
         if repo.is_dir():
             shutil.rmtree(repo)
         elif repo.exists():
             repo.unlink()
         shutil.rmtree(_entries_dir(workspace), ignore_errors=True)
         repo.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            [git, "init", "--bare", "--quiet", str(repo)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode:
-            raise RuntimeError(result.stderr.strip() or "Could not initialize Friday checkpoint storage.")
-    elif repaired_refs:
+        opened = Repo.init_bare(repo, mkdir=True)
+    opened.close()
+
+    with Repo(repo) as opened:
+        config = opened.get_config()
+        config.set((b"core",), b"bare", False)
+        config.set((b"core",), b"worktree", os.fsencode(str(workspace)))
+        config.set((b"core",), b"autocrlf", False)
+        config.write_to_path()
+    if repaired_refs:
         for entry in _entries(workspace):
             _sync_entry_refs(workspace, entry)
     exclude = repo / "info" / "exclude"
@@ -308,39 +327,40 @@ def _ensure_repo(workspace: Path) -> None:
     exclude.write_text("/.git/\n/.friday/\n", encoding="utf-8")
 
 
-def _git(workspace: Path, *args: str) -> str:
-    return _run_git(workspace, list(args))
+def _open_repo(workspace: Path) -> Repo:
+    _ensure_repo(workspace)
+    repo = Repo(_repo_dir(workspace))
+    repo.bare = False
+    repo.path = str(workspace)
+    return repo
 
 
-def _git_input(workspace: Path, value: str, *args: str) -> str:
-    return _run_git(workspace, list(args), input_text=value)
+def _stage_workspace(repo: Repo, workspace: Path) -> None:
+    ignored = IgnoreFilterManager.from_repo(repo)
+    paths: set[str] = {_decode_path(path) for path in repo.open_index()}
+    for directory, names, files in os.walk(workspace, followlinks=False):
+        base = Path(directory)
+        kept = []
+        for name in names:
+            path = base / name
+            relative = path.relative_to(workspace).as_posix()
+            if ignored.is_ignored(relative + "/"):
+                continue
+            if path.is_symlink():
+                paths.add(relative)
+            else:
+                kept.append(name)
+        names[:] = kept
+        for name in files:
+            relative = (base / name).relative_to(workspace).as_posix()
+            if not ignored.is_ignored(relative):
+                paths.add(relative)
+    if paths:
+        WorkTree(repo, workspace).stage(sorted(paths))
 
 
-def _run_git(workspace: Path, args: list[str], *, input_text: str | None = None) -> str:
-    git = shutil.which("git")
-    if not git:
-        raise RuntimeError("Friday checkpoints require Git on PATH.")
-    result = subprocess.run(
-        [
-            git,
-            f"--git-dir={_repo_dir(workspace)}",
-            f"--work-tree={workspace}",
-            "-c",
-            "core.bare=false",
-            "-c",
-            "core.autocrlf=false",
-            *args,
-        ],
-        cwd=workspace,
-        input=input_text,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or f"Git checkpoint command failed: {' '.join(args)}")
-    return result.stdout
+def _decode_path(path: bytes) -> str:
+    return path.decode("utf-8", "surrogateescape")
 
 
 def _entry(workspace: Path, checkpoint_id: str | None) -> dict[str, Any]:
@@ -419,17 +439,24 @@ def _remove_entries(workspace: Path, removed: list[dict[str, Any]]) -> None:
     for entry in removed:
         checkpoint_id = str(entry["id"])
         (_entries_dir(workspace) / f"{checkpoint_id}.json").unlink(missing_ok=True)
-        _git(workspace, "update-ref", "-d", f"refs/friday/{checkpoint_id}/before")
-        _git(workspace, "update-ref", "-d", f"refs/friday/{checkpoint_id}/after")
-    _git(workspace, "gc", "--prune=now", "--quiet")
+        with _open_repo(workspace) as repo:
+            for name in ("before", "after"):
+                ref = f"refs/friday/{checkpoint_id}/{name}".encode("ascii")
+                try:
+                    del repo.refs[ref]
+                except KeyError:
+                    pass
+    with _open_repo(workspace) as repo:
+        porcelain.gc(repo, prune=True, grace_period=0)
 
 
 def _sync_entry_refs(workspace: Path, entry: dict[str, Any]) -> None:
     checkpoint_id = str(entry["id"])
-    for name, key in (("before", "before_tree"), ("after", "after_tree")):
-        tree = str(entry.get(key) or "")
-        if tree:
-            _git(workspace, "update-ref", f"refs/friday/{checkpoint_id}/{name}", tree)
+    with _open_repo(workspace) as repo:
+        for name, key in (("before", "before_tree"), ("after", "after_tree")):
+            tree = str(entry.get(key) or "")
+            if tree:
+                repo.refs[f"refs/friday/{checkpoint_id}/{name}".encode("ascii")] = tree.encode("ascii")
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:

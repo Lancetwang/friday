@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.54.0",
+    "dulwich>=0.25.0,<0.26",
     "friday-agent-core==0.1.7",
     "rich>=13.7.0",
 ]
