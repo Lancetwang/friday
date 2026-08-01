@@ -75,8 +75,6 @@ Permission flags:
 ```powershell
 friday --permission-mode manual
 friday --permission-mode auto
-friday --permission-mode accept-edits
-friday --permission-mode dont-ask
 friday --permission-mode bypass
 friday --dangerously-skip-permissions
 friday --permission-allow
@@ -88,6 +86,4 @@ Modes:
 
 - `manual`: default approval behavior.
 - `auto`: let a separate, tool-free model review decide whether a risky command matches the current request. Hard-denied commands and explicit deny rules still win.
-- `accept-edits`: allow common write/edit shell commands, still ask for destructive commands.
-- `dont-ask`: deny commands that would require approval.
 - `bypass`: skip interactive approval. Hard-denied commands and explicit deny rules still apply; use only in a sandbox.

@@ -24,6 +24,10 @@ CLI chat and the TUI expose the same latest-turn operation as `/undo`. Restoring
 an older checkpoint also supersedes newer checkpoints because workspace history
 is linear.
 
+The desktop attaches restore only to user messages, returning to the state
+before that request. Fork is attached only to assistant responses, so a branch
+always starts from a complete request-response boundary.
+
 ## Storage And Safety
 
 File snapshots use a separate content-addressed Git object store under

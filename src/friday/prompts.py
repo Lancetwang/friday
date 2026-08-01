@@ -26,6 +26,7 @@ def environment(workspace: Path, config: ModelConfig) -> str:
     system = platform.system()
     shell = "PowerShell" if system == "Windows" else "bash"
     mode = os.getenv("FRIDAY_PERMISSION_MODE", "manual").strip() or "manual"
+    mode = mode if mode in {"manual", "auto", "bypass"} else "manual"
     user_dir = friday_home()
     return prompt_template("ENVIRONMENT.md").format(
         workspace=workspace,

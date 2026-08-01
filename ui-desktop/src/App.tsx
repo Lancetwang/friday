@@ -39,7 +39,7 @@ type Metrics = {
   output_tokens?: number | null
 }
 
-type PermissionMode = 'accept-edits' | 'auto' | 'bypass' | 'dont-ask' | 'manual'
+type PermissionMode = 'auto' | 'bypass' | 'manual'
 type ProjectStatus = 'connecting' | 'error' | 'idle' | 'ready'
 type ThinkingEffort = 'high' | 'low' | 'max' | 'off'
 
@@ -48,10 +48,8 @@ const permissionOptions: ReadonlyArray<{
   label: string
   value: PermissionMode
 }> = [
-  { description: 'Reject risky actions', label: 'Deny risky commands', value: 'dont-ask' },
   { description: 'Ask before risky actions', label: 'Request approval', value: 'manual' },
   { description: 'Review intent before risky actions', label: 'Let Friday decide', value: 'auto' },
-  { description: 'Allow workspace changes', label: 'Allow edits', value: 'accept-edits' },
   { description: 'Run allowed commands without prompts', label: 'Full access', value: 'bypass' }
 ]
 
@@ -661,12 +659,14 @@ function App() {
           items = verification
             ? items.map(item => item.id === 'verification-status' ? { ...item, text: verificationLabel(verification) } : item)
             : items.filter(item => item.id !== 'verification-status')
-          let forkPoint = 0
+          const pendingForks = items.filter(item => item.kind === 'assistant' && item.forkIndex == null).length
+          const forkOffset = Math.max(0, forkPoints.length - pendingForks)
+          let assignedForks = 0
           items = items.map(item => {
-            if (item.kind !== 'user' && item.kind !== 'assistant') return item
-            const point = forkPoints[forkPoint]
-            forkPoint += 1
-            return point?.kind === item.kind ? { ...item, forkIndex: point.message_index } : item
+            if (item.kind !== 'assistant' || item.forkIndex != null) return item
+            const point = forkPoints[forkOffset + assignedForks]
+            assignedForks += 1
+            return point ? { ...item, forkIndex: point.message_index } : item
           })
           return {
             ...current,
@@ -2489,13 +2489,7 @@ function bindCheckpoints(items: TimelineItem[], checkpoints: CheckpointChoice[],
   const offset = userIndexes.length - ordered.length
   for (let position = offset; position < userIndexes.length; position += 1) {
     const checkpoint = ordered[position - offset]
-    const start = userIndexes[position]!
-    const end = userIndexes[position + 1] ?? next.length
-    for (let index = start; index < end; index += 1) {
-      if (next[index]!.kind === 'user' || next[index]!.kind === 'assistant') {
-        next[index]!.checkpointId = checkpoint!.id
-      }
-    }
+    next[userIndexes[position]!]!.checkpointId = checkpoint!.id
   }
   return next
 }
@@ -2505,7 +2499,7 @@ function timelineFromHistory(history: HistoryItem[]) {
     arguments: item.arguments == null ? undefined : JSON.stringify(item.arguments, null, 2),
     artifacts: item.artifacts,
     id: `history-${index}-${item.tool_call_id || item.kind}`,
-    forkIndex: item.message_index,
+    forkIndex: item.kind === 'assistant' ? item.message_index : undefined,
     images: item.images,
     kind: item.kind,
     name: item.name,
@@ -2728,7 +2722,7 @@ function TimelineRow({
                 <span className="copy-icon" />
               </button>
             )}
-            {item.checkpointId && (
+            {item.kind === 'user' && item.checkpointId && (
               <button
                 aria-label="Restore to before this turn"
                 disabled={busy}
@@ -2739,7 +2733,7 @@ function TimelineRow({
                 <span aria-hidden="true" className="restore-icon">{'\u21b6'}</span>
               </button>
             )}
-            {(item.kind === 'user' || item.kind === 'assistant') && item.forkIndex != null && (
+            {item.kind === 'assistant' && item.forkIndex != null && (
               <button
                 aria-label="Fork conversation here"
                 disabled={busy}

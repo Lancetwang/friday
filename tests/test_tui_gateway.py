@@ -12,7 +12,7 @@ from unittest.mock import patch
 from agent_core import AgentEvent, RunContext
 
 from friday.session import FridaySession
-from friday.app_server import Gateway, _request_lines, artifact_detail, session_history, verification_status
+from friday.app_server import Gateway, _request_lines, artifact_detail, fork_points, session_history, verification_status
 from friday.state import delete_session_tree, fork_session, read_session, resume_choices, save_turn, session_path, session_tree
 from friday.turn import TurnResult
 from friday.turn import TurnCancelled
@@ -291,6 +291,8 @@ class TuiGatewayTests(unittest.TestCase):
                 {"role": "assistant", "content": "second"},
             ]
             save_turn(root, "one", "second", "root", messages)
+            with self.assertRaisesRegex(ValueError, "assistant response"):
+                fork_session(root, "root", 0)
             fork = fork_session(root, "root", 1)
             save_turn(root, "branch", "done", fork["session_id"], fork["messages"])
 
@@ -513,6 +515,7 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertEqual(history[0]["timestamp"], "2026-07-28T16:00:00+08:00")
         self.assertEqual(history[0]["images"], [image])
         self.assertNotIn("hidden prefix", str(history))
+        self.assertEqual(fork_points(gateway.session), [{"kind": "assistant", "message_index": 3}])
 
     def test_session_history_restores_persisted_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

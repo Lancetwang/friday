@@ -1549,6 +1549,9 @@ input[type="checkbox"] {
 .message.assistant .message-meta {
   right: auto;
   left: 0;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .message-meta > button {
@@ -2787,11 +2790,6 @@ input[type="checkbox"] {
   border-radius: 50%;
 }
 
-.permission-indicator.mode-dont-ask {
-  border-color: var(--success);
-  background: var(--success);
-}
-
 .permission-indicator.mode-manual {
   border-color: var(--caution);
   background: var(--caution);
@@ -2800,11 +2798,6 @@ input[type="checkbox"] {
 .permission-indicator.mode-auto {
   border-color: #8b7d6b;
   background: #8b7d6b;
-}
-
-.permission-indicator.mode-accept-edits {
-  border-color: var(--orange);
-  background: var(--orange);
 }
 
 .permission-indicator.mode-bypass {

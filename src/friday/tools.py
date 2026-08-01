@@ -25,7 +25,7 @@ CONTEXT_FILE_LIMIT = 8000
 APPROVAL_FILE = "pending_approval.json"
 PERMISSIONS_FILE = "permissions.json"
 SESSION_PERMISSIONS_ALLOWED = "friday.permissions_allowed"
-PERMISSION_MODES = {"manual", "auto", "accept-edits", "dont-ask", "bypass"}
+PERMISSION_MODES = {"manual", "auto", "bypass"}
 CREDENTIAL_PATH_PATTERN = (
     r"(?:^|[\\/\s'\"])(?:\.env(?:\.\w+)?|\.ssh|\.aws|\.azure|\.kube|"
     r"model-credentials\.json|credentials(?:\.json)?|id_rsa|id_ed25519)(?:$|[\\/\s'\"])"
@@ -724,16 +724,12 @@ def _permission_decision(friday_dir: Path, command: str) -> tuple[str, str]:
     if _matches_any(command, bash.get("require_approval", [])):
         return _approval_or_deny(mode, command, "matched approval rule")
     reason = _dangerous_shell(command)
-    if mode == "accept-edits" and reason in {"writes or moves files", "redirects output to a file"}:
-        return "allow", "permission mode accept-edits"
     if reason:
         return _approval_or_deny(mode, command, reason)
     return "allow", "safe by default"
 
 
 def _approval_or_deny(mode: str, command: str, reason: str) -> tuple[str, str]:
-    if mode == "dont-ask":
-        return "deny", f"{reason}; permission mode dont-ask"
     if mode == "auto":
         decision, review_reason = _review_shell_command(command, reason)
         return decision, f"automatic review: {review_reason}"

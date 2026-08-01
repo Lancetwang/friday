@@ -310,6 +310,8 @@ def fork_session(
     body = conversation_body(messages if messages is not None else source.get("messages", []))
     if message_index < 0 or message_index >= len(body):
         raise ValueError("Fork point is outside the conversation.")
+    if body[message_index].get("role") != "assistant":
+        raise ValueError("Conversations can only fork from an assistant response.")
     copied = body[: message_index + 1]
     session_id = new_session_id()
     now = datetime.now().isoformat(timespec="seconds")

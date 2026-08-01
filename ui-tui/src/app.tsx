@@ -56,7 +56,7 @@ const HELP_TEXT = `# Friday commands
 | \`/resume\` | Resume recent Friday session context. |
 | \`/session list|rename|delete\` | Manage saved conversations. |
 | \`/undo\` | Restore the workspace and conversation to before the latest Friday turn. |
-| \`/permission manual|auto|accept-edits|dont-ask|bypass\` | Choose how risky commands are reviewed. |
+| \`/permission manual|auto|bypass\` | Choose how risky commands are reviewed. |
 | \`/approve\` | Open the pending approval choices. |
 | \`/reject\` | Open the pending approval choices with Reject selected. |
 | \`/reset\` | Clear Friday state for the current project. |
@@ -452,8 +452,8 @@ function runCommand(
   } else if (command.startsWith('/permission')) {
     const requested = text.slice('/permission'.length).trim().toLowerCase()
     const mode = requested === 'full' ? 'bypass' : requested === 'ask' ? 'manual' : requested
-    if (!['manual', 'auto', 'accept-edits', 'dont-ask', 'bypass'].includes(mode)) {
-      setMessages(items => [...items, { role: 'system', text: 'Usage: /permission manual|auto|accept-edits|dont-ask|bypass' }])
+    if (!['manual', 'auto', 'bypass'].includes(mode)) {
+      setMessages(items => [...items, { role: 'system', text: 'Usage: /permission manual|auto|bypass' }])
     } else {
       void gateway.request<{ permission_mode: SessionInfo['permission_mode'] }>('permission.set', { mode }).then(result => {
         setInfo(current => current && { ...current, permission_mode: result.permission_mode })
@@ -644,11 +644,7 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
     ? 'full access'
     : info?.permission_mode === 'auto'
       ? 'Friday approves'
-      : info?.permission_mode === 'dont-ask'
-        ? 'deny risky'
-        : info?.permission_mode === 'accept-edits'
-          ? 'allow edits'
-          : 'request approval'
+      : 'request approval'
   const thinking = info?.thinking_supported ? ` · thinking ${info.thinking_effort}` : ''
   return (
     <Box flexDirection="column">

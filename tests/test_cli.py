@@ -130,9 +130,9 @@ class CliTests(unittest.TestCase):
     def test_permission_mode_flag_configures_environment(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             with patch("friday.cli.run_tui"):
-                cli.main(["--permission-mode", "dont-ask"])
+                cli.main(["--permission-mode", "auto"])
 
-            self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "dont-ask")
+            self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "auto")
 
     def test_ask_can_read_long_request_from_stdin(self) -> None:
         with patch.object(sys, "stdin", StringIO("long request\nwith context")):

@@ -658,7 +658,7 @@ def fork_points(session: FridaySession) -> list[dict[str, Any]]:
     return [
         {"kind": item["kind"], "message_index": item["message_index"]}
         for item in session_history(session)
-        if item["kind"] in {"user", "assistant"} and "message_index" in item
+        if item["kind"] == "assistant" and "message_index" in item
     ]
 
 

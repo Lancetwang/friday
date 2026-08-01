@@ -201,16 +201,14 @@ class ToolTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "bypass"}, clear=False):
                 bypassed = tools["Bash"]("rm missing-file")
-            with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "dont-ask"}, clear=False):
-                denied = tools["Bash"]("rm missing-file")
-            with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "accept-edits"}, clear=False):
-                edit = tools["Bash"]('Set-Content allowed.txt "ok"')
-                delete = tools["Bash"]("Remove-Item allowed.txt")
+            with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "manual"}, clear=False):
+                manual = tools["Bash"]("rm missing-file")
+            with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "retired-mode"}, clear=False):
+                legacy = tools["Bash"]('Set-Content allowed.txt "ok"')
 
             self.assertNotIn("approval_required", bypassed)
-            self.assertTrue(denied["blocked"])
-            self.assertEqual(edit["exit_code"], 0)
-            self.assertTrue(delete["approval_required"])
+            self.assertTrue(manual["approval_required"])
+            self.assertTrue(legacy["approval_required"])
 
     def test_hard_and_explicit_denies_override_full_access(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
