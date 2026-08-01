@@ -334,6 +334,7 @@ def _tavily_search(query: str, max_results: int, search_depth: str, topic: str, 
         "topic": topic,
         "max_results": min(10, max(1, int(max_results))),
         "include_answer": bool(include_answer),
+        "include_favicon": True,
         "include_raw_content": False,
         "include_images": False,
     }
@@ -364,6 +365,7 @@ def _tavily_result(item: dict) -> dict:
         "title": item.get("title", ""),
         "url": item.get("url", ""),
         "content": _clip(" ".join(str(item.get("content", "")).split()), 800),
+        "favicon": item.get("favicon", ""),
         "score": item.get("score"),
         "published_date": item.get("published_date", ""),
     }

@@ -42,6 +42,11 @@ fn canonical_directory(path: PathBuf) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+#[tauri::command]
+fn resolve_directory(path: String) -> Result<String, String> {
+    canonical_directory(PathBuf::from(path)).map(|value| value.display().to_string())
+}
+
 fn take_lines(buffer: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
     buffer.extend_from_slice(bytes);
     let mut lines = Vec::new();
@@ -220,6 +225,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            resolve_directory,
             gateway_start,
             gateway_send,
             gateway_stop

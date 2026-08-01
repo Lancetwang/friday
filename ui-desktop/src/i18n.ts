@@ -164,6 +164,7 @@ const en: Record<string, string> = {
   // Sources
   'sources.label': '{count} pages referenced',
   'sources.aria': '{count} pages referenced',
+  'sources.trigger': 'Sources',
 
   // Fork map
   'fork.show': 'Show branch map',
@@ -205,15 +206,20 @@ const en: Record<string, string> = {
   'settings.web': 'Web Search',
   'settings.web.hint': 'Tavily and AnySearch',
   'settings.memory': 'Memory',
-  'settings.memory.hint': 'Profile and memory files',
+  'settings.memory.hint': 'Persistent memory files',
   'settings.docs': 'Docs',
   'settings.docs.hint': 'Getting started',
 
   // General
   'general.title': 'General',
   'general.desc': 'Preferences for this device.',
-  'general.language': 'Language',
-  'general.languageNote': 'Applies to the whole desktop interface.',
+  'general.uiLanguage': 'Interface language',
+  'general.uiLanguageNote': 'Changes the desktop interface only, not the language Friday uses to answer.',
+  'general.profileNote': 'These preferences update your user profile and change how Friday addresses and responds to you.',
+  'general.name': 'Your name',
+  'general.namePlaceholder': 'How should Friday address you?',
+  'general.responseLanguage': 'Friday response language',
+  'general.responseLanguagePlaceholder': 'For example: Chinese',
 
   // Models
   'models.title': 'Models',
@@ -241,11 +247,7 @@ const en: Record<string, string> = {
 
   // Memory
   'memory.title': 'Memory',
-  'memory.desc': 'Your name and language go into the user profile; edit memory files directly for longer notes.',
-  'memory.name': 'Your name',
-  'memory.namePlaceholder': 'How should Friday address you?',
-  'memory.language': 'Language',
-  'memory.languagePlaceholder': 'For example: Chinese',
+  'memory.desc': 'Manage the persistent profile and memory files used across conversations.',
   'memory.userFile': 'User profile',
   'memory.globalFile': 'Global memory',
   'memory.chars': '{chars} / {limit} chars',
@@ -259,8 +261,12 @@ const en: Record<string, string> = {
   'docs.step2.title': 'Set up web search (optional)',
   'docs.step2.body': 'Web search needs a Tavily or AnySearch key. Fill one in under Web Search; Friday tries Tavily first and falls back to AnySearch.',
   'docs.step3.title': 'Let Friday remember you (optional)',
-  'docs.step3.body': 'Enter your name and language under Memory, or edit USER.md / MEMORY.md directly. Future conversations will carry these preferences.',
+  'docs.step3.body': 'Set your name and Friday response language under General. Future conversations will carry these preferences.',
   'docs.go': 'Go to {target} ›',
+
+  // Project drop
+  'projectDrop.title': 'Open as a Friday project',
+  'projectDrop.hint': 'Drop the folder anywhere in this window',
 }
 
 const zh: Record<string, string> = {
@@ -399,6 +405,7 @@ const zh: Record<string, string> = {
   // Sources
   'sources.label': '参考了 {count} 个页面',
   'sources.aria': '参考了 {count} 个页面',
+  'sources.trigger': '来源',
 
   // Fork map
   'fork.show': '展开会话分支图',
@@ -440,15 +447,20 @@ const zh: Record<string, string> = {
   'settings.web': '联网搜索',
   'settings.web.hint': 'Tavily 与 AnySearch',
   'settings.memory': '记忆',
-  'settings.memory.hint': '档案与记忆文件',
+  'settings.memory.hint': '持久记忆文件',
   'settings.docs': '文档',
   'settings.docs.hint': '快速上手',
 
   // General
   'general.title': '通用',
   'general.desc': '这台设备上的偏好设置。',
-  'general.language': '语言',
-  'general.languageNote': '应用于整个桌面界面。',
+  'general.uiLanguage': '界面语言',
+  'general.uiLanguageNote': '只改变桌面界面，不决定 Friday 使用哪种语言回答。',
+  'general.profileNote': '以下设置会更新用户档案，并影响 Friday 对你的称呼和回复语言。',
+  'general.name': '你的称呼',
+  'general.namePlaceholder': 'Friday 该如何称呼你？',
+  'general.responseLanguage': 'Friday 交互语言',
+  'general.responseLanguagePlaceholder': '例如：中文',
 
   // Models
   'models.title': '模型',
@@ -476,11 +488,7 @@ const zh: Record<string, string> = {
 
   // Memory
   'memory.title': '记忆',
-  'memory.desc': '称呼与语言会写入用户档案；更长的偏好请直接编辑记忆文件。',
-  'memory.name': '称呼',
-  'memory.namePlaceholder': 'Friday 该如何称呼你？',
-  'memory.language': '语言',
-  'memory.languagePlaceholder': '例如：中文',
+  'memory.desc': '管理跨会话使用的持久用户档案与记忆文件。',
   'memory.userFile': '用户档案',
   'memory.globalFile': '全局记忆',
   'memory.chars': '{chars} / {limit} 字符',
@@ -494,8 +502,12 @@ const zh: Record<string, string> = {
   'docs.step2.title': '配置搜索服务（可选）',
   'docs.step2.body': '联网搜索需要 Tavily 或 AnySearch 的 key，在联网搜索页填入即可。Friday 会优先使用 Tavily，不可用时回退到 AnySearch。',
   'docs.step3.title': '让 Friday 记住你（可选）',
-  'docs.step3.body': '在记忆页中填写称呼与语言，或直接编辑 USER.md / MEMORY.md，之后的对话会自动带上这些偏好。',
+  'docs.step3.body': '在通用页中设置称呼和 Friday 交互语言，之后的对话会自动带上这些偏好。',
   'docs.go': '前往{target} ›',
+
+  // Project drop
+  'projectDrop.title': '作为 Friday 项目打开',
+  'projectDrop.hint': '将目录拖放到窗口中的任意位置',
 }
 
 const STRINGS: Record<Language, Record<string, string>> = { en, zh }

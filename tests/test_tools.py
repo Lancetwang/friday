@@ -452,6 +452,7 @@ class ToolTests(unittest.TestCase):
                                 "title": "Friday",
                                 "url": "https://example.com/friday",
                                 "content": "  useful   result  ",
+                                "favicon": "https://example.com/favicon.png",
                                 "score": 0.9,
                                 "published_date": "2026-07-10",
                             }
@@ -489,10 +490,12 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(seen["payload"]["max_results"], 10)
             self.assertEqual(seen["payload"]["search_depth"], "advanced")
             self.assertEqual(seen["payload"]["time_range"], "week")
+            self.assertTrue(seen["payload"]["include_favicon"])
             self.assertFalse(seen["payload"]["include_raw_content"])
             self.assertEqual(result["provider"], "tavily")
             self.assertEqual(result["answer"], "Friday is a local agent.")
             self.assertEqual(result["results"][0]["content"], "useful result")
+            self.assertEqual(result["results"][0]["favicon"], "https://example.com/favicon.png")
 
     def test_web_search_falls_back_to_anysearch_after_tavily_failure(self) -> None:
         class FakeResponse:

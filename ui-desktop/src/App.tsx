@@ -395,6 +395,8 @@ function App() {
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const [language, setLanguageState] = useState<Language>(loadLanguage)
   const [page, setPage] = useState<'chat' | 'settings' | 'skills'>('chat')
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
+  const [projectDropActive, setProjectDropActive] = useState(false)
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null)
   const [skillError, setSkillError] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
@@ -411,6 +413,7 @@ function App() {
   const sidebarDrag = useRef<{ startWidth: number; startX: number } | null>(null)
   const startedProjects = useRef(new Set<string>())
   const openProjects = useRef(new Set(initialProjects.current.map(pathKey)))
+  const selectProjectRef = useRef<(workspace: string) => Promise<string | undefined>>(async () => undefined)
 
   const view = views[activeProject] || emptyView(activeProject)
   const { activeSession, attachment, busy, cancelling, checkpoints, draft, forkTree, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
@@ -1120,6 +1123,34 @@ function App() {
   }
 
   const selectProject = (workspace: string) => selectWorkspace(workspace, true)
+  selectProjectRef.current = selectProject
+
+  useEffect(() => {
+    let disposed = false
+    let unlisten: UnlistenFn | undefined
+    void getCurrentWindow().onDragDropEvent(event => {
+      const { payload } = event
+      if (payload.type === 'enter') {
+        setProjectDropActive(true)
+      } else if (payload.type === 'leave') {
+        setProjectDropActive(false)
+      } else if (payload.type === 'drop') {
+        setProjectDropActive(false)
+        const dropped = payload.paths[0]
+        if (!dropped) return
+        void invoke<string>('resolve_directory', { path: dropped })
+          .then(path => selectProjectRef.current(path))
+          .catch(() => undefined)
+      }
+    }).then(stop => {
+      if (disposed) stop()
+      else unlisten = stop
+    })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
 
   const toggleProject = (workspace: string) => {
     const key = pathKey(workspace)
@@ -1530,14 +1561,19 @@ function App() {
             <button
               className={`sidebar-status ${page === 'settings' ? 'active' : ''}`}
               disabled={!settingsWorkspace}
-              onClick={() => setPage(current => current === 'settings' ? 'chat' : 'settings')}
-              title="Settings"
+              onClick={() => {
+                if (page === 'settings') setPage('chat')
+                else {
+                  setSettingsSection('general')
+                  setPage('settings')
+                }
+              }}
+              title={t('sidebar.settings')}
               type="button"
             >
-              <span className={`status-dot ${status} ${status === 'ready' && !info.model_configured ? 'needs-key' : ''}`} />
+              <span className={`status-dot ${status}`} />
               <span className="sidebar-status-copy">
                 <strong>{t('sidebar.settings')}</strong>
-                <span>{busy ? t('status.working') : status === 'ready' && !info.model_configured ? t('status.apiKeyRequired') : info.model_name || info.model}</span>
               </span>
               <span aria-hidden="true" className="footer-chevron">{'\u203a'}</span>
             </button>
@@ -1578,6 +1614,7 @@ function App() {
         {page === 'settings' ? (
           <SettingsPage
             catalog={models}
+            initialSection={settingsSection}
             language={language}
             onClose={() => setPage('chat')}
             onLanguageChange={changeLanguage}
@@ -1751,6 +1788,7 @@ function App() {
                 }}
               >
                 <summary aria-disabled={busy} onClick={event => busy && event.preventDefault()}>
+                  <ProviderIcon label={selectedModel?.name || info.model_name || info.model} provider={selectedModel?.provider || ''} />
                   {selectedModel?.vision && <VisionIcon />}
                   <span>{selectedModel?.name || info.model_name || info.model}</span>
                   <i aria-hidden="true" />
@@ -1766,9 +1804,12 @@ function App() {
                       }}
                       type="button"
                     >
-                      <span className="model-menu-copy">
-                        <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
-                        <small>{profile.provider} / {profile.model}</small>
+                      <span className="model-menu-main">
+                        <ProviderIcon label={profile.name} provider={profile.provider} />
+                        <span className="model-menu-copy">
+                          <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
+                          <small>{profile.provider} / {profile.model}</small>
+                        </span>
                       </span>
                       <span className={`model-key ${profile.api_key_configured ? 'configured' : ''}`} title={profile.api_key_configured ? t('modelMenu.keyConfigured') : t('modelMenu.keyRequired')} />
                     </button>
@@ -1777,6 +1818,7 @@ function App() {
                     className="configure-models"
                     onClick={event => {
                       event.currentTarget.closest('details')?.removeAttribute('open')
+                      setSettingsSection('models')
                       setPage('settings')
                     }}
                     type="button"
@@ -1887,6 +1929,13 @@ function App() {
           </div>
         )}
       </div>
+      {projectDropActive && (
+        <div className="project-drop-overlay">
+          <FolderIcon open />
+          <strong>{t('projectDrop.title')}</strong>
+          <span>{t('projectDrop.hint')}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -2130,12 +2179,38 @@ function VisionIcon() {
   )
 }
 
-function GlobeIcon() {
+const PROVIDER_ICON_URLS: Readonly<Record<string, string>> = {
+  anthropic: 'https://www.anthropic.com/favicon.ico',
+  anysearch: 'https://www.anysearch.com/favicon.ico',
+  deepseek: 'https://www.deepseek.com/favicon.ico',
+  mimo: 'https://mimo.mi.com/favicon.png',
+  openai: 'https://openai.com/favicon.ico',
+  tavily: 'https://tavily.com/favicon.ico'
+}
+
+function ProviderIcon({ label, provider }: { label: string; provider: string }) {
+  return <RemoteIcon className="provider-icon" label={label} src={PROVIDER_ICON_URLS[provider.toLowerCase()] || ''} />
+}
+
+function SiteIcon({ icon, url }: { icon?: string; url: string }) {
+  let fallback = ''
+  try {
+    fallback = new URL('/favicon.ico', url).toString()
+  } catch {
+    // Invalid source URLs keep the quiet text fallback.
+  }
+  return <RemoteIcon className="source-icon" label={hostOf(url)} src={safeIconUrl(icon) || safeIconUrl(fallback)} />
+}
+
+function RemoteIcon({ className, label, src }: { className: string; label: string; src: string }) {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [src])
   return (
-    <svg aria-hidden="true" className="globe-icon" fill="none" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5s-1.3 6.2-3.9 8.5c-2.6-2.3-3.9-5.2-3.9-8.5s1.3-6.2 3.9-8.5Z" />
-    </svg>
+    <span aria-hidden="true" className={`${className} ${failed || !src ? 'fallback' : ''}`}>
+      {src && !failed
+        ? <img alt="" draggable={false} onError={() => setFailed(true)} referrerPolicy="no-referrer" src={src} />
+        : <span>{label.trim().charAt(0).toUpperCase() || '·'}</span>}
+    </span>
   )
 }
 
@@ -2183,6 +2258,7 @@ function ConfigBadge({ configured }: { configured: boolean }) {
 
 function SettingsPage({
   catalog,
+  initialSection,
   language,
   onClose,
   onLanguageChange,
@@ -2194,6 +2270,7 @@ function SettingsPage({
   onSaveWeb
 }: {
   catalog: ModelCatalog
+  initialSection: SettingsSection
   language: Language
   onClose: () => void
   onLanguageChange: (language: Language) => void
@@ -2204,7 +2281,7 @@ function SettingsPage({
   onSaveProfile: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
   onSaveWeb: (value: Record<string, unknown>) => Promise<WebSearchSettings>
 }) {
-  const [section, setSection] = useState<SettingsSection>('models')
+  const [section, setSection] = useState<SettingsSection>(initialSection)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsError, setSettingsError] = useState('')
   const [draft, setDraft] = useState<ModelDraft | null>(null)
@@ -2306,23 +2383,31 @@ function SettingsPage({
                 <h2>{t('general.title')}</h2>
                 <p>{t('general.desc')}</p>
               </header>
-              <div className="language-field">
-                <span className="language-label">{t('general.language')}</span>
-                <div className="language-options" role="radiogroup">
-                  {(['zh', 'en'] as const).map(option => (
-                    <button
-                      aria-checked={language === option}
-                      className={`language-option ${language === option ? 'active' : ''}`}
-                      key={option}
-                      onClick={() => onLanguageChange(option)}
-                      role="radio"
-                      type="button"
-                    >
-                      {option === 'zh' ? '中文' : 'English'}
-                    </button>
-                  ))}
+              <div className="general-preferences">
+                <div className="language-field">
+                  <span className="language-label">{t('general.uiLanguage')}</span>
+                  <div className="language-options" role="radiogroup">
+                    {(['zh', 'en'] as const).map(option => (
+                      <button
+                        aria-checked={language === option}
+                        className={`language-option ${language === option ? 'active' : ''}`}
+                        key={option}
+                        onClick={() => onLanguageChange(option)}
+                        role="radio"
+                        type="button"
+                      >
+                        {option === 'zh' ? '中文' : 'English'}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="language-note">{t('general.uiLanguageNote')}</p>
                 </div>
-                <p className="language-note">{t('general.languageNote')}</p>
+                <div className="profile-settings">
+                  <p>{t('general.profileNote')}</p>
+                  {settings
+                    ? <UserProfileSettingsForm initial={settings.user_profile} onSave={persistProfile} />
+                    : <SettingsLoading error={settingsError} />}
+                </div>
               </div>
             </div>
           )}
@@ -2349,8 +2434,11 @@ function SettingsPage({
                       type="button"
                     >
                       <span className="provider-id">
-                        <strong>{item.label}</strong>
-                        <small>{hostOf(item.base_url) || item.base_url}</small>
+                        <ProviderIcon label={item.label} provider={item.id} />
+                        <span className="provider-copy">
+                          <strong>{item.label}</strong>
+                          <small>{hostOf(item.base_url) || item.base_url}</small>
+                        </span>
                       </span>
                       <span className="provider-state">
                         {inUse && <span className="provider-in-use">{t('models.inUse')}</span>}
@@ -2445,9 +2533,7 @@ function SettingsPage({
               </header>
               {settings
                 ? (
-                  <>
-                    <UserProfileSettingsForm initial={settings.user_profile} onSave={persistProfile} />
-                    <div className="memory-files">
+                  <div className="memory-files">
                       {(['user', 'global'] as const).map(file => {
                         const info = settings.memory_files[file]
                         return (
@@ -2462,7 +2548,6 @@ function SettingsPage({
                         )
                       })}
                     </div>
-                  </>
                 )
                 : <SettingsLoading error={settingsError} />}
               {editingFile && settings && (
@@ -2501,7 +2586,7 @@ function SettingsPage({
                 <li>
                   <strong>{t('docs.step3.title')}</strong>
                   <p>{t('docs.step3.body')}</p>
-                  <button className="docs-link" onClick={() => setSection('memory')} type="button">{t('docs.go', { target: t('settings.memory') })}</button>
+                  <button className="docs-link" onClick={() => setSection('general')} type="button">{t('docs.go', { target: t('settings.general') })}</button>
                 </li>
               </ol>
             </div>
@@ -2665,8 +2750,11 @@ function WebSearchSettings({
           <div className={`provider-item ${isExpanded ? 'expanded' : ''}`} key={provider.id}>
             <button aria-expanded={isExpanded} className="provider-row" onClick={() => open(provider.id)} type="button">
               <span className="provider-id">
-                <strong>{provider.label}</strong>
-                <small>{provider.host}</small>
+                <ProviderIcon label={provider.label} provider={provider.id} />
+                <span className="provider-copy">
+                  <strong>{provider.label}</strong>
+                  <small>{provider.host}</small>
+                </span>
               </span>
               <span className="provider-state">
                 <ConfigBadge configured={isConfigured} />
@@ -2745,12 +2833,12 @@ function UserProfileSettingsForm({
   return (
     <form className="settings-form" onSubmit={save}>
       <label className="line-field">
-        <span>{t('memory.name')}</span>
-        <span className="field-line"><input maxLength={100} onChange={event => setName(event.target.value)} placeholder={t('memory.namePlaceholder')} value={name} /></span>
+        <span>{t('general.name')}</span>
+        <span className="field-line"><input maxLength={100} onChange={event => setName(event.target.value)} placeholder={t('general.namePlaceholder')} value={name} /></span>
       </label>
       <label className="line-field">
-        <span>{t('memory.language')}</span>
-        <span className="field-line"><input maxLength={100} onChange={event => setPreferredLanguage(event.target.value)} placeholder={t('memory.languagePlaceholder')} value={preferredLanguage} /></span>
+        <span>{t('general.responseLanguage')}</span>
+        <span className="field-line"><input maxLength={100} onChange={event => setPreferredLanguage(event.target.value)} placeholder={t('general.responseLanguagePlaceholder')} value={preferredLanguage} /></span>
       </label>
       {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
       <footer><span /><button className="save-model" disabled={saving} type="submit">{saving ? t('settings.saving') : t('settings.save')}</button></footer>
@@ -2972,6 +3060,7 @@ function timelineFromHistory(history: HistoryItem[]) {
 }
 
 type WebSource = {
+  icon?: string
   title: string
   url: string
 }
@@ -2998,6 +3087,35 @@ function normalizeSourceUrl(url: string) {
   return cleanSourceUrl(url).replace(/\/+$/, '').toLowerCase()
 }
 
+function safeIconUrl(value: unknown) {
+  if (typeof value !== 'string') return ''
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' ? url.toString() : ''
+  } catch {
+    return ''
+  }
+}
+
+function structuredSearchSources(text: string): WebSource[] {
+  try {
+    const value = JSON.parse(text) as { results?: unknown }
+    if (!Array.isArray(value.results)) return []
+    return value.results.flatMap(result => {
+      if (!result || typeof result !== 'object') return []
+      const item = result as { favicon?: unknown; title?: unknown; url?: unknown }
+      if (typeof item.url !== 'string' || !/^https?:\/\//i.test(item.url)) return []
+      return [{
+        icon: safeIconUrl(item.favicon) || undefined,
+        title: typeof item.title === 'string' ? item.title : hostOf(item.url),
+        url: item.url
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
 function markdownLinks(text: string): WebSource[] {
   const links: WebSource[] = []
   for (const match of text.matchAll(/\[([^\]]{1,120})\]\((https?:\/\/[^)\s]+)\)/g)) {
@@ -3017,6 +3135,10 @@ function bareUrls(text: string): string[] {
 function toolSources(item: TimelineItem): WebSource[] {
   const name = (item.name || '').toLowerCase()
   if (name !== 'websearch' && name !== 'webfetch') return []
+  if (name === 'websearch') {
+    const structured = structuredSearchSources(item.text || '')
+    if (structured.length) return structured
+  }
   const sources: WebSource[] = []
   if (name === 'webfetch') {
     try {
@@ -3046,13 +3168,23 @@ function collectMessageSources(items: TimelineItem[]) {
       continue
     }
     if (item.kind !== 'assistant') continue
-    const seen = new Set<string>()
+    const seen = new Map<string, WebSource>()
     const merged: WebSource[] = []
     for (const source of [...markdownLinks(item.text), ...pending]) {
       const key = normalizeSourceUrl(source.url)
-      if (!key || seen.has(key)) continue
-      seen.add(key)
-      merged.push({ title: normalizeSourceTitle(source.title, source.url), url: cleanSourceUrl(source.url) })
+      if (!key) continue
+      const existing = seen.get(key)
+      if (existing) {
+        if (!existing.icon && source.icon) existing.icon = source.icon
+        continue
+      }
+      const normalized = {
+        icon: safeIconUrl(source.icon) || undefined,
+        title: normalizeSourceTitle(source.title, source.url),
+        url: cleanSourceUrl(source.url)
+      }
+      seen.set(key, normalized)
+      merged.push(normalized)
     }
     if (merged.length) result.set(item.id, merged.slice(0, 8))
     pending = []
@@ -3189,8 +3321,13 @@ function TimelineRow({
             {sources && sources.length > 0 && (
               <span className="message-sources">
                 <button aria-label={t('sources.aria', { count: sources.length })} className="sources-chip" type="button">
-                  <GlobeIcon />
-                  <span>{sources.length}</span>
+                  <span className="sources-preview">
+                    {sources.slice(0, 3).map(source => (
+                      <SiteIcon icon={source.icon} key={source.url} url={source.url} />
+                    ))}
+                  </span>
+                  <span>{t('sources.trigger')}</span>
+                  <span className="sources-count">{sources.length}</span>
                 </button>
                 <span className="sources-popover" role="tooltip">
                   <p>{t('sources.label', { count: sources.length })}</p>
@@ -3202,7 +3339,7 @@ function TimelineRow({
                       title={source.url}
                       type="button"
                     >
-                      <span aria-hidden="true" className="source-dot" />
+                      <SiteIcon icon={source.icon} url={source.url} />
                       <span className="source-title">{source.title}</span>
                       <span className="source-host">{hostOf(source.url)}</span>
                     </button>

@@ -227,6 +227,36 @@ input[type="checkbox"] {
   height: 100%;
 }
 
+.project-drop-overlay {
+  position: absolute;
+  inset: 42px 0 0;
+  z-index: 89;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+}
+
+.project-drop-overlay .project-folder {
+  width: 34px;
+  height: 34px;
+  color: var(--accent-ink);
+}
+
+.project-drop-overlay strong {
+  font-size: var(--text-subtitle);
+  font-weight: var(--weight-semibold);
+}
+
+.project-drop-overlay span {
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+
 .titlebar-overlay {
   position: absolute;
   top: 0;
@@ -791,23 +821,12 @@ input[type="checkbox"] {
 .sidebar-status-copy {
   display: flex;
   min-width: 0;
-  flex-direction: column;
-  gap: 1px;
 }
 
 .sidebar-status strong {
   color: var(--ink);
   font-size: var(--text-label);
   font-weight: var(--weight-semibold);
-}
-
-.sidebar-status-copy > span {
-  overflow: hidden;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-caption);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sidebar-status .footer-chevron {
@@ -822,10 +841,6 @@ input[type="checkbox"] {
   flex: 0 0 auto;
   border-radius: 50%;
   background: var(--faint);
-}
-
-.status-dot.needs-key {
-  background: var(--accent);
 }
 
 .theme-toggle {
@@ -1887,10 +1902,10 @@ input[type="checkbox"] {
 
 .sources-chip {
   display: inline-flex;
-  height: 22px;
+  min-height: 26px;
   align-items: center;
-  gap: 5px;
-  padding: 0 9px 0 7px;
+  gap: 6px;
+  padding: 2px 9px 2px 6px;
   border: 0;
   border-radius: var(--radius-full);
   color: var(--muted);
@@ -1905,11 +1920,26 @@ input[type="checkbox"] {
   background: var(--fill);
 }
 
-.sources-chip .globe-icon {
-  width: 11px;
-  height: 11px;
-  stroke: currentColor;
-  stroke-width: 1.7;
+.sources-preview {
+  display: flex;
+  align-items: center;
+  padding-right: 3px;
+}
+
+.sources-preview .source-icon {
+  width: 15px;
+  height: 15px;
+  grid-row: auto;
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+
+.sources-preview .source-icon + .source-icon {
+  margin-left: -4px;
+}
+
+.sources-count {
+  color: var(--faint);
+  font-size: var(--text-micro);
 }
 
 .sources-popover {
@@ -1967,7 +1997,7 @@ input[type="checkbox"] {
   width: 100%;
   align-items: center;
   column-gap: 9px;
-  grid-template-columns: 6px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr);
   padding: 7px 8px;
   border: 0;
   border-radius: var(--radius-m);
@@ -1984,13 +2014,31 @@ input[type="checkbox"] {
   background: var(--fill);
 }
 
-.source-dot {
-  width: 6px;
-  height: 6px;
+.source-icon {
+  display: grid;
+  width: 16px;
+  height: 16px;
   grid-row: 1 / span 2;
   align-self: center;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--fill);
+}
+
+.source-icon img,
+.provider-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.source-icon.fallback {
   border-radius: 50%;
+  color: transparent;
   background: var(--accent);
+  transform: scale(0.4);
 }
 
 .source-title {
@@ -2688,6 +2736,32 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
+.provider-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 5px;
+  color: var(--muted);
+  background: var(--fill);
+  font-size: 9px;
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+}
+
+.provider-icon.fallback span {
+  overflow: visible;
+  max-width: none;
+}
+
+.model-picker summary > .provider-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+}
+
 .model-picker summary i,
 .permission-picker summary i {
   width: 5px;
@@ -2770,6 +2844,13 @@ input[type="checkbox"] {
   display: grid;
   min-width: 0;
   gap: 2px;
+}
+
+.model-menu-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .model-menu-copy strong {
@@ -3113,14 +3194,29 @@ input[type="checkbox"] {
   font-size: var(--text-caption);
 }
 
+.general-preferences {
+  display: grid;
+  gap: 22px;
+}
+
+.profile-settings {
+  display: grid;
+  gap: 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.profile-settings > p {
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+}
+
 /* Memory files — open the raw markdown in an editor */
 
 .memory-files {
   display: grid;
   gap: 2px;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
 }
 
 .memory-file {
@@ -3396,6 +3492,13 @@ input[type="checkbox"] {
 }
 
 .provider-id {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.provider-copy {
   display: flex;
   min-width: 0;
   align-items: baseline;
