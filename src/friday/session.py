@@ -23,13 +23,7 @@ from friday.model_options import DEFAULT_THINKING_EFFORT, normalize_thinking_eff
 from friday.progress import current_progress, finish_progress
 from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, conversation_body, hydrate, new_session_id
 from friday.tools import allow_permissions_for_session, approve_pending, pending_approval
-from friday.turn import TurnCancelled, TurnResult, run_turn
-
-APPROVAL_FOLLOWUP_PROMPT = (
-    "The user approved the pending command and it has now executed. "
-    "Use the approval result in the system context to continue or briefly report the final state to the user. "
-    "Do not ask for approval again unless a new dangerous action is required."
-)
+from friday.turn import PENDING_TURN_ID, TurnCancelled, TurnResult, run_turn
 
 
 class FridaySession:
@@ -139,7 +133,12 @@ class FridaySession:
             self._cancel_event.clear()
             raise
         self._adopt(result.agent, result.context)
-        self.suspended = {"text": text, "goal": goal} if pending_approval(self.workspace).get("pending") else None
+        if pending_approval(self.workspace).get("pending"):
+            self.suspended = {"text": text, "goal": goal}
+            if turn_id := str(result.context.metadata.get(PENDING_TURN_ID) or ""):
+                self.suspended["turn_id"] = turn_id
+        else:
+            self.suspended = None
         if self.on_turn_complete is not None:
             self.on_turn_complete(result)
         return result
@@ -166,12 +165,10 @@ class FridaySession:
         if turn is None:
             finish_pending_checkpoint(self.workspace, pending=False)
             return {"approval": result, "continued": False}
-        prompt = turn["text"] if turn["goal"] else APPROVAL_FOLLOWUP_PROMPT
         turn_result = self.chat(
-            prompt,
+            turn["text"],
             goal=turn["goal"],
             approval_result=result,
-            user_label="/approve",
             continuation=True,
         )
         return {"approval": result, "continued": True, "turn": turn_result}
@@ -188,14 +185,10 @@ class FridaySession:
         self.suspended = None
         outcome: dict[str, Any] = {"approval": result, "continued": False}
         if guidance and turn is not None:
-            prompt = guidance
-            if turn["goal"] and turn["text"]:
-                prompt = f"{turn['text']}\n\nHuman guidance after declining the pending command: {guidance}"
             turn_result = self.chat(
-                prompt,
+                turn["text"],
                 goal=turn["goal"],
                 approval_result={**result, "instruction": guidance},
-                user_label=guidance,
                 continuation=True,
             )
             outcome = {"approval": result, "continued": True, "turn": turn_result}
@@ -329,6 +322,6 @@ class FridaySession:
         progress = self.progress()
         if not progress:
             return None
-        if progress.get("mode") == "goal":
-            return {"text": str(progress.get("objective") or "Continue the approved goal."), "goal": True}
-        return {"text": "", "goal": False}
+        goal = progress.get("mode") == "goal"
+        fallback = "Continue the approved goal." if goal else "Continue the approved request."
+        return {"text": str(progress.get("objective") or fallback), "goal": goal}

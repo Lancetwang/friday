@@ -1,6 +1,8 @@
 # Model Configuration
 
-Friday keeps non-secret model settings in JSON and credentials in `.env`.
+The desktop app exposes model profiles under **Settings > Models**. Each profile keeps its provider, base URL, model name, token limits, and optional vision capability separate, so conversations can switch models without editing files.
+
+Friday keeps non-secret model settings in JSON and credentials outside project files.
 
 The global file is `~/.friday/config.json`. An optional `~/.friday/projects/<workspace-id>/config.json` overrides the global values for one project. Missing keys inherit from the preceding layer. Existing `<workspace>/.friday/config.json` files are migrated there on startup and removed when the legacy directory becomes empty.
 
@@ -24,7 +26,7 @@ The global file is `~/.friday/config.json`. An optional `~/.friday/projects/<wor
 | `max_output_tokens` | Maximum generated tokens for one main-agent model call. |
 | `run_token_budget` | Cumulative input and output Token Budget shared by the main agent, verifier, and repairs in one turn. |
 
-Credentials stay in the active process, `<workspace>/.env`, or `~/.friday/.env`. Friday reads only supported model and Web API key names from those files; control settings such as permission mode are ignored. The provider-specific key is preferred, then `LLM_API_KEY`, `OPENAI_API_KEY`, and `DEEPSEEK_API_KEY` are tried as fallbacks.
+Desktop-managed model credentials stay in `~/.friday/model-credentials.json` and are never returned to the UI. Environment-based credentials may instead live in the active process, `<workspace>/.env`, or `~/.friday/.env`. Friday reads only supported model and Web API key names from those files; control settings such as permission mode are ignored. The provider-specific key is preferred, then `LLM_API_KEY`, `OPENAI_API_KEY`, and `DEEPSEEK_API_KEY` are tried as fallbacks.
 
 ```text
 DEEPSEEK_API_KEY=your-key

@@ -16,7 +16,7 @@ from agent_core import RunContext
 
 import friday.trace_web as trace_web
 from friday.state import save_turn
-from friday.trace import begin_live_trace, finish_live_trace
+from friday.trace import begin_live_trace, finish_live_trace, load_trace, trace_turns
 from friday.trace_web import TraceRequestHandler, analyze_trace, list_analyses, serve_trace_ui, start_trace_server
 
 
@@ -51,6 +51,43 @@ class TraceSecurityTests(unittest.TestCase):
 
 
 class TraceWebTests(unittest.TestCase):
+    def test_approval_resume_stays_in_one_trace_turn_and_updates_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": tmp}):
+            workspace = Path(tmp) / "workspace"
+            context = RunContext(
+                metadata={
+                    "workspace": str(workspace),
+                    "session_id": "approval",
+                    "friday.model_config": {"profile_id": "deepseek", "provider": "deepseek", "model": "deepseek-v4-flash"},
+                }
+            )
+            path, turn_id = begin_live_trace(workspace, context=context, mode="chat", user="delete it", prompt_messages=[])
+            finish_live_trace(path, turn_id, status="needs_approval")
+            context.metadata["friday.model_config"] = {
+                "profile_id": "mimo",
+                "provider": "mimo",
+                "model": "mimo-v2.5",
+            }
+            path, resumed_id = begin_live_trace(
+                workspace,
+                context=context,
+                mode="chat",
+                user="delete it",
+                prompt_messages=[],
+                turn_id=turn_id,
+                continuation=True,
+            )
+            finish_live_trace(path, resumed_id, status="done")
+
+            manifest, events = load_trace("approval")
+
+            self.assertEqual(resumed_id, turn_id)
+            self.assertEqual([event["type"] for event in events if event["type"].startswith("turn.")], [
+                "turn.start", "turn.finish", "turn.resume", "turn.finish"
+            ])
+            self.assertEqual(len(trace_turns("approval", events)), 1)
+            self.assertEqual(manifest["model"]["provider"], "mimo")
+
     def test_serve_trace_ui_stops_on_keyboard_interrupt(self) -> None:
         # The wait loop must sleep in short interruptible slices; an untimed
         # Event.wait() here would swallow Ctrl+C on Windows forever.

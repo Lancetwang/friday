@@ -14,7 +14,7 @@ from agent_core import Agent, RunContext, reset_current_context, set_current_con
 
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
-from friday.config import DEFAULT_MODEL_CONFIG, load_model_catalog, load_model_config, model_api_key, save_model_profile
+from friday.config import DEFAULT_MODEL_CONFIG, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, save_model_profile, save_web_search_settings
 from friday.context import _context_text, compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
@@ -29,6 +29,54 @@ from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_ve
 
 
 class ToolTests(unittest.TestCase):
+    def test_read_attaches_workspace_image_to_a_vision_model(self) -> None:
+        class VisionModel:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.messages = []
+
+            def chat_message(self, messages, **_kwargs):
+                self.calls += 1
+                self.messages = messages
+                if self.calls == 1:
+                    return {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "image-1",
+                                "type": "function",
+                                "function": {"name": "Read", "arguments": '{"path":"sample.png"}'},
+                            }
+                        ],
+                        "usage": {"input_tokens": 10, "output_tokens": 1},
+                    }
+                return {"role": "assistant", "content": "I can see it.", "usage": {"input_tokens": 20, "output_tokens": 4}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "sample.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            read = build_tools(root, root / ".friday")[0]
+            model = VisionModel()
+            agent = Agent(flow=build_guarded_flow(model, [read], chat_kwargs={"stream": False}))
+            context = agent.new_context()
+            context.metadata.update(
+                workspace=str(root),
+                **{"friday.model_config": {"vision": True}},
+            )
+            begin_guarded_run(context, context.usage.snapshot())
+
+            answer = agent.chat("inspect sample.png", context=context, max_steps=20)
+
+            self.assertEqual(answer, "I can see it.")
+            image_messages = [
+                message
+                for message in model.messages
+                if message.get("role") == "user" and message.get("friday_internal")
+            ]
+            self.assertEqual(len(image_messages), 1)
+            self.assertTrue(image_messages[0]["content"][-1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
     def test_file_tools_stay_inside_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -859,6 +907,32 @@ class ResetTests(unittest.TestCase):
             self.assertNotIn("private-key", json.dumps(load_model_catalog(root, home=home)))
             self.assertNotIn("private-key", (home / ".friday" / "models.json").read_text(encoding="utf-8"))
 
+    def test_web_search_credentials_are_private_and_load_into_the_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True):
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            (home / ".friday").mkdir(parents=True)
+            (home / ".friday" / ".env").write_text("TAVILY_API_KEY=env-fallback\n", encoding="utf-8")
+
+            status = save_web_search_settings(
+                root,
+                tavily_api_key="tavily-private",
+                anysearch_api_key="anysearch-private",
+                home=home,
+            )
+
+            self.assertEqual(status, {"tavily_configured": True, "anysearch_configured": True})
+            self.assertNotIn("private", json.dumps(load_web_search_settings(root, home=home)))
+            os.environ.clear()
+            load_model_environment(root, home=home)
+            self.assertEqual(os.environ["TAVILY_API_KEY"], "tavily-private")
+            self.assertEqual(os.environ["ANYSEARCH_API_KEY"], "anysearch-private")
+
+            save_web_search_settings(root, clear_tavily=True, clear_anysearch=True, home=home)
+            self.assertEqual(os.environ["TAVILY_API_KEY"], "env-fallback")
+            self.assertEqual(load_web_search_settings(root, home=home), {"tavily_configured": True, "anysearch_configured": False})
+
     def test_build_friday_passes_configured_output_budget_to_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1187,6 +1261,25 @@ class CompactTests(unittest.TestCase):
                 delete_session(root, "s1")
                 self.assertFalse(session_file.exists())
 
+    def test_continuation_updates_session_without_incrementing_turn_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home" / ".friday")}):
+                save_turn(root, "delete it", "", "s1", [{"role": "user", "content": "delete it"}])
+                save_turn(
+                    root,
+                    "delete it",
+                    "deleted",
+                    "s1",
+                    [{"role": "user", "content": "delete it"}, {"role": "assistant", "content": "deleted"}],
+                    continuation=True,
+                )
+
+                saved = json.loads((project_state_dir(root) / "sessions" / "s1.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(saved["turns"], 1)
+            self.assertEqual(saved["assistant"], "deleted")
+
     def test_session_id_rejects_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
@@ -1477,6 +1570,37 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(answer, "best supported answer")
         self.assertEqual(model.tool_choices, ["auto", "auto", "none"])
         self.assertEqual(context.metadata[GUARD_STOP_REASON], "no_progress")
+
+    def test_resumed_loop_continues_without_adding_a_synthetic_user_message(self) -> None:
+        class ResumeModel:
+            def __init__(self) -> None:
+                self.messages = []
+
+            def chat_message(self, messages, **_kwargs):
+                self.messages = messages
+                return {"role": "assistant", "content": "deleted", "usage": {"input_tokens": 10, "output_tokens": 2}}
+
+        model = ResumeModel()
+        agent = Agent(flow=build_guarded_flow(model, [], chat_kwargs={"stream": False}))
+        context = agent.new_context()
+        context.add_message("user", "delete it")
+        context.add_message("assistant", "", tool_calls=[])
+        context.add_message("tool", '{"approved":true}', tool_call_id="call-1")
+        begin_guarded_run(context, context.usage.snapshot())
+
+        result = run_loop(
+            agent,
+            context,
+            "delete it",
+            force_verify=False,
+            max_attempts=None,
+            max_steps=20,
+            resume=True,
+        )
+
+        self.assertEqual(result.answer, "deleted")
+        self.assertEqual(sum(message.get("role") == "user" for message in context.get_messages()), 1)
+        self.assertEqual(sum(message.get("role") == "user" for message in model.messages), 1)
 
     def test_inner_loop_token_budget_reserves_a_final_answer(self) -> None:
         class BudgetModel:

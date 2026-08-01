@@ -33,11 +33,14 @@ def begin_live_trace(
     mode: str,
     user: str,
     prompt_messages: list[dict[str, Any]],
+    turn_id: str | None = None,
+    continuation: bool = False,
 ) -> tuple[Path, str]:
     session_id = str(context.metadata.get("session_id") or "session")
     session_dir = trace_root() / "sessions" / session_id
     events_path = session_dir / "events.jsonl"
-    turn_id = uuid4().hex
+    resuming = continuation and bool(turn_id)
+    turn_id = turn_id or uuid4().hex
     now = _now()
     manifest = _read_json(session_dir / "manifest.json") or {
         "schema_version": SCHEMA_VERSION,
@@ -49,20 +52,22 @@ def begin_live_trace(
         "model": context.metadata.get("friday.model_config", {}),
         "prefix_refs": [],
     }
-    manifest.update(updated_at=now, status="running", last_mode=mode)
+    model = context.metadata.get("friday.model_config", {})
+    manifest.update(updated_at=now, status="running", last_mode=mode, model=model)
     if not manifest.get("first_user"):
         manifest["first_user"] = _preview(user, 160)
     _write_json(session_dir / "manifest.json", manifest)
     _append_event(
         events_path,
         {
-            "type": "turn.start",
+            "type": "turn.resume" if resuming else "turn.start",
             "category": "turn",
             "turn_id": turn_id,
             "run_id": context.run_id,
             "data": {
                 "mode": mode,
                 "user": user,
+                "model": model,
                 "initial_messages": _store_messages(session_dir, prompt_messages),
             },
         },
@@ -151,6 +156,7 @@ def write_trace(
     verifications: list[dict[str, Any]] | None = None,
     context_notice: str = "",
     turn_id: str | None = None,
+    continuation: bool = False,
 ) -> Path:
     del workspace, start_event, prompt_messages
     session_id = str(context.metadata.get("session_id") or "session")
@@ -178,7 +184,7 @@ def write_trace(
     manifest.update(
         updated_at=_now(),
         status=str(context.metadata.get("friday.loop_status") or "done"),
-        turns=int(manifest.get("turns", 0) or 0) + 1,
+        turns=int(manifest.get("turns", 0) or 0) + (0 if continuation else 1),
         last_user=_preview(user, 160),
         last_assistant=_preview(assistant, 200),
     )

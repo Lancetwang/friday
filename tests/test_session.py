@@ -7,7 +7,7 @@ from unittest.mock import patch
 from agent_core import RunContext
 
 from friday.progress import PROGRESS_ARTIFACT
-from friday.session import APPROVAL_FOLLOWUP_PROMPT, FridaySession
+from friday.session import FridaySession
 from friday.turn import TurnResult
 
 
@@ -51,13 +51,12 @@ class SessionApprovalTests(unittest.TestCase):
             "delete the stale export",
             goal=True,
             approval_result={"approved": True},
-            user_label="/approve",
             continuation=True,
         )
         self.assertTrue(outcome["continued"])
         self.assertIsNone(session.suspended)
 
-    def test_approve_continues_normal_chat_with_followup_prompt(self) -> None:
+    def test_approve_continues_normal_chat_without_a_synthetic_user_prompt(self) -> None:
         session = FridaySession()
         session.suspended = {"text": "clean caches", "goal": False}
 
@@ -66,7 +65,7 @@ class SessionApprovalTests(unittest.TestCase):
                 with patch.object(FridaySession, "chat", return_value=_turn_result("reported")) as chat:
                     session.approve()
 
-        self.assertEqual(chat.call_args.args[0], APPROVAL_FOLLOWUP_PROMPT)
+        self.assertEqual(chat.call_args.args[0], "clean caches")
         self.assertFalse(chat.call_args.kwargs["goal"])
 
     def test_approve_without_session_state_executes_but_does_not_continue(self) -> None:
@@ -104,7 +103,7 @@ class SessionApprovalTests(unittest.TestCase):
         self.assertEqual(chat.call_args.args[0], "ship the release notes")
         self.assertTrue(chat.call_args.kwargs["goal"])
 
-    def test_reject_with_guidance_combines_goal_and_instruction(self) -> None:
+    def test_reject_with_guidance_resumes_original_goal_with_instruction_result(self) -> None:
         session = FridaySession()
         session.suspended = {"text": "delete file", "goal": True}
         rejection = {"approved": False, "rejected": True, "command": "rm file"}
@@ -114,9 +113,7 @@ class SessionApprovalTests(unittest.TestCase):
                 with patch.object(FridaySession, "chat", return_value=_turn_result("edited instead")) as chat:
                     outcome = session.reject("keep the file and edit it instead")
 
-        prompt = chat.call_args.args[0]
-        self.assertIn("delete file", prompt)
-        self.assertIn("keep the file and edit it instead", prompt)
+        self.assertEqual(chat.call_args.args[0], "delete file")
         self.assertEqual(chat.call_args.kwargs["approval_result"]["instruction"], "keep the file and edit it instead")
         self.assertTrue(outcome["continued"])
         finish.assert_called_once_with(session.workspace, pending=False)

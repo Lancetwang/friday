@@ -38,6 +38,8 @@ CONFIG_FIELDS = {
 }
 PROFILES_FILE = "models.json"
 CREDENTIALS_FILE = "model-credentials.json"
+WEB_CREDENTIALS_FILE = "web-credentials.json"
+WEB_SEARCH_KEYS = {"tavily": "TAVILY_API_KEY", "anysearch": "ANYSEARCH_API_KEY"}
 PROVIDERS = (
     {
         "id": "deepseek",
@@ -230,6 +232,51 @@ def model_api_key(config: ModelConfig, *, home: Path | None = None) -> str | Non
     return _read_credentials(home).get(config.profile_id) or _provider_env(config.provider)
 
 
+def load_web_search_settings(workspace: Path, *, home: Path | None = None) -> dict[str, bool]:
+    saved = _read_web_credentials(home)
+    return {
+        f"{provider}_configured": bool(
+            saved.get(env_name) or os.getenv(env_name) or _env_files_have_names(workspace, {env_name}, home)
+        )
+        for provider, env_name in WEB_SEARCH_KEYS.items()
+    }
+
+
+def save_web_search_settings(
+    workspace: Path,
+    *,
+    tavily_api_key: str | None = None,
+    anysearch_api_key: str | None = None,
+    clear_tavily: bool = False,
+    clear_anysearch: bool = False,
+    home: Path | None = None,
+) -> dict[str, bool]:
+    saved = _read_web_credentials(home)
+    cleared: list[tuple[str, str | None]] = []
+    for provider, value, clear in (
+        ("tavily", tavily_api_key, clear_tavily),
+        ("anysearch", anysearch_api_key, clear_anysearch),
+    ):
+        env_name = WEB_SEARCH_KEYS[provider]
+        previous = saved.get(env_name)
+        if clear:
+            saved.pop(env_name, None)
+            cleared.append((env_name, previous))
+        elif value is not None and value.strip():
+            secret = value.strip()
+            if len(secret) > 4096 or "\n" in secret or "\r" in secret:
+                raise ValueError(f"Invalid {provider} API key.")
+            saved[env_name] = secret
+            os.environ[env_name] = secret
+    _write_json(friday_home(home) / WEB_CREDENTIALS_FILE, saved, private=True)
+    for env_name, previous in cleared:
+        if previous and os.getenv(env_name) == previous:
+            os.environ.pop(env_name, None)
+    if cleared:
+        load_model_environment(workspace, home=home)
+    return load_web_search_settings(workspace, home=home)
+
+
 def output_token_limit(config: ModelConfig, value: int) -> dict[str, int]:
     key = "max_completion_tokens" if config.provider in {"mimo", "openai"} else "max_tokens"
     return {key: min(value, config.max_output_tokens)}
@@ -279,6 +326,7 @@ def load_model_environment(workspace: Path, *, home: Path | None = None) -> None
             if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
                 value = value[1:-1]
             os.environ[key] = value
+    os.environ.update(_read_web_credentials(home))
 
 
 def default_config_text() -> str:
@@ -381,7 +429,10 @@ def _provider_env_names(provider: str) -> tuple[str, ...]:
 
 
 def _env_file_has_key(workspace: Path, provider: str, home: Path | None) -> bool:
-    names = set(filter(None, _provider_env_names(provider)))
+    return _env_files_have_names(workspace, set(filter(None, _provider_env_names(provider))), home)
+
+
+def _env_files_have_names(workspace: Path, names: set[str], home: Path | None) -> bool:
     for path in (workspace.resolve() / ".env", friday_home(home) / ".env"):
         if not path.exists():
             continue
@@ -410,6 +461,15 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 def _read_credentials(home: Path | None = None) -> dict[str, str]:
     values = _read_json_object(friday_home(home) / CREDENTIALS_FILE)
     return {str(key): str(value) for key, value in values.items() if isinstance(value, str) and value}
+
+
+def _read_web_credentials(home: Path | None = None) -> dict[str, str]:
+    values = _read_json_object(friday_home(home) / WEB_CREDENTIALS_FILE)
+    return {
+        key: str(values[key])
+        for key in WEB_SEARCH_KEYS.values()
+        if isinstance(values.get(key), str) and str(values[key]).strip()
+    }
 
 
 def _write_json(path: Path, value: Any, *, private: bool = False) -> None:

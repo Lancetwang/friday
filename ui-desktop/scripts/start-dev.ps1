@@ -75,7 +75,8 @@ try {
         Invoke-Logged "Tauri shell build" { cargo build --manifest-path (Join-Path $tauriRoot "Cargo.toml") }
     }
 
-    $runtimeSidecar = Join-Path (Split-Path $executable) $sidecar.Name
+    # Tauri resolves the configured sidecar to this runtime name in target/debug.
+    $runtimeSidecar = Join-Path (Split-Path $executable) "friday-app-server.exe"
     if (-not (Test-Path $runtimeSidecar) -or (Get-FileHash $runtimeSidecar).Hash -ne (Get-FileHash $sidecar.FullName).Hash) {
         Copy-Item -LiteralPath $sidecar.FullName -Destination $runtimeSidecar -Force
     }

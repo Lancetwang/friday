@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from agent_core import CallableNode, Flow, ModelNode, RunContext, Tool, ToolCallNode, ToolExecutor, ToolRouterNode, get_current_context
@@ -10,6 +12,7 @@ from agent_core.llm import ChatModel
 
 from friday.config import DEFAULT_MODEL_CONFIG
 from friday.context import TOOL_COMPACT_AT, compact_tool_results, context_ratio
+from friday.tools import IMAGE_MIME_TYPES, MAX_IMAGE_BYTES
 
 GUARD_STATE = "friday.loop_guard"
 GUARD_STOP_REASON = "friday.guard_stop_reason"
@@ -71,6 +74,7 @@ def _guard_after_tools(payload: Any):
     if context is None:
         return "chat", state
 
+    _attach_tool_images(context, state)
     approval = _approval_required(context)
     if approval:
         context.emit("approval.pending", category="tool", action="suspend", data=approval)
@@ -83,6 +87,35 @@ def _guard_after_tools(payload: Any):
         context.add_message("system", _finalize_message(reason))
         state["chat_kwargs"] = {**dict(state.get("chat_kwargs", {}) or {}), "tool_choice": "none"}
     return "chat", state
+
+
+def _attach_tool_images(context: RunContext, state: dict[str, Any]) -> None:
+    parts: list[dict[str, Any]] = []
+    workspace = Path(str(context.metadata.get("workspace") or ".")).resolve()
+    for result in state.get("tool_results", [])[:4]:
+        try:
+            value = json.loads(result.content)
+        except (AttributeError, json.JSONDecodeError):
+            continue
+        if not isinstance(value, dict) or value.get("image") is not True:
+            continue
+        path = Path(str(value.get("path") or "")).resolve()
+        mime_type = IMAGE_MIME_TYPES.get(path.suffix.lower())
+        if not mime_type or not path.is_file() or (path != workspace and workspace not in path.parents):
+            continue
+        if path.stat().st_size > MAX_IMAGE_BYTES:
+            continue
+        parts.extend(
+            [
+                {"type": "text", "text": f"Image loaded from {path.relative_to(workspace).as_posix()} for visual inspection."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"},
+                },
+            ]
+        )
+    if parts:
+        context.add_message("user", parts, friday_internal=True)
 
 
 def _suspend_for_approval(payload: Any):

@@ -11,15 +11,43 @@ from friday.memory import (
     capture_user_memory,
     consolidate_memory,
     list_memories,
+    load_user_profile_settings,
     relevant_memory,
     remove_memory,
     run_memory_command,
     search_memories,
+    save_user_profile_settings,
     update_memory,
 )
 
 
 class MemoryTests(unittest.TestCase):
+    def test_user_profile_form_preserves_manual_content_and_memory_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            path = home / ".friday" / "USER.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("# User Profile\n\n- Keep this manual memory.\n", encoding="utf-8")
+
+            saved = save_user_profile_settings(
+                {
+                    "preferred_name": "Kai",
+                    "preferred_language": "Chinese",
+                    "habits": "- Keep answers concise.\n- Use PowerShell examples.",
+                },
+                home=home,
+            )
+
+            self.assertEqual(load_user_profile_settings(home=home), saved)
+            self.assertEqual([item["content"] for item in list_memories(root, scope="user", home=home)], ["Keep this manual memory."])
+            self.assertEqual(path.read_text(encoding="utf-8").count("friday-profile:start"), 1)
+
+            save_user_profile_settings({"preferred_name": "", "preferred_language": "", "habits": ""}, home=home)
+            self.assertNotIn("friday-profile:start", path.read_text(encoding="utf-8"))
+            self.assertIn("Keep this manual memory.", path.read_text(encoding="utf-8"))
+
     def test_markdown_memory_supports_lifecycle_without_a_database(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

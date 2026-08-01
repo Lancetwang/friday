@@ -88,7 +88,11 @@ def conversation_body(messages: list[Any]) -> list[dict[str, Any]]:
 def recent_turns(messages: list[Any], limit: int = RECENT_CONVERSATION_LIMIT) -> list[dict[str, Any]]:
     """The latest complete user turns, verbatim, including tool calls and results."""
     body = [dict(message) for message in messages if isinstance(message, dict) and not is_progress_checkpoint(message)]
-    user_indices = [index for index, message in enumerate(body) if message.get("role") == "user"]
+    user_indices = [
+        index
+        for index, message in enumerate(body)
+        if message.get("role") == "user" and not message.get("friday_internal")
+    ]
     if not user_indices:
         return []
     return body[user_indices[-limit] :]
@@ -125,6 +129,7 @@ def save_turn(
     user_message_times: list[dict[str, str]] | None = None,
     thinking_effort: str = DEFAULT_THINKING_EFFORT,
     artifacts: list[dict[str, Any]] | None = None,
+    continuation: bool = False,
 ) -> Path:
     """Persist one snapshot per session, overwritten in place (atomic).
 
@@ -179,7 +184,7 @@ def save_turn(
         "created": existing.get("created") or now,
         "updated": now,
         "title": existing.get("title") or "",
-        "turns": int(existing.get("turns", 0) or 0) + 1,
+        "turns": int(existing.get("turns", 0) or 0) + (0 if continuation else 1),
         "user": existing.get("user") or preview(user, 180),
         "assistant": preview(assistant, 220),
         "messages": messages or [],
@@ -315,7 +320,7 @@ def fork_session(
     copied = body[: message_index + 1]
     session_id = new_session_id()
     now = datetime.now().isoformat(timespec="seconds")
-    user_count = sum(message.get("role") == "user" for message in copied)
+    user_count = sum(message.get("role") == "user" and not message.get("friday_internal") for message in copied)
     snapshot = {
         "session_id": session_id,
         "created": now,

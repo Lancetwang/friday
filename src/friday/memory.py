@@ -15,6 +15,9 @@ USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
 EPISODE_LIMIT = 2000
 MEMORY_SCOPES = ("user", "global", "project", "episode")
+_PROFILE_START = "<!-- friday-profile:start -->"
+_PROFILE_END = "<!-- friday-profile:end -->"
+_PROFILE_BLOCK_RE = re.compile(re.escape(_PROFILE_START) + r"\n(.*?)\n" + re.escape(_PROFILE_END), re.DOTALL)
 
 _META_RE = re.compile(r"^<!-- friday-memory (\{.*\}) -->$")
 _SECRET_RE = re.compile(
@@ -42,6 +45,72 @@ _HOT_USER_RE = re.compile(
     r"(?i:\bi (?:prefer|like|dislike|usually|tend)\b|my name is|"
     r"\bi am (?:an? )?(?:developer|engineer|student|researcher|writer|designer)\b)"
 )
+
+
+def load_user_profile_settings(*, home: Path | None = None) -> dict[str, str]:
+    path = friday_home(home) / "USER.md"
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    match = _PROFILE_BLOCK_RE.search(text)
+    if not match:
+        return {"preferred_name": "", "preferred_language": "", "habits": ""}
+    body = match.group(1)
+    name = re.search(r"^Preferred name:\s*(.*)$", body, re.MULTILINE)
+    language = re.search(r"^Preferred language:\s*(.*)$", body, re.MULTILINE)
+    habits = body.split("Habits and preferences:\n", 1)
+    habit_text = ""
+    if len(habits) == 2:
+        habit_text = "\n".join(line[2:] if line.startswith("  ") else line for line in habits[1].splitlines()).strip()
+    return {
+        "preferred_name": name.group(1).strip() if name else "",
+        "preferred_language": language.group(1).strip() if language else "",
+        "habits": habit_text,
+    }
+
+
+def save_user_profile_settings(value: dict[str, Any], *, home: Path | None = None) -> dict[str, str]:
+    profile = {
+        "preferred_name": _profile_field(value.get("preferred_name"), "Preferred name", 100),
+        "preferred_language": _profile_field(value.get("preferred_language"), "Preferred language", 100),
+        "habits": _profile_field(value.get("habits"), "Habits", 1000),
+    }
+    if "\n" in profile["preferred_name"] or "\n" in profile["preferred_language"]:
+        raise ValueError("Preferred name and language must each fit on one line.")
+    path = friday_home(home) / "USER.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = path.read_text(encoding="utf-8") if path.exists() else "# User Profile\n"
+    base = _PROFILE_BLOCK_RE.sub("", current).rstrip()
+    if any(profile.values()):
+        habits = "\n".join(f"  {line}" for line in profile["habits"].splitlines())
+        block = (
+            f"{_PROFILE_START}\n## Personal Profile\n"
+            f"Preferred name: {profile['preferred_name']}\n"
+            f"Preferred language: {profile['preferred_language']}\n"
+            f"Habits and preferences:\n{habits}\n{_PROFILE_END}"
+        )
+        updated = f"{base}\n\n{block}\n"
+    else:
+        updated = f"{base}\n"
+    if len(updated) > USER_LIMIT:
+        raise ValueError(f"User profile would exceed {USER_LIMIT} characters.")
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(updated, encoding="utf-8")
+    temporary.replace(path)
+    return profile
+
+
+def _profile_field(value: Any, label: str, limit: int) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be text.")
+    result = value.strip()
+    if len(result) > limit:
+        raise ValueError(f"{label} must be at most {limit} characters.")
+    if _PROFILE_START in result or _PROFILE_END in result or _SECRET_RE.search(result):
+        raise ValueError(f"{label} contains unsupported or secret content.")
+    return result
+
+
 def memory_status(workspace: Path, *, home: Path | None = None) -> dict[str, Any]:
     root = workspace.resolve()
     records = list_memories(root, home=home)

@@ -18,11 +18,13 @@ from friday.config import (
     delete_model_profile,
     load_model_catalog,
     load_model_config,
+    load_web_search_settings,
     save_model_profile,
+    save_web_search_settings,
     select_model_profile,
 )
 from friday.context import context_report
-from friday.memory import format_memory_result, run_memory_command
+from friday.memory import format_memory_result, load_user_profile_settings, run_memory_command, save_user_profile_settings
 from friday.model_options import supports_thinking
 from friday.session import FridaySession
 from friday.skills import discover_skills, skill_body
@@ -136,18 +138,7 @@ class Gateway:
         )
         session.on_event = lambda event: self.on_agent_event(event, session)
         session.on_turn_start = lambda text: self.session_event(session, "message.start", {"text": text})
-        session.on_turn_complete = lambda result: self.session_event(
-            session,
-            "message.complete",
-            {
-                "text": result.answer,
-                "metrics": result.metrics,
-                "progress": result.progress,
-                "artifacts": result.artifacts,
-                "fork_points": fork_points(session),
-                "verification": verification_status(result.verifications[-1]) if result.verifications else None,
-            },
-        )
+        session.on_turn_complete = lambda result: self._turn_complete(session, result)
         return session
 
     def handle(self, msg: dict[str, Any]) -> None:
@@ -227,6 +218,38 @@ class Gateway:
                 if self.session.model_profile not in {profile["id"] for profile in catalog["profiles"]}:
                     self.session.select_model(catalog["active"])
                 self.ok(rid, {"catalog": catalog, "info": self.session_info()})
+            elif method == "settings.get":
+                self.ok(
+                    rid,
+                    {
+                        "web_search": load_web_search_settings(Path.cwd().resolve()),
+                        "user_profile": load_user_profile_settings(),
+                    },
+                )
+            elif method == "settings.web.save":
+                self.ok(
+                    rid,
+                    save_web_search_settings(
+                        Path.cwd().resolve(),
+                        tavily_api_key=(
+                            params.get("tavily_api_key")
+                            if isinstance(params.get("tavily_api_key"), str)
+                            else None
+                        ),
+                        anysearch_api_key=(
+                            params.get("anysearch_api_key")
+                            if isinstance(params.get("anysearch_api_key"), str)
+                            else None
+                        ),
+                        clear_tavily=bool(params.get("clear_tavily")),
+                        clear_anysearch=bool(params.get("clear_anysearch")),
+                    ),
+                )
+            elif method == "settings.user.save":
+                profile = params.get("profile")
+                if not isinstance(profile, dict):
+                    raise ValueError("User profile settings must be an object.")
+                self.ok(rid, save_user_profile_settings(profile))
             elif method == "trace.serve":
                 _server, url = start_trace_server(port=0)
                 self.ok(rid, {"url": url})
@@ -343,7 +366,8 @@ class Gateway:
                 self.ok(rid, pending_approval())
             elif method == "approval.approve":
                 outcome = self.session.approve(for_session=bool(params.get("session")))
-                self.event("approval.resolved", {"decision": "approve", "continued": outcome["continued"]})
+                if not outcome["continued"]:
+                    self.event("approval.resolved", {"decision": "approve", "continued": False})
                 if outcome["continued"]:
                     self.ok(
                         rid,
@@ -361,7 +385,8 @@ class Gateway:
                 if not instruction:
                     raise ValueError("Tell Friday what to do before continuing.")
                 outcome = self.session.reject(instruction)
-                self.event("approval.resolved", {"decision": "instruct", "continued": outcome["continued"]})
+                if not outcome["continued"]:
+                    self.event("approval.resolved", {"decision": "instruct", "continued": False})
                 if outcome["continued"]:
                     self.ok(
                         rid,
@@ -417,6 +442,21 @@ class Gateway:
             thread.start()
         else:
             work()
+
+    def _turn_complete(self, session: FridaySession, result: Any) -> None:
+        suspended = str(result.progress.get("status") or "") == "waiting"
+        self.session_event(
+            session,
+            "message.suspended" if suspended else "message.complete",
+            {
+                "text": result.answer,
+                "metrics": result.metrics,
+                "progress": result.progress,
+                "artifacts": result.artifacts,
+                "fork_points": [] if suspended else fork_points(session),
+                "verification": verification_status(result.verifications[-1]) if result.verifications else None,
+            },
+        )
 
     def session_choices(self) -> list[dict[str, Any]]:
         choices = resume_choices(limit=50)
@@ -529,6 +569,8 @@ class Gateway:
             )
         elif event.type == "approval.pending":
             self.session_event(session, "approval.pending", dict(event.data))
+        elif event.type == "approval.resolved":
+            self.session_event(session, "approval.resolved", dict(event.data))
 
     def _finish_reasoning(self, session: FridaySession, *, error: bool = False) -> None:
         prefix = f"{session.session_id}:"
@@ -585,7 +627,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
     for message_index, message in enumerate(conversation_body(session.context.get_messages())):
         role = message.get("role")
         content = _message_text(message.get("content"))
-        if role == "user" and content:
+        if role == "user" and content and not message.get("friday_internal"):
             flush_assistant()
             history.append(
                 {

@@ -2,7 +2,7 @@
 
 Friday keeps the tool surface small:
 
-- `Read`: read a line window from a file.
+- `Read`: read a line window from a text file, or load a local image into a vision-capable model.
 - `Write`: create or overwrite a UTF-8 text file.
 - `Edit`: edit by line range or exact text match.
 - `Bash`: run shell commands in the workspace.
@@ -20,7 +20,7 @@ Every Bash call passes a code-level pre-execution policy. Destructive system ope
 
 After a completed turn, Friday compares its existing checkpoint trees and attaches changed Markdown, text, image, PDF, JSON, CSV, and HTML files to that assistant reply. The desktop reads previews only through workspace-relative paths, renders HTML as source text, and rejects unsupported, escaped, missing, or over-25-MB files.
 
-`WebSearch` uses Tavily first when `TAVILY_API_KEY` is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Set `ANYSEARCH_API_KEY` for higher AnySearch limits; anonymous fallback remains available. Keys can be placed in the process environment, the workspace `.env`, or `~/.friday/.env`.
+`WebSearch` uses Tavily first when `TAVILY_API_KEY` is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Set `ANYSEARCH_API_KEY` for higher AnySearch limits; anonymous fallback remains available. Keys can be configured through **Settings > Web Search**, the process environment, the workspace `.env`, or `~/.friday/.env`. Desktop-managed keys are stored privately in `~/.friday/web-credentials.json` and are never returned to the UI.
 `WebFetch` works without a key through Jina Reader; set `JINA_API_KEY` for higher rate limits.
 They are Friday application tools, not part of `friday-agent-core`.
 

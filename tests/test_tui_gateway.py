@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import tempfile
 import threading
@@ -97,6 +98,19 @@ class TuiGatewayTests(unittest.TestCase):
 
         error.assert_called_once_with("1", "unknown method: prompt.get")
 
+    def test_gateway_settings_return_status_without_credentials(self) -> None:
+        gateway = Gateway()
+
+        with patch("friday.app_server.load_web_search_settings", return_value={"tavily_configured": True}), patch(
+            "friday.app_server.load_user_profile_settings",
+            return_value={"preferred_name": "Kai", "preferred_language": "Chinese", "habits": ""},
+        ), patch.object(gateway, "ok") as ok:
+            gateway.handle({"id": "1", "method": "settings.get"})
+
+        result = ok.call_args.args[1]
+        self.assertEqual(result["web_search"], {"tavily_configured": True})
+        self.assertNotIn("api_key", json.dumps(result))
+
     def test_verification_status_omits_trace_details(self) -> None:
         result = verification_status(
             {
@@ -190,6 +204,19 @@ class TuiGatewayTests(unittest.TestCase):
             callback(result)
 
         self.assertEqual(event.call_args.args[1]["artifacts"], result.artifacts)
+
+    def test_pending_approval_suspends_without_completing_the_message(self) -> None:
+        gateway = Gateway()
+        callback = gateway.session.on_turn_complete
+        assert callback is not None
+        result = _turn_result("")
+        result.progress = {"status": "waiting"}
+
+        with patch.object(gateway, "event") as event:
+            callback(result)
+
+        self.assertEqual(event.call_args.args[0], "message.suspended")
+        self.assertEqual(event.call_args.args[1]["fork_points"], [])
 
     def test_artifact_preview_stays_inside_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,7 +598,6 @@ class TuiGatewayTests(unittest.TestCase):
             "delete file",
             goal=True,
             approval_result={"approved": True},
-            user_label="/approve",
             continuation=True,
         )
         self.assertIsNone(gateway.session.suspended)
@@ -590,11 +616,9 @@ class TuiGatewayTests(unittest.TestCase):
                     with patch.object(gateway, "write"):
                         gateway.handle({"id": "1", "method": "approval.approve"})
 
-        prompt = chat.call_args.args[0]
-        self.assertIn("approved the pending command", prompt)
+        self.assertEqual(chat.call_args.args[0], "delete file")
         self.assertFalse(chat.call_args.kwargs["goal"])
         self.assertEqual(chat.call_args.kwargs["approval_result"], result)
-        self.assertEqual(chat.call_args.kwargs["user_label"], "/approve")
         self.assertTrue(chat.call_args.kwargs["continuation"])
         self.assertIsNone(gateway.session.suspended)
 
@@ -623,12 +647,10 @@ class TuiGatewayTests(unittest.TestCase):
                     with patch.object(gateway, "write"):
                         gateway.handle({"id": "1", "method": "approval.instruct", "params": {"text": "keep the file and edit it instead"}})
 
-        prompt = chat.call_args.args[0]
-        self.assertIn("delete file", prompt)
-        self.assertIn("keep the file", prompt)
+        self.assertEqual(chat.call_args.args[0], "delete file")
         self.assertTrue(chat.call_args.kwargs["goal"])
         self.assertTrue(chat.call_args.kwargs["continuation"])
-        self.assertEqual(chat.call_args.kwargs["user_label"], "keep the file and edit it instead")
+        self.assertEqual(chat.call_args.kwargs["approval_result"]["instruction"], "keep the file and edit it instead")
         self.assertIsNone(gateway.session.suspended)
 
 

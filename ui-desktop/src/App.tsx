@@ -120,6 +120,22 @@ type ModelCatalog = {
   providers: ModelProvider[]
 }
 
+type WebSearchSettings = {
+  anysearch_configured: boolean
+  tavily_configured: boolean
+}
+
+type UserProfileSettings = {
+  habits: string
+  preferred_language: string
+  preferred_name: string
+}
+
+type AppSettings = {
+  user_profile: UserProfileSettings
+  web_search: WebSearchSettings
+}
+
 type ResumeChoice = {
   assistant: string
   id: string
@@ -370,11 +386,10 @@ function App() {
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [theme, setTheme] = useState<Theme>(loadTheme)
-  const [page, setPage] = useState<'chat' | 'skills'>('chat')
+  const [page, setPage] = useState<'chat' | 'settings' | 'skills'>('chat')
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null)
   const [skillError, setSkillError] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
-  const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [artifactPreview, setArtifactPreview] = useState<ArtifactDetail | null>(null)
   const [previewImage, setPreviewImage] = useState('')
   const [views, setViews] = useState<Record<string, ProjectView>>({})
@@ -499,7 +514,7 @@ function App() {
     else localStorage.removeItem(ACTIVE_PROJECT_KEY)
     setRenaming(null)
     setArtifactPreview(null)
-    setModelSettingsOpen(false)
+    setPage('chat')
     setPreviewImage('')
     setSkillDetail(null)
     setSkillError('')
@@ -642,6 +657,12 @@ function App() {
             items: found ? items : [...items, { id, kind: 'assistant', text }]
           }
         })
+      } else if (type === 'message.suspended') {
+        updateView(workspace, current => ({
+          ...current,
+          busy: false,
+          cancelling: false
+        }))
       } else if (type === 'message.complete') {
         const text = String(payload.text || '')
         const metrics = (payload.metrics || {}) as Metrics
@@ -739,7 +760,12 @@ function App() {
       } else if (type === 'approval.pending') {
         updateView(workspace, current => ({ ...current, busy: false, pendingApproval: payload as Approval }))
       } else if (type === 'approval.resolved') {
-        updateView(workspace, current => ({ ...current, busy: false, guidance: '', pendingApproval: null }))
+        updateView(workspace, current => ({
+          ...current,
+          busy: Boolean(payload.continued),
+          guidance: '',
+          pendingApproval: null
+        }))
       } else if (type === 'verification.start') {
         updateView(workspace, current => ({
           ...current,
@@ -952,12 +978,21 @@ function App() {
         return result.catalog
       })
 
+  const settingsWorkspace = activeProject || defaultWorkspace
+  const loadSettings = () => sendGateway<AppSettings>(settingsWorkspace, 'settings.get')
+  const saveWebSettings = (value: Record<string, unknown>) =>
+    sendGateway<WebSearchSettings>(settingsWorkspace, 'settings.web.save', value)
+  const saveUserProfile = (profile: UserProfileSettings) =>
+    sendGateway<UserProfileSettings>(settingsWorkspace, 'settings.user.save', { profile })
+
   const resolveApproval = (method: string, params: Record<string, unknown> = {}) => {
-    updateView(activeProject, current => ({ ...current, busy: true }))
+    const approval = pendingApproval
+    updateView(activeProject, current => ({ ...current, busy: true, pendingApproval: null }))
     void sendGateway(activeProject, method, params).catch(error => {
       updateView(activeProject, current => ({
         ...current,
         busy: false,
+        pendingApproval: approval,
         items: [...current.items, { id: nextId('approval'), kind: 'system', text: String(error) }]
       }))
     })
@@ -1278,8 +1313,11 @@ function App() {
       .catch(error => setSkillError(String(error)))
   }
 
+  const loadArtifact = (artifact: ArtifactInfo) =>
+    sendGateway<ArtifactDetail>(activeProject, 'artifact.get', { path: artifact.path })
+
   const openArtifact = (artifact: ArtifactInfo) => {
-    void sendGateway<ArtifactDetail>(activeProject, 'artifact.get', { path: artifact.path })
+    void loadArtifact(artifact)
       .then(setArtifactPreview)
       .catch(error => updateView(activeProject, current => ({
         ...current,
@@ -1481,16 +1519,16 @@ function App() {
 
           <div className="sidebar-footer">
             <button
-              className="sidebar-status"
-              disabled={!activeProject}
-              onClick={() => setModelSettingsOpen(true)}
-              title="Configure models"
+              className={`sidebar-status ${page === 'settings' ? 'active' : ''}`}
+              disabled={!settingsWorkspace}
+              onClick={() => setPage(current => current === 'settings' ? 'chat' : 'settings')}
+              title="Settings"
               type="button"
             >
               <span className={`status-dot ${status} ${status === 'ready' && !info.model_configured ? 'needs-key' : ''}`} />
               <span className="sidebar-status-copy">
-                <strong>{busy ? 'Working' : status === 'ready' && !info.model_configured ? 'API key required' : status === 'ready' ? 'Ready' : status === 'error' ? 'Unavailable' : status === 'idle' ? 'No project' : 'Connecting'}</strong>
-                <span>{info.model_name || info.model}</span>
+                <strong>Settings</strong>
+                <span>{busy ? 'Working' : status === 'ready' && !info.model_configured ? 'API key required' : info.model_name || info.model}</span>
               </span>
               <span aria-hidden="true" className="footer-chevron">{'\u203a'}</span>
             </button>
@@ -1528,7 +1566,17 @@ function App() {
         />
 
         <main className={`workspace ${forkTree.nodes.length > 1 ? 'has-forks' : ''}`}>
-        {page === 'skills' ? (
+        {page === 'settings' ? (
+          <SettingsPage
+            catalog={models}
+            onClose={() => setPage('chat')}
+            onDelete={deleteModel}
+            onLoad={loadSettings}
+            onSave={saveModel}
+            onSaveProfile={saveUserProfile}
+            onSaveWeb={saveWebSettings}
+          />
+        ) : page === 'skills' ? (
           <SkillBrowser
             detail={skillDetail}
             error={skillError}
@@ -1561,11 +1609,11 @@ function App() {
           ref={timeline}
         >
           {showWelcome && <WelcomePrompt key={activeProject} />}
-          {!showWelcome && groupToolItems(timelineItems).map(item => Array.isArray(item)
+          {!showWelcome && groupActivityItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
-              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onFork={forkConversation} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
-              : <ToolGroup items={item} key={`tools-${item[0]!.id}`} />
-            : <TimelineRow busy={busy} item={item} key={item.id} onFork={forkConversation} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
+              ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onFork={forkConversation} onLoadArtifact={loadArtifact} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
+              : <ActivityGroup items={item} key={`activity-${item[0]!.id}`} onOpenLink={openLinkExternally} />
+            : <TimelineRow busy={busy} item={item} key={item.id} onFork={forkConversation} onLoadArtifact={loadArtifact} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
           {pendingApproval && (
             <section className="approval-panel">
               <strong>Approval required</strong>
@@ -1717,7 +1765,7 @@ function App() {
                     className="configure-models"
                     onClick={event => {
                       event.currentTarget.closest('details')?.removeAttribute('open')
-                      setModelSettingsOpen(true)
+                      setPage('settings')
                     }}
                     type="button"
                   >
@@ -1790,14 +1838,6 @@ function App() {
         </>
         )}
         </main>
-        {modelSettingsOpen && (
-          <ModelSettings
-            catalog={models}
-            onClose={() => setModelSettingsOpen(false)}
-            onDelete={deleteModel}
-            onSave={saveModel}
-          />
-        )}
         {artifactPreview && (
           <div aria-modal="true" className="artifact-preview-backdrop" onMouseDown={() => setArtifactPreview(null)} role="dialog">
             <section className="artifact-preview" onMouseDown={event => event.stopPropagation()}>
@@ -2108,17 +2148,34 @@ function MoonIcon() {
   )
 }
 
-function ModelSettings({
+type SettingsSection = 'models' | 'web' | 'memory'
+
+const SETTINGS_SECTIONS: ReadonlyArray<{ hint: string; id: SettingsSection; label: string }> = [
+  { hint: 'Providers and API keys', id: 'models', label: 'Models' },
+  { hint: 'Tavily and AnySearch', id: 'web', label: 'Web Search' },
+  { hint: 'Your Friday profile', id: 'memory', label: 'Memory' }
+]
+
+function SettingsPage({
   catalog,
   onClose,
   onDelete,
-  onSave
+  onLoad,
+  onSave,
+  onSaveProfile,
+  onSaveWeb
 }: {
   catalog: ModelCatalog
   onClose: () => void
   onDelete: (id: string) => Promise<ModelCatalog>
+  onLoad: () => Promise<AppSettings>
   onSave: (profile: ModelDraft, apiKey: string, clearApiKey: boolean) => Promise<ModelCatalog>
+  onSaveProfile: (profile: UserProfileSettings) => Promise<UserProfileSettings>
+  onSaveWeb: (value: Record<string, unknown>) => Promise<WebSearchSettings>
 }) {
+  const [section, setSection] = useState<SettingsSection>('models')
+  const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [settingsError, setSettingsError] = useState('')
   const [selectedId, setSelectedId] = useState(catalog.active)
   const [draft, setDraft] = useState<ModelDraft>(() => modelDraft(catalog.profiles.find(item => item.id === catalog.active)))
   const [apiKey, setApiKey] = useState('')
@@ -2129,6 +2186,26 @@ function ModelSettings({
   const [saving, setSaving] = useState(false)
   const provider = catalog.providers.find(item => item.id === draft.provider) || catalog.providers[0]
   const vision = provider?.models.find(item => item.id === draft.model)?.vision || false
+
+  useEffect(() => {
+    let active = true
+    void onLoad()
+      .then(value => {
+        if (active) setSettings(value)
+      })
+      .catch(value => {
+        if (active) setSettingsError(String(value))
+      })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   const edit = (profile?: ModelProfile) => {
     setSelectedId(profile?.id || '')
@@ -2162,35 +2239,61 @@ function ModelSettings({
       .finally(() => setSaving(false))
   }
 
+  const persistWeb = (value: Record<string, unknown>) => onSaveWeb(value).then(webSearch => {
+    setSettings(current => current ? { ...current, web_search: webSearch } : current)
+    return webSearch
+  })
+
+  const persistProfile = (profile: UserProfileSettings) => onSaveProfile(profile).then(userProfile => {
+    setSettings(current => current ? { ...current, user_profile: userProfile } : current)
+    return userProfile
+  })
+
   return (
-    <div className="model-settings-backdrop" onMouseDown={onClose}>
-      <section aria-modal="true" className="model-settings" onMouseDown={event => event.stopPropagation()} role="dialog">
-        <header>
-          <div>
-            <h2>Models</h2>
-            <p>Provider credentials stay on this computer.</p>
-          </div>
-          <button aria-label="Close model settings" onClick={onClose} title="Close" type="button">{'\u00d7'}</button>
-        </header>
-        <div className="model-settings-body">
-          <aside>
-            <button className="add-model" onClick={() => edit()} type="button">+ Add model</button>
-            {catalog.profiles.map(profile => (
-              <button
-                className={profile.id === selectedId ? 'active' : ''}
-                key={profile.id}
-                onClick={() => edit(profile)}
-                type="button"
-              >
-                <span>
-                  <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
-                  <small>{profile.provider} / {profile.model}</small>
-                </span>
-                <span className={`model-key ${profile.api_key_configured ? 'configured' : ''}`} />
-              </button>
-            ))}
-          </aside>
-          <form onSubmit={save}>
+    <div className="settings-page">
+      <aside className="settings-nav">
+        <button className="settings-back" onClick={onClose} title="Back to conversation (Esc)" type="button">
+          <span aria-hidden="true">{'\u2039'}</span>
+          <span>Back</span>
+        </button>
+        <div className="settings-nav-group">
+          {SETTINGS_SECTIONS.map(item => (
+            <button
+              className={`settings-section ${section === item.id ? 'active' : ''}`}
+              key={item.id}
+              onClick={() => setSection(item.id)}
+              type="button"
+            >
+              <strong>{item.label}</strong>
+              <small>{item.hint}</small>
+            </button>
+          ))}
+        </div>
+      </aside>
+      <section className="settings-content">
+          {section === 'models' && <div className="settings-section-wrap">
+            <header className="settings-head">
+              <h2>Models</h2>
+              <p>Providers and API keys. Credentials stay on this computer.</p>
+            </header>
+            <div className="model-profile-list">
+              {catalog.profiles.map(profile => (
+                <button
+                  className={profile.id === selectedId ? 'active' : ''}
+                  key={profile.id}
+                  onClick={() => edit(profile)}
+                  type="button"
+                >
+                  <span>
+                    <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
+                    <small>{profile.provider} / {profile.model}</small>
+                  </span>
+                  <span className={`model-key ${profile.api_key_configured ? 'configured' : ''}`} />
+                </button>
+              ))}
+              <button className="add-model" onClick={() => edit()} type="button">+ Add model</button>
+            </div>
+            <form className="settings-form" onSubmit={save}>
             <div className="model-form-heading">
               <div>
                 <h3>{selectedId ? 'Model configuration' : 'New model'}</h3>
@@ -2285,15 +2388,170 @@ function ModelSettings({
                 {clearApiKey ? 'Will remove the saved key' : 'Remove saved API key'}
               </button>
             )}
-            {error && <div className="model-settings-error">{error}</div>}
+            {error && <div className="settings-error">{error}</div>}
             <footer>
               <button className="remove-model" disabled={saving || !selectedId || catalog.profiles.length < 2} onClick={remove} type="button">Remove</button>
               <button className="save-model" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save and use'}</button>
             </footer>
-          </form>
-        </div>
+            </form>
+          </div>}
+          {section === 'web' && (
+            <div className="settings-section-wrap">
+              <header className="settings-head">
+                <h2>Web Search</h2>
+                <p>Friday tries Tavily first, then falls back to AnySearch.</p>
+              </header>
+              {settings
+                ? <WebSearchSettingsForm initial={settings.web_search} onSave={persistWeb} />
+                : <SettingsLoading error={settingsError} />}
+            </div>
+          )}
+          {section === 'memory' && (
+            <div className="settings-section-wrap">
+              <header className="settings-head">
+                <h2>Memory</h2>
+                <p>These details become part of Friday's user profile.</p>
+              </header>
+              {settings
+                ? <UserProfileSettingsForm initial={settings.user_profile} onSave={persistProfile} />
+                : <SettingsLoading error={settingsError} />}
+            </div>
+          )}
       </section>
     </div>
+  )
+}
+
+function SettingsLoading({ error }: { error: string }) {
+  return <div className={`settings-loading ${error ? 'error' : ''}`}>{error || 'Loading settings...'}</div>
+}
+
+function WebSearchSettingsForm({
+  initial,
+  onSave
+}: {
+  initial: WebSearchSettings
+  onSave: (value: Record<string, unknown>) => Promise<WebSearchSettings>
+}) {
+  const [configured, setConfigured] = useState(initial)
+  const [tavilyKey, setTavilyKey] = useState('')
+  const [anysearchKey, setAnysearchKey] = useState('')
+  const [clearTavily, setClearTavily] = useState(false)
+  const [clearAnysearch, setClearAnysearch] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const save = (event: FormEvent) => {
+    event.preventDefault()
+    setSaving(true)
+    setFailed(false)
+    setMessage('')
+    void onSave({
+      anysearch_api_key: anysearchKey || undefined,
+      clear_anysearch: clearAnysearch,
+      clear_tavily: clearTavily,
+      tavily_api_key: tavilyKey || undefined
+    })
+      .then(value => {
+        setConfigured(value)
+        setTavilyKey('')
+        setAnysearchKey('')
+        setClearTavily(false)
+        setClearAnysearch(false)
+        setMessage('Web search settings saved.')
+      })
+      .catch(value => { setFailed(true); setMessage(String(value)) })
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <form className="settings-form" onSubmit={save}>
+      <label className="line-field">
+        <span>Tavily key</span>
+        <span className="field-line">
+          <input
+            autoComplete="off"
+            disabled={clearTavily}
+            onChange={event => { setTavilyKey(event.target.value); setClearTavily(false) }}
+            placeholder={configured.tavily_configured ? 'Configured - leave blank to keep' : 'Not configured'}
+            type="password"
+            value={tavilyKey}
+          />
+        </span>
+      </label>
+      {configured.tavily_configured && (
+        <button aria-pressed={clearTavily} className={`quiet-toggle ${clearTavily ? 'on' : ''}`} onClick={() => setClearTavily(value => !value)} type="button">
+          {clearTavily ? 'Will remove the Tavily key' : 'Remove saved Tavily key'}
+        </button>
+      )}
+      <label className="line-field">
+        <span>AnySearch key</span>
+        <span className="field-line">
+          <input
+            autoComplete="off"
+            disabled={clearAnysearch}
+            onChange={event => { setAnysearchKey(event.target.value); setClearAnysearch(false) }}
+            placeholder={configured.anysearch_configured ? 'Configured - leave blank to keep' : 'Not configured'}
+            type="password"
+            value={anysearchKey}
+          />
+        </span>
+      </label>
+      {configured.anysearch_configured && (
+        <button aria-pressed={clearAnysearch} className={`quiet-toggle ${clearAnysearch ? 'on' : ''}`} onClick={() => setClearAnysearch(value => !value)} type="button">
+          {clearAnysearch ? 'Will remove the AnySearch key' : 'Remove saved AnySearch key'}
+        </button>
+      )}
+      {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
+      <footer><span /><button className="save-model" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save'}</button></footer>
+    </form>
+  )
+}
+
+function UserProfileSettingsForm({
+  initial,
+  onSave
+}: {
+  initial: UserProfileSettings
+  onSave: (profile: UserProfileSettings) => Promise<UserProfileSettings>
+}) {
+  const [profile, setProfile] = useState(initial)
+  const [saving, setSaving] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const save = (event: FormEvent) => {
+    event.preventDefault()
+    setSaving(true)
+    setFailed(false)
+    setMessage('')
+    void onSave(profile)
+      .then(value => {
+        setProfile(value)
+        setMessage('Memory profile saved.')
+      })
+      .catch(value => { setFailed(true); setMessage(String(value)) })
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <form className="settings-form" onSubmit={save}>
+      <label className="line-field">
+        <span>Your name</span>
+        <span className="field-line"><input maxLength={100} onChange={event => setProfile(current => ({ ...current, preferred_name: event.target.value }))} placeholder="How should Friday address you?" value={profile.preferred_name} /></span>
+      </label>
+      <label className="line-field">
+        <span>Language</span>
+        <span className="field-line"><input maxLength={100} onChange={event => setProfile(current => ({ ...current, preferred_language: event.target.value }))} placeholder="For example: Chinese" value={profile.preferred_language} /></span>
+      </label>
+      <label className="settings-textarea-field">
+        <span>Habits and preferences</span>
+        <textarea maxLength={1000} onChange={event => setProfile(current => ({ ...current, habits: event.target.value }))} placeholder="Communication style, recurring habits, and durable preferences." rows={7} value={profile.habits} />
+      </label>
+      {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
+      <footer><span /><button className="save-model" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save'}</button></footer>
+    </form>
   )
 }
 
@@ -2463,10 +2721,10 @@ function verificationLabel(verification: VerificationStatus) {
   return '验证未通过'
 }
 
-function groupToolItems(items: TimelineItem[]) {
+function groupActivityItems(items: TimelineItem[]) {
   const rows: Array<TimelineItem | TimelineItem[]> = []
   for (const item of items) {
-    if (item.kind !== 'tool') {
+    if (item.kind !== 'tool' && item.kind !== 'reasoning') {
       rows.push(item)
       continue
     }
@@ -2599,10 +2857,57 @@ function collectMessageSources(items: TimelineItem[]) {
   return result
 }
 
+const artifactThumbCache = new Map<string, string>()
+const artifactThumbPending = new Set<string>()
+
+function artifactExtension(artifact: ArtifactInfo) {
+  const match = /\.([A-Za-z0-9]{1,5})$/.exec(artifact.name)
+  if (match) return match[1]!.toUpperCase()
+  return ({ image: 'IMG', markdown: 'MD', pdf: 'PDF', text: 'TXT' } as const)[artifact.kind]
+}
+
+function artifactKindLabel(kind: ArtifactInfo['kind']) {
+  return ({ image: '图片', markdown: 'Markdown', pdf: 'PDF', text: '文本' } as const)[kind]
+}
+
+function ArtifactIcon({
+  artifact,
+  onLoad
+}: {
+  artifact: ArtifactInfo
+  onLoad: (artifact: ArtifactInfo) => Promise<ArtifactDetail>
+}) {
+  const [, force] = useState(0)
+  const isImage = artifact.kind === 'image'
+  const cached = isImage ? artifactThumbCache.get(artifact.path) : undefined
+
+  useEffect(() => {
+    if (!isImage || cached !== undefined || artifactThumbPending.has(artifact.path)) return
+    artifactThumbPending.add(artifact.path)
+    onLoad(artifact)
+      .then(detail => artifactThumbCache.set(artifact.path, detail.data_url || ''))
+      .catch(() => artifactThumbCache.set(artifact.path, ''))
+      .finally(() => {
+        artifactThumbPending.delete(artifact.path)
+        force(value => value + 1)
+      })
+  }, [isImage, cached, artifact.path])
+
+  if (cached) {
+    return (
+      <span aria-hidden="true" className="artifact-icon thumb">
+        <img alt="" src={cached} />
+      </span>
+    )
+  }
+  return <span aria-hidden="true" className={`artifact-icon ${artifact.kind}`}>{artifactExtension(artifact)}</span>
+}
+
 function TimelineRow({
   busy,
   item,
   onFork,
+  onLoadArtifact,
   onOpenArtifact,
   onOpenLink,
   onPreview,
@@ -2612,6 +2917,7 @@ function TimelineRow({
   busy: boolean
   item: TimelineItem
   onFork: (messageIndex: number) => void
+  onLoadArtifact: (artifact: ArtifactInfo) => Promise<ArtifactDetail>
   onOpenArtifact: (artifact: ArtifactInfo) => void
   onOpenLink: (url: string) => void
   onPreview: (image: string) => void
@@ -2665,10 +2971,10 @@ function TimelineRow({
           <div className="message-artifacts">
             {item.artifacts.map(artifact => (
               <button key={`${item.id}-${artifact.path}`} onClick={() => onOpenArtifact(artifact)} type="button">
-                <span aria-hidden="true" className={`artifact-icon ${artifact.kind}`} />
+                <ArtifactIcon artifact={artifact} onLoad={onLoadArtifact} />
                 <span>
                   <strong>{artifact.name}</strong>
-                  <small>{artifact.kind} · {formatBytes(artifact.size)}</small>
+                  <small>{artifactKindLabel(artifact.kind)} · {formatBytes(artifact.size)}</small>
                 </span>
               </button>
             ))}
@@ -2803,34 +3109,66 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function ToolGroup({ items }: { items: TimelineItem[] }) {
+function ActivityGroup({ items, onOpenLink }: { items: TimelineItem[]; onOpenLink: (url: string) => void }) {
+  const thinkingActive = items.some(item => item.kind === 'reasoning' && item.thinking && item.thinking.ended == null)
   const status: NonNullable<TimelineItem['status']> = items.some(item => item.status === 'approval')
     ? 'approval'
-    : items.some(item => item.status === 'running')
+    : items.some(item => item.status === 'running') || thinkingActive
       ? 'running'
       : items.some(item => item.status === 'error')
         ? 'error'
         : 'done'
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    if (!thinkingActive) return
+    const timer = window.setInterval(() => setNow(Date.now()), 250)
+    return () => window.clearInterval(timer)
+  }, [thinkingActive])
+
   return (
     <details className={`tool-row tool-group ${status}`}>
       <summary>
         <span aria-hidden="true" className="tool-status" />
-        <strong>{toolGroupLabel(items, status)}</strong>
+        <strong>{activityGroupLabel(items, status, now)}</strong>
       </summary>
       <div className="tool-group-list">
-        {items.map(item => (
-          <details className={`tool-subrow ${item.status}`} key={item.id}>
-            <summary>
-              <span aria-hidden="true" className="tool-status" />
-              <strong>{toolActivityLabel(item)}</strong>
-              <small>{item.name}</small>
-            </summary>
-            <ToolDetails item={item} />
-          </details>
-        ))}
+        {items.map(item => item.kind === 'reasoning'
+          ? <ThinkingRow item={item} key={item.id} onOpenLink={onOpenLink} />
+          : (
+            <details className={`tool-subrow ${item.status}`} key={item.id}>
+              <summary>
+                <span aria-hidden="true" className="tool-status" />
+                <strong>{toolActivityLabel(item)}</strong>
+                <small>{item.name}</small>
+              </summary>
+              <ToolDetails item={item} />
+            </details>
+          ))}
       </div>
     </details>
   )
+}
+
+function activityGroupLabel(items: TimelineItem[], status: NonNullable<TimelineItem['status']>, now: number) {
+  const reasoning = items.filter(item => item.kind === 'reasoning')
+  const tools = items.filter(item => item.kind === 'tool')
+  const active = reasoning.find(item => item.thinking && item.thinking.ended == null)
+  if (active) {
+    const started = active.thinking?.started ?? now
+    return `思考中… ${formatThinkingDuration(Math.max(0, now - started))}`
+  }
+  const parts: string[] = []
+  if (reasoning.length) {
+    const errored = reasoning.some(item => item.thinking?.error)
+    const total = reasoning.reduce((sum, item) => {
+      const thinking = item.thinking
+      return thinking ? sum + Math.max(0, (thinking.ended ?? now) - thinking.started) : sum
+    }, 0)
+    parts.push(errored ? `思考中断 ${formatThinkingDuration(total)}` : `思考了 ${formatThinkingDuration(total)}`)
+  }
+  if (tools.length) parts.push(tools.length === 1 ? toolActivityLabel(tools[0]!) : toolGroupLabel(tools, status))
+  return parts.join(' · ')
 }
 
 function ToolDetails({ item }: { item: TimelineItem }) {

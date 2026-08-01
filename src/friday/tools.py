@@ -22,6 +22,14 @@ from friday.progress import update_plan
 from friday.storage import friday_home, migrate_legacy_runtime, project_state_dir
 
 CONTEXT_FILE_LIMIT = 8000
+IMAGE_MIME_TYPES = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+MAX_IMAGE_BYTES = 10_000_000
 APPROVAL_FILE = "pending_approval.json"
 PERMISSIONS_FILE = "permissions.json"
 SESSION_PERMISSIONS_ALLOWED = "friday.permissions_allowed"
@@ -63,7 +71,7 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
             result["context"] = context
         return result
 
-    @tool(description="Read a UTF-8 text file inside the current workspace.", name="Read")
+    @tool(description="Read a UTF-8 text file or load an image for a vision model inside the current workspace.", name="Read")
     def read_file(
         path: Annotated[str, "Path inside the workspace."],
         start_line: Annotated[int, "1-based line number to start reading from."] = 1,
@@ -71,6 +79,19 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
         max_chars: Annotated[int, "Maximum characters to return."] = 6000,
     ) -> dict:
         file_path = in_workspace(path)
+        mime_type = IMAGE_MIME_TYPES.get(file_path.suffix.lower())
+        if mime_type:
+            context = get_current_context()
+            config = context.metadata.get("friday.model_config") if context is not None else None
+            if not isinstance(config, dict) or not config.get("vision"):
+                raise ValueError("The selected model does not support image input.")
+            size = file_path.stat().st_size
+            if size > MAX_IMAGE_BYTES:
+                raise ValueError("Image is too large to inspect (10 MB limit).")
+            return with_context(
+                {"path": str(file_path), "image": True, "mime_type": mime_type, "size": size},
+                [file_path],
+            )
         text = file_path.read_text(encoding="utf-8")
         lines = text.splitlines()
         start = max(1, start_line)

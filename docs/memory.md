@@ -40,6 +40,8 @@ friday memory consolidate --days 2
 
 `USER.md`, global memory, and project memory are loaded into a frozen system prefix at session start. A memory change is written to disk immediately but does not rewrite the active system message. The updated hot memory enters context on the next start, resume, or compact rebuild.
 
+The desktop app's **Settings > Memory** form manages a marked profile block inside `USER.md` for the user's preferred name, language, habits, and durable preferences. Content outside that block remains untouched; the form never exposes raw file editing.
+
 `/compact` first gives Friday a chance to persist ordinary memory candidates as episodes, then rebuilds the live context from the fresh prefix, structured summary, latest ten complete user turns, and one current progress checkpoint. Only explicitly permanent requests bypass episodes. Compact summaries and temporary task progress are never stored as long-term memory.
 
 Rule files:

@@ -98,6 +98,7 @@ def run_loop(
     max_steps: int,
     stream: bool = True,
     compact_between_attempts: bool = False,
+    resume: bool = False,
     images: Sequence[str] = (),
     on_delta: Any = None,
     on_verify: Callable[[dict[str, Any]], None] | None = None,
@@ -118,6 +119,7 @@ def run_loop(
         "max_steps": max_steps,
         "on_delta": on_delta,
         "on_verify": on_verify,
+        "resume": resume,
         "start_event": len(context.events),
         "status": "done",
         "stream": stream,
@@ -159,7 +161,16 @@ def _attempt(state: dict[str, Any]):
             {"type": "text", "text": prompt},
             *({"type": "image_url", "image_url": {"url": url}} for url in state["images"]),
         ]
-    state["answer"] = state["agent"].chat(prompt, **kwargs)
+    if state["attempt"] == 1 and state["resume"]:
+        chat_kwargs = {"on_delta": state["on_delta"]} if state["on_delta"] is not None else {}
+        result = state["agent"].run(
+            {"input": prompt, **({"chat_kwargs": chat_kwargs} if chat_kwargs else {})},
+            context=state["context"],
+            max_steps=state["max_steps"],
+        )
+        state["answer"] = str(result.payload.get("answer", ""))
+    else:
+        state["answer"] = state["agent"].chat(prompt, **kwargs)
     state["attempt_signature"] = _event_signature(state["context"].events[event_start:])
     return "verify", state
 
