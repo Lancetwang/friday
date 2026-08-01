@@ -9,7 +9,7 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_shell::{
-    process::{CommandChild, CommandEvent},
+    process::{Command, CommandChild, CommandEvent},
     ShellExt,
 };
 
@@ -56,6 +56,30 @@ fn take_lines(buffer: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
     lines
 }
 
+#[cfg(debug_assertions)]
+fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let repository = repository.to_string_lossy().into_owned();
+    Ok(app.shell().command("uv").args([
+        "run",
+        "--project",
+        repository.as_str(),
+        "--no-sync",
+        "friday",
+        "app-server",
+    ]))
+}
+
+#[cfg(not(debug_assertions))]
+fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
+    app.shell()
+        .sidecar("friday-app-server")
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn gateway_start(
     app: tauri::AppHandle,
@@ -68,10 +92,7 @@ fn gateway_start(
         return Ok(workspace.display().to_string());
     }
 
-    let (mut receiver, child) = app
-        .shell()
-        .sidecar("friday-app-server")
-        .map_err(|error| error.to_string())?
+    let (mut receiver, child) = app_server_command(&app)?
         .current_dir(&workspace)
         .spawn()
         .map_err(|error| error.to_string())?;

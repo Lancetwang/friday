@@ -1,7 +1,6 @@
 $ErrorActionPreference = "Stop"
 
 $desktopRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$repositoryRoot = (Resolve-Path (Join-Path $desktopRoot "..")).Path
 $tauriRoot = Join-Path $desktopRoot "src-tauri"
 $executable = Join-Path $tauriRoot "target\debug\friday-desktop.exe"
 $logDirectory = Join-Path $env:USERPROFILE ".friday\logs"
@@ -23,13 +22,20 @@ function Invoke-Logged([string]$label, [scriptblock]$command) {
     if ($code -ne 0) { throw "$label failed with exit code $code. See $log" }
 }
 
+function Test-ViteReady {
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $connected = $client.ConnectAsync("127.0.0.1", 1420)
+        return $connected.Wait(100) -and $client.Connected
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
 $sidecar = Get-ChildItem (Join-Path $tauriRoot "binaries") -Filter "friday-app-server-*.exe" |
     Select-Object -First 1
-$pythonSources = @(
-    Get-ChildItem (Join-Path $repositoryRoot "src") -Recurse -File -Filter "*.py"
-    Get-Item (Join-Path $repositoryRoot "pyproject.toml")
-    Get-Item (Join-Path $repositoryRoot "uv.lock")
-)
 $rustSources = @(
     Get-ChildItem (Join-Path $tauriRoot "src") -Recurse -File
     Get-Item (Join-Path $tauriRoot "Cargo.toml")
@@ -38,9 +44,6 @@ $rustSources = @(
     Get-Item (Join-Path $tauriRoot "tauri.conf.json")
 )
 $needsSidecar = -not $sidecar
-if ($sidecar) {
-    $needsSidecar = [bool]$pythonSources.Where({ $_.LastWriteTimeUtc -gt $sidecar.LastWriteTimeUtc }).Count
-}
 $needsDesktop = -not (Test-Path $executable)
 if (-not $needsDesktop) {
     $executableTime = (Get-Item $executable).LastWriteTimeUtc
@@ -75,17 +78,9 @@ try {
         Invoke-Logged "Tauri shell build" { cargo build --manifest-path (Join-Path $tauriRoot "Cargo.toml") }
     }
 
-    # Tauri resolves the configured sidecar to this runtime name in target/debug.
-    $runtimeSidecar = Join-Path (Split-Path $executable) "friday-app-server.exe"
-    if (-not (Test-Path $runtimeSidecar) -or (Get-FileHash $runtimeSidecar).Hash -ne (Get-FileHash $sidecar.FullName).Hash) {
-        Copy-Item -LiteralPath $sidecar.FullName -Destination $runtimeSidecar -Force
-    }
-
     $vite = $null
     try {
-        try {
-            Invoke-WebRequest "http://127.0.0.1:1420" -UseBasicParsing -TimeoutSec 1 | Out-Null
-        } catch {
+        if (-not (Test-ViteReady)) {
             $node = (Get-Command node).Source
             $viteScript = Join-Path $desktopRoot "node_modules\vite\bin\vite.js"
             $vite = Start-Process $node `
@@ -98,13 +93,11 @@ try {
             $ready = $false
             for ($attempt = 0; $attempt -lt 100; $attempt++) {
                 if ($vite.HasExited) { throw "Vite failed to start. See $viteErr" }
-                try {
-                    Invoke-WebRequest "http://127.0.0.1:1420" -UseBasicParsing -TimeoutSec 1 | Out-Null
+                if (Test-ViteReady) {
                     $ready = $true
                     break
-                } catch {
-                    Start-Sleep -Milliseconds 50
                 }
+                Start-Sleep -Milliseconds 50
             }
             if (-not $ready) { throw "Vite did not become ready. See $viteErr" }
         }
