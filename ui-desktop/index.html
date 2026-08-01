@@ -5,9 +5,139 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#efefeb" />
     <title>Friday</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #efefeb;
+        color: #23262a;
+      }
+
+      html[data-theme='dark'] body {
+        background: #151719;
+        color: #e8e6e1;
+      }
+
+      .boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        box-sizing: border-box;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        padding-bottom: 9vh;
+        background: #efefeb;
+        opacity: 1;
+        transition: opacity 220ms ease-out;
+      }
+
+      html[data-theme='dark'] .boot-splash {
+        background: #151719;
+      }
+
+      .boot-splash.leaving {
+        pointer-events: none;
+        opacity: 0;
+      }
+
+      .boot-logo {
+        width: 56px;
+        height: 56px;
+        animation: boot-bob 2.6s cubic-bezier(0.32, 0.72, 0, 1) infinite;
+      }
+
+      .boot-logo path {
+        stroke: currentColor;
+      }
+
+      .boot-track {
+        width: 168px;
+        height: 2px;
+        overflow: hidden;
+        border-radius: 2px;
+        background: rgba(128, 128, 128, 0.25);
+      }
+
+      .boot-track span {
+        display: block;
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: #2b51b5;
+        animation: boot-sweep 1.5s ease-in-out infinite;
+      }
+
+      html[data-theme='dark'] .boot-track span {
+        background: #8da4ec;
+      }
+
+      .boot-phrase {
+        margin: 0;
+        color: rgba(128, 128, 128, 0.9);
+        font: 12px/1.5 ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+      }
+
+      @keyframes boot-bob {
+        0%,
+        100% {
+          transform: translateY(0) rotate(-5deg);
+        }
+        50% {
+          transform: translateY(-8px) rotate(5deg);
+        }
+      }
+
+      @keyframes boot-sweep {
+        0% {
+          transform: translateX(-120%);
+        }
+        100% {
+          transform: translateX(270%);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .boot-logo,
+        .boot-track span {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
+    <div class="boot-splash" id="boot-splash">
+      <svg class="boot-logo" viewBox="0 0 1024 1024" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M248 362C170 337 161 277 214 229c77-70 255-124 448-135 155-10 247 24 237 93-5 35-31 64-71 87" stroke-width="58" />
+          <path d="M634 248c-66 124-102 268-162 454-48 148-122 230-218 208-70-16-91-79-56-141 44-79 160-118 272-66" stroke-width="62" />
+          <path d="M404 516c111-49 242-60 366-61" stroke-width="54" />
+        </g>
+      </svg>
+      <div class="boot-track"><span></span></div>
+      <p class="boot-phrase" id="boot-phrase">Friday is starting…</p>
+    </div>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      ;(function () {
+        try {
+          var theme = localStorage.getItem('friday.desktop.theme')
+          if (theme !== 'dark' && theme !== 'light') {
+            theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          }
+          document.documentElement.dataset.theme = theme
+          var stored = localStorage.getItem('friday.desktop.language')
+          var zh = stored ? stored === 'zh' : navigator.language.toLowerCase().indexOf('zh') === 0
+          document.documentElement.lang = zh ? 'zh-CN' : 'en'
+          document.getElementById('boot-phrase').textContent = zh ? 'Friday 正在启动…' : 'Friday is starting…'
+        } catch (error) {
+          /* keep the default phrase */
+        }
+      })()
+    </script>
+    <script type="module" src="/src/boot.ts"></script>
   </body>
 </html>

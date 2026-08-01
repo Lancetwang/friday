@@ -68,10 +68,11 @@ def load_user_profile_settings(*, home: Path | None = None) -> dict[str, str]:
 
 
 def save_user_profile_settings(value: dict[str, Any], *, home: Path | None = None) -> dict[str, str]:
+    current = load_user_profile_settings(home=home)
     profile = {
         "preferred_name": _profile_field(value.get("preferred_name"), "Preferred name", 100),
         "preferred_language": _profile_field(value.get("preferred_language"), "Preferred language", 100),
-        "habits": _profile_field(value.get("habits"), "Habits", 1000),
+        "habits": _profile_field(value["habits"], "Habits", 1000) if "habits" in value else current["habits"],
     }
     if "\n" in profile["preferred_name"] or "\n" in profile["preferred_language"]:
         raise ValueError("Preferred name and language must each fit on one line.")
@@ -109,6 +110,41 @@ def _profile_field(value: Any, label: str, limit: int) -> str:
     if _PROFILE_START in result or _PROFILE_END in result or _SECRET_RE.search(result):
         raise ValueError(f"{label} contains unsupported or secret content.")
     return result
+
+
+_MEMORY_FILE_NAMES = {"user": "USER.md", "global": "MEMORY.md"}
+_MEMORY_FILE_LIMITS = {"user": USER_LIMIT, "global": MEMORY_LIMIT}
+
+
+def read_memory_file(scope: str, *, home: Path | None = None) -> dict[str, Any]:
+    if scope not in _MEMORY_FILE_NAMES:
+        raise ValueError(f"Unknown memory file: {scope}")
+    path = friday_home(home) / _MEMORY_FILE_NAMES[scope]
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    return {
+        "chars": len(content),
+        "content": content,
+        "limit": _MEMORY_FILE_LIMITS[scope],
+        "path": str(path),
+    }
+
+
+def save_memory_file(scope: str, content: Any, *, home: Path | None = None) -> dict[str, Any]:
+    if scope not in _MEMORY_FILE_NAMES:
+        raise ValueError(f"Unknown memory file: {scope}")
+    if not isinstance(content, str):
+        raise ValueError("Memory file content must be text.")
+    limit = _MEMORY_FILE_LIMITS[scope]
+    if len(content) > limit:
+        raise ValueError(f"Memory file exceeds {limit} characters.")
+    if _SECRET_RE.search(content):
+        raise ValueError("Memory file appears to contain a secret or credential.")
+    path = friday_home(home) / _MEMORY_FILE_NAMES[scope]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(path)
+    return {"chars": len(content), "limit": limit, "path": str(path)}
 
 
 def memory_status(workspace: Path, *, home: Path | None = None) -> dict[str, Any]:

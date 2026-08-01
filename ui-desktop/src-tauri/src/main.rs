@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::Mutex,
 };
-use tauri::{Emitter, Manager};
+use tauri::{webview::PageLoadEvent, Emitter, Manager};
 use tauri_plugin_shell::{
     process::{Command, CommandChild, CommandEvent},
     ShellExt,
@@ -214,6 +214,11 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(GatewayState::default())
         .plugin(tauri_plugin_shell::init())
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                let _ = webview.window().show();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             gateway_start,
             gateway_send,

@@ -24,7 +24,14 @@ from friday.config import (
     select_model_profile,
 )
 from friday.context import context_report
-from friday.memory import format_memory_result, load_user_profile_settings, run_memory_command, save_user_profile_settings
+from friday.memory import (
+    format_memory_result,
+    load_user_profile_settings,
+    read_memory_file,
+    run_memory_command,
+    save_memory_file,
+    save_user_profile_settings,
+)
 from friday.model_options import supports_thinking
 from friday.session import FridaySession
 from friday.skills import discover_skills, skill_body
@@ -248,9 +255,24 @@ class Gateway:
                 self.ok(
                     rid,
                     {
+                        "memory_files": {
+                            scope: {
+                                key: value
+                                for key, value in read_memory_file(scope).items()
+                                if key != "content"
+                            }
+                            for scope in ("user", "global")
+                        },
                         "web_search": load_web_search_settings(Path.cwd().resolve()),
                         "user_profile": load_user_profile_settings(),
                     },
+                )
+            elif method == "settings.memory.read":
+                self.ok(rid, read_memory_file(str(params.get("file") or "")))
+            elif method == "settings.memory.save":
+                self.ok(
+                    rid,
+                    save_memory_file(str(params.get("file") or ""), params.get("content")),
                 )
             elif method == "settings.web.save":
                 self.ok(

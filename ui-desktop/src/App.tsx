@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 
 import fridayAvatar from './assets/friday-avatar.svg'
+import { getLanguage, loadLanguage, setLanguage, t, type Language } from './i18n'
 import { normalizeMarkdownMath } from './markdown'
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath]
@@ -44,24 +45,24 @@ type ProjectStatus = 'connecting' | 'error' | 'idle' | 'ready'
 type ThinkingEffort = 'high' | 'low' | 'max' | 'off'
 
 const permissionOptions: ReadonlyArray<{
-  description: string
-  label: string
+  descriptionKey: string
+  labelKey: string
   value: PermissionMode
 }> = [
-  { description: 'Ask before risky actions', label: 'Request approval', value: 'manual' },
-  { description: 'Review intent before risky actions', label: 'Let Friday decide', value: 'auto' },
-  { description: 'Run allowed commands without prompts', label: 'Full access', value: 'bypass' }
+  { descriptionKey: 'permission.manual.desc', labelKey: 'permission.manual', value: 'manual' },
+  { descriptionKey: 'permission.auto.desc', labelKey: 'permission.auto', value: 'auto' },
+  { descriptionKey: 'permission.bypass.desc', labelKey: 'permission.bypass', value: 'bypass' }
 ]
 
 const thinkingOptions: ReadonlyArray<{
-  description: string
-  label: string
+  descriptionKey: string
+  labelKey: string
   value: ThinkingEffort
 }> = [
-  { description: 'Disable model reasoning', label: 'Off', value: 'off' },
-  { description: 'Fast, light reasoning', label: 'Low', value: 'low' },
-  { description: 'Balanced deep reasoning', label: 'High', value: 'high' },
-  { description: 'Maximum reasoning effort', label: 'Max', value: 'max' }
+  { descriptionKey: 'effort.off.desc', labelKey: 'effort.off', value: 'off' },
+  { descriptionKey: 'effort.low.desc', labelKey: 'effort.low', value: 'low' },
+  { descriptionKey: 'effort.high.desc', labelKey: 'effort.high', value: 'high' },
+  { descriptionKey: 'effort.max.desc', labelKey: 'effort.max', value: 'max' }
 ]
 
 type Approval = {
@@ -131,7 +132,20 @@ type UserProfileSettings = {
   preferred_name: string
 }
 
+type MemoryFileInfo = {
+  chars: number
+  limit: number
+  path: string
+}
+
+type MemoryFileDetail = MemoryFileInfo & {
+  content: string
+}
+
+type MemoryFileScope = 'global' | 'user'
+
 type AppSettings = {
+  memory_files: Record<MemoryFileScope, MemoryFileInfo>
   user_profile: UserProfileSettings
   web_search: WebSearchSettings
 }
@@ -276,14 +290,7 @@ const DEFAULT_SIDEBAR_WIDTH = 252
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 520
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
-const WELCOME_MESSAGES = [
-  '今天我们从哪里开始？',
-  '今天我能帮你做什么？',
-  '从一个想法开始吧。',
-  'What are we building today?',
-  'Where should we begin?',
-  'Ready when you are.'
-]
+const WELCOME_MESSAGE_KEYS = ['welcome.0', 'welcome.1', 'welcome.2']
 const emptyModelCatalog: ModelCatalog = { active: '', profiles: [], providers: [] }
 
 function nextId(prefix: string) {
@@ -386,6 +393,7 @@ function App() {
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [theme, setTheme] = useState<Theme>(loadTheme)
+  const [language, setLanguageState] = useState<Language>(loadLanguage)
   const [page, setPage] = useState<'chat' | 'settings' | 'skills'>('chat')
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null)
   const [skillError, setSkillError] = useState('')
@@ -771,7 +779,7 @@ function App() {
           ...current,
           items: [
             ...current.items.filter(item => item.id !== 'verification-status'),
-            { id: 'verification-status', kind: 'system', text: '正在验证交付结果...' }
+            { id: 'verification-status', kind: 'system', text: t('verification.pending') }
           ]
         }))
       } else if (type === 'verification.complete') {
@@ -780,7 +788,7 @@ function App() {
           items: payload.approval_required
             ? current.items.filter(item => item.id !== 'verification-status')
             : current.items.map(item => item.id === 'verification-status'
-                ? { ...item, text: payload.passed ? '验证通过' : '正在根据验证反馈继续处理...' }
+                ? { ...item, text: payload.passed ? t('verification.pass') : t('verification.continuing') }
                 : item)
         }))
       }
@@ -838,7 +846,7 @@ function App() {
           status: 'error'
         }))
       }
-    })
+    }).finally(() => window.dispatchEvent(new Event('friday:ready')))
 
     return () => {
       disposed = true
@@ -971,19 +979,20 @@ function App() {
     return result.catalog
   })
 
-  const deleteModel = (profileId: string) =>
-    sendGateway<{ catalog: ModelCatalog; info: SessionInfo }>(activeProject, 'model.delete', { id: profileId })
-      .then(result => {
-        updateView(activeProject, current => ({ ...current, info: result.info, models: result.catalog }))
-        return result.catalog
-      })
-
   const settingsWorkspace = activeProject || defaultWorkspace
+  const changeLanguage = (next: Language) => {
+    setLanguage(next)
+    setLanguageState(next)
+  }
   const loadSettings = () => sendGateway<AppSettings>(settingsWorkspace, 'settings.get')
   const saveWebSettings = (value: Record<string, unknown>) =>
     sendGateway<WebSearchSettings>(settingsWorkspace, 'settings.web.save', value)
-  const saveUserProfile = (profile: UserProfileSettings) =>
+  const saveUserProfile = (profile: Partial<UserProfileSettings>) =>
     sendGateway<UserProfileSettings>(settingsWorkspace, 'settings.user.save', { profile })
+  const readMemoryFile = (file: MemoryFileScope) =>
+    sendGateway<MemoryFileDetail>(settingsWorkspace, 'settings.memory.read', { file })
+  const saveMemoryFileContent = (file: MemoryFileScope, content: string) =>
+    sendGateway<MemoryFileInfo>(settingsWorkspace, 'settings.memory.save', { content, file })
 
   const resolveApproval = (method: string, params: Record<string, unknown> = {}) => {
     const approval = pendingApproval
@@ -1198,7 +1207,7 @@ function App() {
 
   const deleteConversation = (event: MouseEvent, workspace: string, session: ResumeChoice) => {
     event.stopPropagation()
-    if (!window.confirm(`Delete "${sessionLabel(session)}"?`)) return
+    if (!window.confirm(t('sidebar.deleteConfirm', { title: sessionLabel(session) }))) return
     void sendGateway<{ deleted: string[]; history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.delete', { id: session.id })
       .then(result => {
         updateView(workspace, current => result.deleted.includes(current.activeSession)
@@ -1337,8 +1346,8 @@ function App() {
 
   const selectedSession = sessions.find(session => session.id === activeSession)
   const selectedFork = forkTree.nodes.find(node => node.id === activeSession)
-  const conversationTitle = selectedSession ? sessionLabel(selectedSession) : selectedFork?.title || 'New conversation'
-  const project = isDefaultWorkspace ? 'Personal conversations' : projectLabel(activeProject)
+  const conversationTitle = selectedSession ? sessionLabel(selectedSession) : selectedFork?.title || t('conversation.new')
+  const project = isDefaultWorkspace ? t('project.personal') : projectLabel(activeProject)
   const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions.find(option => option.value === 'manual')!
   const thinking = thinkingOptions.find(option => option.value === info.thinking_effort) || thinkingOptions[2]
   const selectedModel = models.profiles.find(profile => profile.id === info.model_profile)
@@ -1402,7 +1411,7 @@ function App() {
         </button>
       )}
       <div className="session-actions">
-        <button aria-label="Rename conversation" onClick={event => beginRenameConversation(event, workspace, session)} title="Rename" type="button">
+        <button aria-label={t('sidebar.rename')} onClick={event => beginRenameConversation(event, workspace, session)} title={t('sidebar.rename')} type="button">
           <span aria-hidden="true">{'\u270e'}</span>
         </button>
         <button aria-label="Delete conversation" onClick={event => deleteConversation(event, workspace, session)} title="Delete" type="button">
@@ -1410,7 +1419,7 @@ function App() {
         </button>
       </div>
     </div>
-    )) : <div className="empty-sessions">No saved conversations</div>
+    )) : <div className="empty-sessions">{t('sidebar.empty')}</div>
   }
 
   const timelineItems = bindCheckpoints(items, checkpoints, activeSession)
@@ -1438,27 +1447,27 @@ function App() {
               <svg aria-hidden="true" className="nav-icon" fill="none" viewBox="0 0 24 24">
                 <path d="M12 22v-5M9 8V2M15 8V2M18 8v5a6 6 0 0 1-12 0V8Z" />
               </svg>
-              <span>Skills</span>
+              <span>{t('nav.skills')}</span>
             </button>
             <button
               disabled={!activeProject}
               onClick={openObservability}
-              title="Open Trace Workbench in browser"
+              title={t('nav.observability')}
               type="button"
             >
               <svg aria-hidden="true" className="nav-icon" fill="none" viewBox="0 0 24 24">
                 <path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0Z" />
                 <circle cx="12" cy="12" r="3" />
               </svg>
-              <span>Observability</span>
+              <span>{t('nav.observability')}</span>
             </button>
           </nav>
 
           <div className="sidebar-tree">
             <section className="sidebar-section projects">
               <div className="section-heading">
-                <h2>Projects</h2>
-                <button aria-label="Add project" onClick={() => void addProject()} title="Add project" type="button">+</button>
+                <h2>{t('sidebar.projects')}</h2>
+                <button aria-label={t('sidebar.addProject')} onClick={() => void addProject()} title={t('sidebar.addProject')} type="button">+</button>
               </div>
               {projects.map(path => {
                 const projectView = views[path]
@@ -1473,19 +1482,19 @@ function App() {
                       </button>
                       <div className="project-actions">
                         <button
-                          aria-label={`New conversation in ${projectLabel(path)}`}
+                          aria-label={`${t('sidebar.newConversation')} · ${projectLabel(path)}`}
                           disabled={isActive && status !== 'ready'}
                           onClick={event => addProjectSession(event, path)}
-                          title="New conversation"
+                          title={t('sidebar.newConversation')}
                           type="button"
                         >
                           <span aria-hidden="true">+</span>
                         </button>
                         <button
-                          aria-label={`Close ${projectLabel(path)}`}
+                          aria-label={`${t('sidebar.closeProject')} · ${projectLabel(path)}`}
                           className="project-close"
                           onClick={event => void closeProject(event, path)}
-                          title="Close project"
+                          title={t('sidebar.closeProject')}
                           type="button"
                         >
                           <span aria-hidden="true">{'\u00d7'}</span>
@@ -1502,12 +1511,12 @@ function App() {
 
             <section className="sidebar-section conversation-space">
               <div className="section-heading">
-                <h2>Recent</h2>
+                <h2>{t('sidebar.recent')}</h2>
                 <button
-                  aria-label="New personal conversation"
+                  aria-label={t('sidebar.newConversation')}
                   disabled={isDefaultWorkspace && status !== 'ready'}
                   onClick={addDefaultSession}
-                  title="New conversation"
+                  title={t('sidebar.newConversation')}
                   type="button"
                 >
                   +
@@ -1527,17 +1536,17 @@ function App() {
             >
               <span className={`status-dot ${status} ${status === 'ready' && !info.model_configured ? 'needs-key' : ''}`} />
               <span className="sidebar-status-copy">
-                <strong>Settings</strong>
-                <span>{busy ? 'Working' : status === 'ready' && !info.model_configured ? 'API key required' : info.model_name || info.model}</span>
+                <strong>{t('sidebar.settings')}</strong>
+                <span>{busy ? t('status.working') : status === 'ready' && !info.model_configured ? t('status.apiKeyRequired') : info.model_name || info.model}</span>
               </span>
               <span aria-hidden="true" className="footer-chevron">{'\u203a'}</span>
             </button>
             <button
-              aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              aria-label={theme === 'dark' ? t('theme.toLight') : t('theme.toDark')}
               aria-pressed={theme === 'dark'}
               className="theme-toggle"
               onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}
-              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              title={theme === 'dark' ? t('theme.toLight') : t('theme.toDark')}
               type="button"
             >
               {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
@@ -1569,10 +1578,13 @@ function App() {
         {page === 'settings' ? (
           <SettingsPage
             catalog={models}
+            language={language}
             onClose={() => setPage('chat')}
-            onDelete={deleteModel}
+            onLanguageChange={changeLanguage}
             onLoad={loadSettings}
+            onReadMemory={readMemoryFile}
             onSave={saveModel}
+            onSaveMemory={saveMemoryFileContent}
             onSaveProfile={saveUserProfile}
             onSaveWeb={saveWebSettings}
           />
@@ -1616,19 +1628,19 @@ function App() {
             : <TimelineRow busy={busy} item={item} key={item.id} onFork={forkConversation} onLoadArtifact={loadArtifact} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item.id)} />)}
           {pendingApproval && (
             <section className="approval-panel">
-              <strong>Approval required</strong>
-              <code>{pendingApproval.command || 'Pending command'}</code>
+              <strong>{t('approval.title')}</strong>
+              <code>{pendingApproval.command || t('approval.pendingCommand')}</code>
               {pendingApproval.reason && <p>{pendingApproval.reason}</p>}
               <div className="approval-actions">
-                <button onClick={() => resolveApproval('approval.approve')} type="button">Approve once</button>
-                <button onClick={() => resolveApproval('approval.approve', { session: true })} type="button">Allow for session</button>
-                <button className="reject" onClick={() => resolveApproval('approval.reject')} type="button">Reject</button>
+                <button onClick={() => resolveApproval('approval.approve')} type="button">{t('approval.once')}</button>
+                <button onClick={() => resolveApproval('approval.approve', { session: true })} type="button">{t('approval.session')}</button>
+                <button className="reject" onClick={() => resolveApproval('approval.reject')} type="button">{t('approval.reject')}</button>
               </div>
               <div className="approval-guidance">
                 <input
-                  aria-label="Tell Friday what to do"
+                  aria-label={t('approval.guidance')}
                   onChange={event => updateView(activeProject, current => ({ ...current, guidance: event.target.value }))}
-                  placeholder="Tell Friday what to do instead..."
+                  placeholder={t('approval.guidance')}
                   value={guidance}
                 />
                 <button
@@ -1636,13 +1648,13 @@ function App() {
                   onClick={() => resolveApproval('approval.instruct', { text: guidance.trim() })}
                   type="button"
                 >
-                  Send guidance
+                  {t('approval.send')}
                 </button>
               </div>
             </section>
           )}
           {busy && !activeAssistants.current.get(sessionEventKey(activeProject, activeSession)) && (
-            <div className="thinking"><span /><span /><span /> Friday is working</div>
+            <div className="thinking"><span /><span /><span /> {t('composer.working')}</div>
           )}
         </section>
 
@@ -1651,9 +1663,9 @@ function App() {
             <div className="composer-attachment">
               <img alt={attachment.name} src={attachment.dataUrl} />
               <button
-                aria-label="Remove pasted image"
+                aria-label={t('composer.removeAttachment')}
                 onClick={() => updateView(activeProject, current => ({ ...current, attachment: null }))}
-                title="Remove image"
+                title={t('composer.removeAttachment')}
                 type="button"
               >
                 ×
@@ -1672,7 +1684,7 @@ function App() {
               if (!(selectedModel?.vision ?? info.model_vision)) {
                 updateView(activeProject, current => ({
                   ...current,
-                  items: [...current.items, { id: nextId('image'), kind: 'system', text: 'Select a vision-capable model before attaching an image.' }]
+                  items: [...current.items, { id: nextId('image'), kind: 'system', text: t('composer.visionRequired') }]
                 }))
                 return
               }
@@ -1685,7 +1697,7 @@ function App() {
                 }))
               })
             }}
-            placeholder={pendingApproval ? 'Resolve the pending approval first...' : status === 'ready' ? 'Ask Friday to do something (Enter to send · Shift+Enter for a new line)' : 'Starting Friday...'}
+            placeholder={pendingApproval ? t('composer.approvalBlocked') : status === 'ready' ? t('composer.placeholder') : t('composer.starting')}
             rows={2}
             value={draft}
           />
@@ -1704,10 +1716,10 @@ function App() {
                   if (busy) event.preventDefault()
                 }}
                 tabIndex={busy ? -1 : 0}
-                title="Choose how Friday handles risky commands"
+                title={t('permission.title')}
               >
                 <span aria-hidden="true" className={`permission-indicator mode-${info.permission_mode}`} />
-                <span>{permission.label}</span>
+                <span>{t(permission.labelKey)}</span>
                 <i aria-hidden="true" />
               </summary>
               <div className="permission-menu">
@@ -1723,8 +1735,8 @@ function App() {
                   >
                     <span className={`permission-indicator mode-${option.value}`} />
                     <span>
-                      <strong>{option.label}</strong>
-                      <small>{option.description}</small>
+                      <strong>{t(option.labelKey)}</strong>
+                      <small>{t(option.descriptionKey)}</small>
                     </span>
                   </button>
                 ))}
@@ -1758,7 +1770,7 @@ function App() {
                         <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
                         <small>{profile.provider} / {profile.model}</small>
                       </span>
-                      <span className={`model-key ${profile.api_key_configured ? 'configured' : ''}`} title={profile.api_key_configured ? 'API key configured' : 'API key required'} />
+                      <span className={`model-key ${profile.api_key_configured ? 'configured' : ''}`} title={profile.api_key_configured ? t('modelMenu.keyConfigured') : t('modelMenu.keyRequired')} />
                     </button>
                   ))}
                   <button
@@ -1769,7 +1781,7 @@ function App() {
                     }}
                     type="button"
                   >
-                    Configure models
+                    {t('composer.configureModels')}
                   </button>
                 </div>
               </details>
@@ -1788,9 +1800,9 @@ function App() {
                       if (busy) event.preventDefault()
                     }}
                     tabIndex={busy ? -1 : 0}
-                    title="Choose how deeply the model reasons"
+                    title={t('composer.thinking')}
                   >
-                    <span>Thinking: {thinking.label}</span>
+                    <span>{t('composer.thinking')}: {t(thinking.labelKey)}</span>
                     <i aria-hidden="true" />
                   </summary>
                   <div className="permission-menu">
@@ -1806,8 +1818,8 @@ function App() {
                       >
                         <span className="permission-indicator" />
                         <span>
-                          <strong>{option.label}</strong>
-                          <small>{option.description}</small>
+                          <strong>{t(option.labelKey)}</strong>
+                          <small>{t(option.descriptionKey)}</small>
                         </span>
                       </button>
                     ))}
@@ -1815,11 +1827,11 @@ function App() {
                 </details>
               )}
               <button
-                aria-label={busy ? cancelling ? 'Stopping request' : 'Stop request' : 'Send message'}
+                aria-label={busy ? t('composer.stop') : t('composer.send')}
                 className={`send-button ${busy ? 'stop' : ''}`}
                 disabled={cancelling || (!busy && ((!draft.trim() && !attachment) || Boolean(pendingApproval) || status !== 'ready'))}
                 onClick={busy ? event => { event.preventDefault(); cancelRequest() } : undefined}
-                title={busy ? cancelling ? 'Stopping' : 'Stop' : 'Send'}
+                title={busy ? t('composer.stop') : t('composer.send')}
                 type={busy ? 'button' : 'submit'}
               >
                 {busy ? <span className="stop-icon" /> : '↑'}
@@ -1880,7 +1892,7 @@ function App() {
 }
 
 function WelcomePrompt() {
-  const [message] = useState(() => WELCOME_MESSAGES[Math.floor(Math.random() * WELCOME_MESSAGES.length)]!)
+  const [message] = useState(() => t(WELCOME_MESSAGE_KEYS[Math.floor(Math.random() * WELCOME_MESSAGE_KEYS.length)]!))
   const characters = Array.from(message)
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const [visible, setVisible] = useState(reduceMotion ? characters.length : 0)
@@ -2007,10 +2019,10 @@ function ForkMap({
   if (collapsed) {
     return (
       <button
-        aria-label="展开会话分支图"
+        aria-label={t('fork.show')}
         className="fork-chip"
         onClick={() => setCollapsedPersisted(false)}
-        title="展开会话分支图"
+        title={t('fork.show')}
         type="button"
       >
         <BranchIcon />
@@ -2025,10 +2037,10 @@ function ForkMap({
         <strong>Branches</strong>
         <span>{tree.nodes.length}</span>
         <button
-          aria-label="收起分支图"
+          aria-label={t('fork.hide')}
           className="fork-map-collapse"
           onClick={() => setCollapsedPersisted(true)}
-          title="收起分支图"
+          title={t('fork.hide')}
           type="button"
         >
           {'\u2212'}
@@ -2070,14 +2082,14 @@ function ForkMap({
           onMouseLeave={dismissTip}
           style={{ top: hoveredPos.y + 30 } as CSSProperties}
         >
-          <p>{hoveredNode.id === tree.root ? '主会话' : 'Fork 会话'}</p>
+          <p>{hoveredNode.id === tree.root ? t('fork.main') : t('fork.fork')}</p>
           <strong>{hoveredNode.title || 'Untitled conversation'}</strong>
-          {hoveredParent && <span className="fork-tip-parent">从「{hoveredParent.title}」分出</span>}
+          {hoveredParent && <span className="fork-tip-parent">{t('fork.from', { title: hoveredParent.title })}</span>}
           <span className="fork-tip-meta">{formatSessionTime(hoveredNode.time)}</span>
           <div className="fork-tip-actions">
-            <button onClick={() => onOpen(hoveredNode)} type="button">打开</button>
+            <button onClick={() => onOpen(hoveredNode)} type="button">{t('fork.open')}</button>
             {hoveredNode.id !== tree.root && (
-              <button className="danger" onClick={() => onDelete(hoveredNode)} type="button">删除</button>
+              <button className="danger" onClick={() => onDelete(hoveredNode)} type="button">{t('fork.delete')}</button>
             )}
           </div>
         </div>
@@ -2148,44 +2160,62 @@ function MoonIcon() {
   )
 }
 
-type SettingsSection = 'models' | 'web' | 'memory'
+type SettingsSection = 'docs' | 'general' | 'models' | 'web' | 'memory'
 
-const SETTINGS_SECTIONS: ReadonlyArray<{ hint: string; id: SettingsSection; label: string }> = [
-  { hint: 'Providers and API keys', id: 'models', label: 'Models' },
-  { hint: 'Tavily and AnySearch', id: 'web', label: 'Web Search' },
-  { hint: 'Your Friday profile', id: 'memory', label: 'Memory' }
+const SETTINGS_SECTIONS: ReadonlyArray<{ hintKey: string; id: SettingsSection; labelKey: string }> = [
+  { hintKey: 'settings.general.hint', id: 'general', labelKey: 'settings.general' },
+  { hintKey: 'settings.models.hint', id: 'models', labelKey: 'settings.models' },
+  { hintKey: 'settings.web.hint', id: 'web', labelKey: 'settings.web' },
+  { hintKey: 'settings.memory.hint', id: 'memory', labelKey: 'settings.memory' },
+  { hintKey: 'settings.docs.hint', id: 'docs', labelKey: 'settings.docs' }
 ]
+
+function ConfigBadge({ configured }: { configured: boolean }) {
+  return (
+    <span className={`config-badge ${configured ? 'on' : 'off'}`}>
+      <svg aria-hidden="true" fill="none" viewBox="0 0 10 10">
+        {configured ? <path d="M1.6 5.4 4 7.8 8.4 2.6" /> : <circle cx="5" cy="5" r="3.4" />}
+      </svg>
+      {configured ? t('badge.configured') : t('badge.unconfigured')}
+    </span>
+  )
+}
 
 function SettingsPage({
   catalog,
+  language,
   onClose,
-  onDelete,
+  onLanguageChange,
   onLoad,
+  onReadMemory,
   onSave,
+  onSaveMemory,
   onSaveProfile,
   onSaveWeb
 }: {
   catalog: ModelCatalog
+  language: Language
   onClose: () => void
-  onDelete: (id: string) => Promise<ModelCatalog>
+  onLanguageChange: (language: Language) => void
   onLoad: () => Promise<AppSettings>
+  onReadMemory: (file: MemoryFileScope) => Promise<MemoryFileDetail>
   onSave: (profile: ModelDraft, apiKey: string, clearApiKey: boolean) => Promise<ModelCatalog>
-  onSaveProfile: (profile: UserProfileSettings) => Promise<UserProfileSettings>
+  onSaveMemory: (file: MemoryFileScope, content: string) => Promise<MemoryFileInfo>
+  onSaveProfile: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
   onSaveWeb: (value: Record<string, unknown>) => Promise<WebSearchSettings>
 }) {
   const [section, setSection] = useState<SettingsSection>('models')
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsError, setSettingsError] = useState('')
-  const [selectedId, setSelectedId] = useState(catalog.active)
-  const [draft, setDraft] = useState<ModelDraft>(() => modelDraft(catalog.profiles.find(item => item.id === catalog.active)))
+  const [draft, setDraft] = useState<ModelDraft | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [clearApiKey, setClearApiKey] = useState(false)
   const [showKey, setShowKey] = useState(false)
   const [expandedProvider, setExpandedProvider] = useState('')
+  const [editingFile, setEditingFile] = useState<MemoryFileScope | null>(null)
   const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
-  const provider = catalog.providers.find(item => item.id === draft.provider) || catalog.providers[0]
-  const vision = provider?.models.find(item => item.id === draft.model)?.vision || false
 
   useEffect(() => {
     let active = true
@@ -2201,40 +2231,39 @@ function SettingsPage({
 
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape' && !editingFile) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, editingFile])
 
-  const edit = (profile?: ModelProfile) => {
-    setSelectedId(profile?.id || '')
-    setDraft(modelDraft(profile, catalog.providers[0]))
+  const openProvider = (item: ModelProvider) => {
+    setError('')
+    setSaved(false)
+    if (expandedProvider === item.id) {
+      setExpandedProvider('')
+      return
+    }
+    const profile = catalog.profiles.find(entry => entry.provider === item.id)
+    setExpandedProvider(item.id)
+    setDraft({ ...modelDraft(profile, item), name: item.label })
     setApiKey('')
     setClearApiKey(false)
-    setExpandedProvider('')
-    setError('')
+    setShowKey(false)
   }
 
   const save = (event: FormEvent) => {
     event.preventDefault()
+    if (!draft) return
     setSaving(true)
     setError('')
+    setSaved(false)
     void onSave(draft, apiKey, clearApiKey)
-      .then(result => {
-        const selected = result.profiles.find(item => item.id === result.active)
-        edit(selected)
+      .then(() => {
+        setApiKey('')
+        setClearApiKey(false)
+        setSaved(true)
       })
-      .catch(value => setError(String(value)))
-      .finally(() => setSaving(false))
-  }
-
-  const remove = () => {
-    if (!selectedId || !window.confirm(`Remove "${draft.name}"?`)) return
-    setSaving(true)
-    setError('')
-    void onDelete(selectedId)
-      .then(result => edit(result.profiles.find(item => item.id === result.active)))
       .catch(value => setError(String(value)))
       .finally(() => setSaving(false))
   }
@@ -2244,7 +2273,7 @@ function SettingsPage({
     return webSearch
   })
 
-  const persistProfile = (profile: UserProfileSettings) => onSaveProfile(profile).then(userProfile => {
+  const persistProfile = (profile: Partial<UserProfileSettings>) => onSaveProfile(profile).then(userProfile => {
     setSettings(current => current ? { ...current, user_profile: userProfile } : current)
     return userProfile
   })
@@ -2252,9 +2281,9 @@ function SettingsPage({
   return (
     <div className="settings-page">
       <aside className="settings-nav">
-        <button className="settings-back" onClick={onClose} title="Back to conversation (Esc)" type="button">
+        <button className="settings-back" onClick={onClose} title="Back (Esc)" type="button">
           <span aria-hidden="true">{'\u2039'}</span>
-          <span>Back</span>
+          <span>{t('settings.back')}</span>
         </button>
         <div className="settings-nav-group">
           {SETTINGS_SECTIONS.map(item => (
@@ -2264,157 +2293,217 @@ function SettingsPage({
               onClick={() => setSection(item.id)}
               type="button"
             >
-              <strong>{item.label}</strong>
-              <small>{item.hint}</small>
+              <strong>{t(item.labelKey)}</strong>
+              <small>{t(item.hintKey)}</small>
             </button>
           ))}
         </div>
       </aside>
       <section className="settings-content">
+          {section === 'general' && (
+            <div className="settings-section-wrap">
+              <header className="settings-head">
+                <h2>{t('general.title')}</h2>
+                <p>{t('general.desc')}</p>
+              </header>
+              <div className="language-field">
+                <span className="language-label">{t('general.language')}</span>
+                <div className="language-options" role="radiogroup">
+                  {(['zh', 'en'] as const).map(option => (
+                    <button
+                      aria-checked={language === option}
+                      className={`language-option ${language === option ? 'active' : ''}`}
+                      key={option}
+                      onClick={() => onLanguageChange(option)}
+                      role="radio"
+                      type="button"
+                    >
+                      {option === 'zh' ? '中文' : 'English'}
+                    </button>
+                  ))}
+                </div>
+                <p className="language-note">{t('general.languageNote')}</p>
+              </div>
+            </div>
+          )}
           {section === 'models' && <div className="settings-section-wrap">
             <header className="settings-head">
-              <h2>Models</h2>
-              <p>Providers and API keys. Credentials stay on this computer.</p>
+              <h2>{t('models.title')}</h2>
+              <p>{t('models.desc')}</p>
             </header>
-            <div className="model-profile-list">
-              {catalog.profiles.map(profile => (
-                <button
-                  className={profile.id === selectedId ? 'active' : ''}
-                  key={profile.id}
-                  onClick={() => edit(profile)}
-                  type="button"
-                >
-                  <span>
-                    <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
-                    <small>{profile.provider} / {profile.model}</small>
-                  </span>
-                  <span className={`model-key ${profile.api_key_configured ? 'configured' : ''}`} />
-                </button>
-              ))}
-              <button className="add-model" onClick={() => edit()} type="button">+ Add model</button>
-            </div>
-            <form className="settings-form" onSubmit={save}>
-            <div className="model-form-heading">
-              <div>
-                <h3>{selectedId ? 'Model configuration' : 'New model'}</h3>
-              </div>
-              {vision && <small className="vision-note">vision supported</small>}
-            </div>
-            <label className="line-field">
-              <span>Name</span>
-              <span className="field-line">
-                <input required value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} />
-              </span>
-            </label>
-            <fieldset className="provider-field">
-              <legend>Provider</legend>
-              <div className="provider-list">
-                {catalog.providers.map(item => {
-                  const selected = item.id === draft.provider
-                  const expanded = item.id === expandedProvider
-                  return (
-                    <div className={`provider-item ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} key={item.id}>
-                      <button
-                        aria-expanded={expanded}
-                        aria-pressed={selected}
-                        className="provider-row"
-                        onClick={() => {
-                          setExpandedProvider(current => current === item.id ? '' : item.id)
-                          if (!selected) {
-                            setDraft(current => ({
-                              ...current,
-                              base_url: item.base_url,
-                              model: item.models[0]?.id || current.model,
-                              provider: item.id
-                            }))
-                          }
-                        }}
-                        type="button"
-                      >
+            <div className="provider-list">
+              {catalog.providers.map(item => {
+                const profile = catalog.profiles.find(entry => entry.provider === item.id)
+                const expanded = expandedProvider === item.id
+                const configured = Boolean(profile?.api_key_configured)
+                const inUse = Boolean(profile && profile.id === catalog.active)
+                const vision = expanded && draft
+                  ? item.models.find(entry => entry.id === draft.model)?.vision || false
+                  : false
+                return (
+                  <div className={`provider-item ${expanded ? 'expanded' : ''}`} key={item.id}>
+                    <button
+                      aria-expanded={expanded}
+                      className="provider-row"
+                      onClick={() => openProvider(item)}
+                      type="button"
+                    >
+                      <span className="provider-id">
                         <strong>{item.label}</strong>
                         <small>{hostOf(item.base_url) || item.base_url}</small>
-                      </button>
-                      <div className="provider-config" inert={!expanded}>
-                        <div className="provider-config-inner">
-                          <label className="line-field">
-                            <span>Base URL</span>
-                            <span className="field-line">
-                              <input required type="url" value={draft.base_url} onChange={event => setDraft(current => ({ ...current, base_url: event.target.value }))} />
-                            </span>
-                          </label>
-                          <label className="line-field">
-                            <span>Model</span>
-                            <span className="field-line">
-                              <input required value={draft.model} onChange={event => setDraft(current => ({ ...current, model: event.target.value }))} />
-                            </span>
-                          </label>
-                          <label className="line-field">
-                            <span>API key</span>
-                            <span className="field-line">
-                              <input
-                                autoComplete="off"
-                                placeholder={selectedId ? 'Leave blank to keep the saved key' : 'Required unless set in the environment'}
-                                type={showKey ? 'text' : 'password'}
-                                value={apiKey}
-                                onChange={event => {
-                                  setApiKey(event.target.value)
-                                  if (event.target.value) setClearApiKey(false)
-                                }}
-                              />
+                      </span>
+                      <span className="provider-state">
+                        {inUse && <span className="provider-in-use">{t('models.inUse')}</span>}
+                        <ConfigBadge configured={configured} />
+                      </span>
+                    </button>
+                    <div className="provider-config" inert={!expanded}>
+                      <div className="provider-config-inner">
+                        {expanded && draft && (
+                          <form className="settings-form" onSubmit={save}>
+                            <label className="line-field">
+                              <span>{t('models.baseUrl')}</span>
+                              <span className="field-line">
+                                <input required type="url" value={draft.base_url} onChange={event => setDraft(current => current && { ...current, base_url: event.target.value })} />
+                              </span>
+                            </label>
+                            <label className="line-field">
+                              <span>{t('models.model')}</span>
+                              <span className="field-line">
+                                <input required value={draft.model} onChange={event => setDraft(current => current && { ...current, model: event.target.value })} />
+                              </span>
+                            </label>
+                            <label className="line-field">
+                              <span>{t('models.apiKey')}</span>
+                              <span className="field-line">
+                                <input
+                                  autoComplete="off"
+                                  placeholder={configured ? t('models.keySaved') : t('models.keyEmpty')}
+                                  type={showKey ? 'text' : 'password'}
+                                  value={apiKey}
+                                  onChange={event => {
+                                    setApiKey(event.target.value)
+                                    if (event.target.value) setClearApiKey(false)
+                                  }}
+                                />
+                                {configured && (
+                                  <span aria-label={t('badge.configured')} className="field-flag" title={t('badge.configured')}>
+                                    <svg aria-hidden="true" fill="none" viewBox="0 0 10 10"><path d="M1.6 5.4 4 7.8 8.4 2.6" /></svg>
+                                  </span>
+                                )}
+                                <button
+                                  aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                                  className="line-action"
+                                  onClick={() => setShowKey(value => !value)}
+                                  type="button"
+                                >
+                                  {showKey ? 'hide' : 'show'}
+                                </button>
+                              </span>
+                            </label>
+                            {vision && <small className="vision-note">{t('models.vision')}</small>}
+                            {configured && (
                               <button
-                                aria-label={showKey ? 'Hide API key' : 'Show API key'}
-                                className="line-action"
-                                onClick={() => setShowKey(value => !value)}
+                                aria-pressed={clearApiKey}
+                                className={`quiet-toggle ${clearApiKey ? 'on' : ''}`}
+                                onClick={() => setClearApiKey(value => !value)}
                                 type="button"
                               >
-                                {showKey ? 'hide' : 'show'}
+                                {clearApiKey ? t('models.removeKeyArmed') : t('models.removeKey')}
                               </button>
-                            </span>
-                          </label>
-                        </div>
+                            )}
+                            {error && <div className="settings-error">{error}</div>}
+                            <footer>
+                              <span className="settings-saved">{saved ? t('models.savedActive') : ''}</span>
+                              <button className="save-model" disabled={saving} type="submit">{saving ? t('settings.saving') : t('models.saveUse')}</button>
+                            </footer>
+                          </form>
+                        )}
                       </div>
                     </div>
-                  )
-                })}
-              </div>
-            </fieldset>
-            {selectedId && (
-              <button
-                aria-pressed={clearApiKey}
-                className={`quiet-toggle ${clearApiKey ? 'on' : ''}`}
-                onClick={() => setClearApiKey(value => !value)}
-                type="button"
-              >
-                {clearApiKey ? 'Will remove the saved key' : 'Remove saved API key'}
-              </button>
-            )}
-            {error && <div className="settings-error">{error}</div>}
-            <footer>
-              <button className="remove-model" disabled={saving || !selectedId || catalog.profiles.length < 2} onClick={remove} type="button">Remove</button>
-              <button className="save-model" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save and use'}</button>
-            </footer>
-            </form>
+                  </div>
+                )
+              })}
+            </div>
           </div>}
           {section === 'web' && (
             <div className="settings-section-wrap">
               <header className="settings-head">
-                <h2>Web Search</h2>
-                <p>Friday tries Tavily first, then falls back to AnySearch.</p>
+                <h2>{t('web.title')}</h2>
+                <p>{t('web.desc')}</p>
               </header>
               {settings
-                ? <WebSearchSettingsForm initial={settings.web_search} onSave={persistWeb} />
+                ? <WebSearchSettings initial={settings.web_search} onSave={persistWeb} />
                 : <SettingsLoading error={settingsError} />}
             </div>
           )}
           {section === 'memory' && (
             <div className="settings-section-wrap">
               <header className="settings-head">
-                <h2>Memory</h2>
-                <p>These details become part of Friday's user profile.</p>
+                <h2>{t('memory.title')}</h2>
+                <p>{t('memory.desc')}</p>
               </header>
               {settings
-                ? <UserProfileSettingsForm initial={settings.user_profile} onSave={persistProfile} />
+                ? (
+                  <>
+                    <UserProfileSettingsForm initial={settings.user_profile} onSave={persistProfile} />
+                    <div className="memory-files">
+                      {(['user', 'global'] as const).map(file => {
+                        const info = settings.memory_files[file]
+                        return (
+                          <button className="memory-file" key={file} onClick={() => setEditingFile(file)} type="button">
+                            <span aria-hidden="true" className="artifact-icon markdown">MD</span>
+                            <span className="memory-file-meta">
+                              <strong>{file === 'user' ? 'USER.md' : 'MEMORY.md'}</strong>
+                              <small>{file === 'user' ? t('memory.userFile') : t('memory.globalFile')} · {t('memory.chars', { chars: info.chars, limit: info.limit })}</small>
+                            </span>
+                            <span aria-hidden="true" className="memory-file-chevron">{'\u203a'}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )
                 : <SettingsLoading error={settingsError} />}
+              {editingFile && settings && (
+                <MemoryEditor
+                  file={editingFile}
+                  info={settings.memory_files[editingFile]}
+                  onClose={() => setEditingFile(null)}
+                  onRead={onReadMemory}
+                  onSave={(file, content) => onSaveMemory(file, content).then(info => {
+                    setSettings(current => current
+                      ? { ...current, memory_files: { ...current.memory_files, [file]: info } }
+                      : current)
+                    return info
+                  })}
+                />
+              )}
+            </div>
+          )}
+          {section === 'docs' && (
+            <div className="settings-section-wrap">
+              <header className="settings-head">
+                <h2>{t('docs.title')}</h2>
+                <p>{t('docs.desc')}</p>
+              </header>
+              <ol className="docs-steps">
+                <li>
+                  <strong>{t('docs.step1.title')}</strong>
+                  <p>{t('docs.step1.body')}</p>
+                  <button className="docs-link" onClick={() => setSection('models')} type="button">{t('docs.go', { target: t('settings.models') })}</button>
+                </li>
+                <li>
+                  <strong>{t('docs.step2.title')}</strong>
+                  <p>{t('docs.step2.body')}</p>
+                  <button className="docs-link" onClick={() => setSection('web')} type="button">{t('docs.go', { target: t('settings.web') })}</button>
+                </li>
+                <li>
+                  <strong>{t('docs.step3.title')}</strong>
+                  <p>{t('docs.step3.body')}</p>
+                  <button className="docs-link" onClick={() => setSection('memory')} type="button">{t('docs.go', { target: t('settings.memory') })}</button>
+                </li>
+              </ol>
             </div>
           )}
       </section>
@@ -2422,11 +2511,113 @@ function SettingsPage({
   )
 }
 
-function SettingsLoading({ error }: { error: string }) {
-  return <div className={`settings-loading ${error ? 'error' : ''}`}>{error || 'Loading settings...'}</div>
+function MemoryEditor({
+  file,
+  info,
+  onClose,
+  onRead,
+  onSave
+}: {
+  file: MemoryFileScope
+  info: MemoryFileInfo
+  onClose: () => void
+  onRead: (file: MemoryFileScope) => Promise<MemoryFileDetail>
+  onSave: (file: MemoryFileScope, content: string) => Promise<MemoryFileInfo>
+}) {
+  const [text, setText] = useState<string | null>(null)
+  const [original, setOriginal] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void onRead(file)
+      .then(detail => {
+        if (!active) return
+        setOriginal(detail.content)
+        setText(detail.content)
+      })
+      .catch(value => {
+        if (active) setLoadError(String(value))
+      })
+    return () => { active = false }
+  }, [file])
+
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const save = () => {
+    if (text === null) return
+    setSaving(true)
+    setError('')
+    setSaved(false)
+    void onSave(file, text)
+      .then(() => {
+        setOriginal(text)
+        setSaved(true)
+      })
+      .catch(value => setError(String(value)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <div className="memory-editor-backdrop" onMouseDown={onClose}>
+      <section aria-modal="true" className="memory-editor" onMouseDown={event => event.stopPropagation()} role="dialog">
+        <header>
+          <div>
+            <h3>{file === 'user' ? 'USER.md' : 'MEMORY.md'}</h3>
+            <p>{info.path}</p>
+          </div>
+          <button aria-label="Close editor" onClick={onClose} title="Close" type="button">{'\u00d7'}</button>
+        </header>
+        {text !== null
+          ? (
+            <textarea
+              autoFocus
+              onChange={event => {
+                setText(event.target.value)
+                setSaved(false)
+              }}
+              spellCheck={false}
+              value={text}
+            />
+          )
+          : <div className={`settings-loading ${loadError ? 'error' : ''}`}>{loadError || 'Loading…'}</div>}
+        <footer>
+          <span className="memory-editor-count">{(text ?? '').length} / {info.limit}</span>
+          {error ? <span className="settings-error">{error}</span> : saved ? <span className="settings-saved">{t('settings.saved')}</span> : null}
+          <button className="save-model" disabled={saving || text === null || text === original} onClick={save} type="button">
+            {saving ? t('settings.saving') : t('settings.save')}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
 }
 
-function WebSearchSettingsForm({
+function SettingsLoading({ error }: { error: string }) {
+  return <div className={`settings-loading ${error ? 'error' : ''}`}>{error || t('settings.loading')}</div>
+}
+
+const WEB_PROVIDERS: ReadonlyArray<{
+  flag: 'clear_anysearch' | 'clear_tavily'
+  host: string
+  id: 'anysearch' | 'tavily'
+  keyField: 'anysearch_api_key' | 'tavily_api_key'
+  label: string
+}> = [
+  { flag: 'clear_tavily', host: 'api.tavily.com', id: 'tavily', keyField: 'tavily_api_key', label: 'Tavily' },
+  { flag: 'clear_anysearch', host: 'api.anysearch.com', id: 'anysearch', keyField: 'anysearch_api_key', label: 'AnySearch' }
+]
+
+function WebSearchSettings({
   initial,
   onSave
 }: {
@@ -2434,78 +2625,96 @@ function WebSearchSettingsForm({
   onSave: (value: Record<string, unknown>) => Promise<WebSearchSettings>
 }) {
   const [configured, setConfigured] = useState(initial)
-  const [tavilyKey, setTavilyKey] = useState('')
-  const [anysearchKey, setAnysearchKey] = useState('')
-  const [clearTavily, setClearTavily] = useState(false)
-  const [clearAnysearch, setClearAnysearch] = useState(false)
+  const [expanded, setExpanded] = useState('')
+  const [key, setKey] = useState('')
+  const [clear, setClear] = useState(false)
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
   const [message, setMessage] = useState('')
 
-  const save = (event: FormEvent) => {
+  const open = (id: string) => {
+    setExpanded(current => (current === id ? '' : id))
+    setKey('')
+    setClear(false)
+    setMessage('')
+    setFailed(false)
+  }
+
+  const save = (event: FormEvent, provider: (typeof WEB_PROVIDERS)[number]) => {
     event.preventDefault()
     setSaving(true)
     setFailed(false)
     setMessage('')
-    void onSave({
-      anysearch_api_key: anysearchKey || undefined,
-      clear_anysearch: clearAnysearch,
-      clear_tavily: clearTavily,
-      tavily_api_key: tavilyKey || undefined
-    })
+    void onSave({ [provider.keyField]: key || undefined, [provider.flag]: clear })
       .then(value => {
         setConfigured(value)
-        setTavilyKey('')
-        setAnysearchKey('')
-        setClearTavily(false)
-        setClearAnysearch(false)
-        setMessage('Web search settings saved.')
+        setKey('')
+        setClear(false)
+        setMessage(t('web.saved'))
       })
       .catch(value => { setFailed(true); setMessage(String(value)) })
       .finally(() => setSaving(false))
   }
 
   return (
-    <form className="settings-form" onSubmit={save}>
-      <label className="line-field">
-        <span>Tavily key</span>
-        <span className="field-line">
-          <input
-            autoComplete="off"
-            disabled={clearTavily}
-            onChange={event => { setTavilyKey(event.target.value); setClearTavily(false) }}
-            placeholder={configured.tavily_configured ? 'Configured - leave blank to keep' : 'Not configured'}
-            type="password"
-            value={tavilyKey}
-          />
-        </span>
-      </label>
-      {configured.tavily_configured && (
-        <button aria-pressed={clearTavily} className={`quiet-toggle ${clearTavily ? 'on' : ''}`} onClick={() => setClearTavily(value => !value)} type="button">
-          {clearTavily ? 'Will remove the Tavily key' : 'Remove saved Tavily key'}
-        </button>
-      )}
-      <label className="line-field">
-        <span>AnySearch key</span>
-        <span className="field-line">
-          <input
-            autoComplete="off"
-            disabled={clearAnysearch}
-            onChange={event => { setAnysearchKey(event.target.value); setClearAnysearch(false) }}
-            placeholder={configured.anysearch_configured ? 'Configured - leave blank to keep' : 'Not configured'}
-            type="password"
-            value={anysearchKey}
-          />
-        </span>
-      </label>
-      {configured.anysearch_configured && (
-        <button aria-pressed={clearAnysearch} className={`quiet-toggle ${clearAnysearch ? 'on' : ''}`} onClick={() => setClearAnysearch(value => !value)} type="button">
-          {clearAnysearch ? 'Will remove the AnySearch key' : 'Remove saved AnySearch key'}
-        </button>
-      )}
-      {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
-      <footer><span /><button className="save-model" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save'}</button></footer>
-    </form>
+    <div className="provider-list">
+      {WEB_PROVIDERS.map(provider => {
+        const isConfigured = configured[`${provider.id}_configured`]
+        const isExpanded = expanded === provider.id
+        return (
+          <div className={`provider-item ${isExpanded ? 'expanded' : ''}`} key={provider.id}>
+            <button aria-expanded={isExpanded} className="provider-row" onClick={() => open(provider.id)} type="button">
+              <span className="provider-id">
+                <strong>{provider.label}</strong>
+                <small>{provider.host}</small>
+              </span>
+              <span className="provider-state">
+                <ConfigBadge configured={isConfigured} />
+              </span>
+            </button>
+            <div className="provider-config" inert={!isExpanded}>
+              <div className="provider-config-inner">
+                {isExpanded && (
+                  <form className="settings-form" onSubmit={event => save(event, provider)}>
+                    <label className="line-field">
+                      <span>{t('models.apiKey')}</span>
+                      <span className="field-line">
+                        <input
+                          autoComplete="off"
+                          disabled={clear}
+                          onChange={event => {
+                            setKey(event.target.value)
+                            if (event.target.value) setClear(false)
+                          }}
+                          placeholder={isConfigured ? t('web.keySaved') : t('web.keyEmpty')}
+                          type="password"
+                          value={key}
+                        />
+                        {isConfigured && (
+                          <span aria-label={t('badge.configured')} className="field-flag" title={t('badge.configured')}>
+                            <svg aria-hidden="true" fill="none" viewBox="0 0 10 10"><path d="M1.6 5.4 4 7.8 8.4 2.6" /></svg>
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                    {isConfigured && (
+                      <button aria-pressed={clear} className={`quiet-toggle ${clear ? 'on' : ''}`} onClick={() => setClear(value => !value)} type="button">
+                        {clear ? t('web.removeKeyArmed', { name: provider.label }) : t('web.removeKey', { name: provider.label })}
+                      </button>
+                    )}
+                    {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
+                    <footer>
+                      <span />
+                      <button className="save-model" disabled={saving} type="submit">{saving ? t('settings.saving') : t('settings.save')}</button>
+                    </footer>
+                  </form>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -2514,9 +2723,10 @@ function UserProfileSettingsForm({
   onSave
 }: {
   initial: UserProfileSettings
-  onSave: (profile: UserProfileSettings) => Promise<UserProfileSettings>
+  onSave: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
 }) {
-  const [profile, setProfile] = useState(initial)
+  const [name, setName] = useState(initial.preferred_name)
+  const [preferredLanguage, setPreferredLanguage] = useState(initial.preferred_language)
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
   const [message, setMessage] = useState('')
@@ -2526,11 +2736,8 @@ function UserProfileSettingsForm({
     setSaving(true)
     setFailed(false)
     setMessage('')
-    void onSave(profile)
-      .then(value => {
-        setProfile(value)
-        setMessage('Memory profile saved.')
-      })
+    void onSave({ preferred_language: preferredLanguage, preferred_name: name })
+      .then(() => setMessage(t('memory.saved')))
       .catch(value => { setFailed(true); setMessage(String(value)) })
       .finally(() => setSaving(false))
   }
@@ -2538,19 +2745,15 @@ function UserProfileSettingsForm({
   return (
     <form className="settings-form" onSubmit={save}>
       <label className="line-field">
-        <span>Your name</span>
-        <span className="field-line"><input maxLength={100} onChange={event => setProfile(current => ({ ...current, preferred_name: event.target.value }))} placeholder="How should Friday address you?" value={profile.preferred_name} /></span>
+        <span>{t('memory.name')}</span>
+        <span className="field-line"><input maxLength={100} onChange={event => setName(event.target.value)} placeholder={t('memory.namePlaceholder')} value={name} /></span>
       </label>
       <label className="line-field">
-        <span>Language</span>
-        <span className="field-line"><input maxLength={100} onChange={event => setProfile(current => ({ ...current, preferred_language: event.target.value }))} placeholder="For example: Chinese" value={profile.preferred_language} /></span>
-      </label>
-      <label className="settings-textarea-field">
-        <span>Habits and preferences</span>
-        <textarea maxLength={1000} onChange={event => setProfile(current => ({ ...current, habits: event.target.value }))} placeholder="Communication style, recurring habits, and durable preferences." rows={7} value={profile.habits} />
+        <span>{t('memory.language')}</span>
+        <span className="field-line"><input maxLength={100} onChange={event => setPreferredLanguage(event.target.value)} placeholder={t('memory.languagePlaceholder')} value={preferredLanguage} /></span>
       </label>
       {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
-      <footer><span /><button className="save-model" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save'}</button></footer>
+      <footer><span /><button className="save-model" disabled={saving} type="submit">{saving ? t('settings.saving') : t('settings.save')}</button></footer>
     </form>
   )
 }
@@ -2595,20 +2798,20 @@ function SkillBrowser({
   return (
     <section className="skills-page">
       <header className="skills-heading">
-        <h1>Skills</h1>
-        <p>Reusable workflows available to Friday</p>
+        <h1>{t('nav.skills')}</h1>
+        <p>{t('skills.tagline')}</p>
       </header>
       <label className="skill-search">
         <span aria-hidden="true">{'\u2315'}</span>
         <input
-          aria-label="Search skills"
+          aria-label={t('skills.search')}
           onChange={event => onQueryChange(event.target.value)}
-          placeholder="Search skills"
+          placeholder={t('skills.search')}
           value={query}
         />
       </label>
       <div className="skills-section-heading">
-        <h2>Installed</h2>
+        <h2>{t('skills.installed')}</h2>
         <span>{filtered.length}</span>
       </div>
       {error && <div className="skill-error">{error}</div>}
@@ -2624,7 +2827,7 @@ function SkillBrowser({
           </button>
         ))}
       </div>
-      {!filtered.length && <div className="skills-empty">No matching skills</div>}
+      {!filtered.length && <div className="skills-empty">{t('skills.empty')}</div>}
       {detail && (
         <div className="skill-modal-backdrop" onMouseDown={onClose}>
           <article
@@ -2714,11 +2917,11 @@ function WindowTitlebar() {
 }
 
 function verificationLabel(verification: VerificationStatus) {
-  if (verification.passed || verification.verdict === 'pass') return '验证通过'
-  if (verification.error) return '验证异常'
-  if (verification.verdict === 'blocked') return '验证受阻'
-  if (verification.verdict === 'inconclusive') return '验证结果不确定'
-  return '验证未通过'
+  if (verification.passed || verification.verdict === 'pass') return t('verification.pass')
+  if (verification.error) return t('verification.error')
+  if (verification.verdict === 'blocked') return t('verification.blocked')
+  if (verification.verdict === 'inconclusive') return t('verification.inconclusive')
+  return t('verification.failed')
 }
 
 function groupActivityItems(items: TimelineItem[]) {
@@ -2867,7 +3070,7 @@ function artifactExtension(artifact: ArtifactInfo) {
 }
 
 function artifactKindLabel(kind: ArtifactInfo['kind']) {
-  return ({ image: '图片', markdown: 'Markdown', pdf: 'PDF', text: '文本' } as const)[kind]
+  return t(`artifact.${kind}`)
 }
 
 function ArtifactIcon({
@@ -2985,12 +3188,12 @@ function TimelineRow({
           <div className="message-meta">
             {sources && sources.length > 0 && (
               <span className="message-sources">
-                <button aria-label={`参考了 ${sources.length} 个页面`} className="sources-chip" type="button">
+                <button aria-label={t('sources.aria', { count: sources.length })} className="sources-chip" type="button">
                   <GlobeIcon />
                   <span>{sources.length}</span>
                 </button>
                 <span className="sources-popover" role="tooltip">
-                  <p>参考了 {sources.length} 个页面</p>
+                  <p>{t('sources.label', { count: sources.length })}</p>
                   {sources.map(source => (
                     <button
                       className="source-item"
@@ -3069,11 +3272,12 @@ function ThinkingRow({ item, onOpenLink }: { item: TimelineItem; onOpenLink: (ur
   }, [done])
 
   const elapsed = Math.max(0, (thinking.ended ?? now) - thinking.started)
+  const duration = formatThinkingDuration(elapsed)
   const label = done
     ? thinking.error
-      ? `思考中断 · ${formatThinkingDuration(elapsed)}`
-      : `思考了 ${formatThinkingDuration(elapsed)}`
-    : '思考中'
+      ? t('thinking.interrupted', { duration })
+      : t('thinking.done', { duration })
+    : t('thinking.running')
 
   return (
     <details className={`thinking-row ${done ? 'done' : 'running'}`}>
@@ -3097,10 +3301,15 @@ function ThinkingRow({ item, onOpenLink }: { item: TimelineItem; onOpenLink: (ur
 
 function formatThinkingDuration(ms: number) {
   const seconds = Math.max(0, ms / 1000)
-  if (seconds < 60) return seconds < 10 ? `${seconds.toFixed(1)} 秒` : `${Math.round(seconds)} 秒`
+  const zh = getLanguage() === 'zh'
+  if (seconds < 60) {
+    const value = seconds < 10 ? seconds.toFixed(1) : String(Math.round(seconds))
+    return zh ? `${value} 秒` : `${value}s`
+  }
   const minutes = Math.floor(seconds / 60)
   const rest = Math.round(seconds % 60)
-  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`
+  if (zh) return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`
 }
 
 function formatBytes(bytes: number) {
@@ -3156,7 +3365,7 @@ function activityGroupLabel(items: TimelineItem[], status: NonNullable<TimelineI
   const active = reasoning.find(item => item.thinking && item.thinking.ended == null)
   if (active) {
     const started = active.thinking?.started ?? now
-    return `思考中… ${formatThinkingDuration(Math.max(0, now - started))}`
+    return t('thinking.runningWith', { duration: formatThinkingDuration(Math.max(0, now - started)) })
   }
   const parts: string[] = []
   if (reasoning.length) {
@@ -3165,7 +3374,8 @@ function activityGroupLabel(items: TimelineItem[], status: NonNullable<TimelineI
       const thinking = item.thinking
       return thinking ? sum + Math.max(0, (thinking.ended ?? now) - thinking.started) : sum
     }, 0)
-    parts.push(errored ? `思考中断 ${formatThinkingDuration(total)}` : `思考了 ${formatThinkingDuration(total)}`)
+    const duration = formatThinkingDuration(total)
+    parts.push(errored ? t('thinking.interrupted', { duration }) : t('thinking.done', { duration }))
   }
   if (tools.length) parts.push(tools.length === 1 ? toolActivityLabel(tools[0]!) : toolGroupLabel(tools, status))
   return parts.join(' · ')
@@ -3186,64 +3396,53 @@ function ToolDetails({ item }: { item: TimelineItem }) {
   )
 }
 
-function toolVerb(name = '') {
+type ToolKey = 'bash' | 'find' | 'generic' | 'plan' | 'read' | 'webfetch' | 'websearch' | 'write'
+
+function toolKey(name = ''): ToolKey {
   const value = name.toLocaleLowerCase()
-  if (value === 'websearch') return '\u641c\u7d22\u7f51\u9875'
-  if (value === 'webfetch') return '\u8bfb\u53d6\u7f51\u9875'
-  if (value === 'bash') return '\u8fd0\u884c\u547d\u4ee4'
-  if (value === 'read') return '\u8bfb\u53d6\u6587\u4ef6'
-  if (value === 'write' || value === 'edit') return '\u4fee\u6539\u6587\u4ef6'
-  if (value === 'glob' || value === 'grep') return '\u67e5\u627e\u6587\u4ef6'
-  if (value === 'updateplan') return '\u66f4\u65b0\u4efb\u52a1\u8fdb\u5ea6'
-  return '\u4f7f\u7528\u5de5\u5177'
+  if (value === 'websearch') return 'websearch'
+  if (value === 'webfetch') return 'webfetch'
+  if (value === 'bash') return 'bash'
+  if (value === 'read') return 'read'
+  if (value === 'write' || value === 'edit') return 'write'
+  if (value === 'glob' || value === 'grep') return 'find'
+  if (value === 'updateplan') return 'plan'
+  return 'generic'
 }
 
-function completedToolAction(name = '') {
-  const value = name.toLocaleLowerCase()
-  if (value === 'websearch') return '\u641c\u7d22\u4e86\u7f51\u9875'
-  if (value === 'webfetch') return '\u8bfb\u53d6\u4e86\u7f51\u9875'
-  if (value === 'bash') return '\u8fd0\u884c\u4e86\u547d\u4ee4'
-  if (value === 'read') return '\u8bfb\u53d6\u4e86\u6587\u4ef6'
-  if (value === 'write' || value === 'edit') return '\u4fee\u6539\u4e86\u6587\u4ef6'
-  if (value === 'glob' || value === 'grep') return '\u67e5\u627e\u4e86\u6587\u4ef6'
-  if (value === 'updateplan') return '\u66f4\u65b0\u4e86\u4efb\u52a1\u8fdb\u5ea6'
-  return '\u4f7f\u7528\u4e86\u5de5\u5177'
+function lcFirst(text: string) {
+  return text ? text[0]!.toLocaleLowerCase() + text.slice(1) : text
+}
+
+function ucFirst(text: string) {
+  return text ? text[0]!.toLocaleUpperCase() + text.slice(1) : text
+}
+
+function joinActivity(parts: string[]) {
+  return getLanguage() === 'zh' ? parts.join('\u3001') : parts.join(', ')
 }
 
 function toolActivityLabel(item: TimelineItem) {
-  const verb = toolVerb(item.name)
-  if (item.status === 'running') return `\u6b63\u5728${verb}`
-  if (item.status === 'approval') return `\u7b49\u5f85\u6279\u51c6\uff1a${verb}`
-  if (item.status === 'error') return `${verb}\u65f6\u9047\u5230\u95ee\u9898`
-  return completedToolAction(item.name)
+  const key = toolKey(item.name)
+  if (item.status === 'running') return t(`tool.${key}.doing`)
+  if (item.status === 'approval') return t('activity.approval', { verb: t(`tool.${key}.verb`) })
+  if (item.status === 'error') return t('activity.error', { verb: t(`tool.${key}.verb`), doing: lcFirst(t(`tool.${key}.doing`)) })
+  return t(`tool.${key}.did`)
 }
 
 function toolGroupLabel(items: TimelineItem[], status: NonNullable<TimelineItem['status']>) {
-  const verbs = [...new Set(items.map(item => toolVerb(item.name)))]
-  if (verbs.length === 1 && items.length > 1) {
-    const verb = verbs[0]!
-    if (status === 'running') {
-      if (verb === '\u8fd0\u884c\u547d\u4ee4') return '\u6b63\u5728\u8fd0\u884c\u591a\u4e2a\u547d\u4ee4'
-      if (verb === '\u641c\u7d22\u7f51\u9875') return '\u6b63\u5728\u8fdb\u884c\u591a\u6b21\u7f51\u9875\u641c\u7d22'
-      if (verb === '\u8bfb\u53d6\u6587\u4ef6') return '\u6b63\u5728\u8bfb\u53d6\u591a\u4e2a\u6587\u4ef6'
-      if (verb === '\u4fee\u6539\u6587\u4ef6') return '\u6b63\u5728\u4fee\u6539\u591a\u4e2a\u6587\u4ef6'
-      return `\u6b63\u5728\u591a\u6b21${verb}`
-    }
-    if (status === 'approval') return `\u7b49\u5f85\u6279\u51c6\uff1a\u591a\u6b21${verb}`
-    if (status === 'error') return `\u591a\u6b21${verb}\u65f6\u6709\u64cd\u4f5c\u5931\u8d25`
-    if (verb === '\u8fd0\u884c\u547d\u4ee4') return '\u8fd0\u884c\u4e86\u591a\u4e2a\u547d\u4ee4'
-    if (verb === '\u8bfb\u53d6\u6587\u4ef6') return '\u8bfb\u53d6\u4e86\u591a\u4e2a\u6587\u4ef6'
-    if (verb === '\u4fee\u6539\u6587\u4ef6') return '\u4fee\u6539\u4e86\u591a\u4e2a\u6587\u4ef6'
-    if (verb === '\u641c\u7d22\u7f51\u9875') return '\u8fdb\u884c\u4e86\u591a\u6b21\u7f51\u9875\u641c\u7d22'
-    if (verb === '\u8bfb\u53d6\u7f51\u9875') return '\u8bfb\u53d6\u4e86\u591a\u4e2a\u7f51\u9875'
-    if (verb === '\u67e5\u627e\u6587\u4ef6') return '\u8fdb\u884c\u4e86\u591a\u6b21\u6587\u4ef6\u67e5\u627e'
-    return '\u6267\u884c\u4e86\u591a\u9879\u5de5\u5177\u64cd\u4f5c'
+  const keys = [...new Set(items.map(item => toolKey(item.name)))]
+  if (keys.length === 1 && items.length > 1) {
+    const key = keys[0]!
+    if (status === 'running') return t(`tool.${key}.doingMulti`)
+    if (status === 'approval') return t('activity.approvalMulti')
+    if (status === 'error') return t('activity.errorMulti')
+    return t(`tool.${key}.didMulti`)
   }
-  const text = verbs.join('\u3001')
-  if (status === 'running') return `\u6b63\u5728${text}`
-  if (status === 'approval') return `\u7b49\u5f85\u6279\u51c6\uff1a${text}`
-  if (status === 'error') return `${text}\u65f6\u6709\u64cd\u4f5c\u5931\u8d25`
-  return [...new Set(items.map(item => completedToolAction(item.name)))].join('\u3001')
+  if (status === 'running') return ucFirst(joinActivity(keys.map(key => lcFirst(t(`tool.${key}.doing`)))))
+  if (status === 'approval') return t('activity.approvalMulti')
+  if (status === 'error') return t('activity.errorMulti')
+  return joinActivity(keys.map(key => t(`tool.${key}.did`)))
 }
 
 function MetricsLine({ metrics }: { metrics: Metrics }) {

@@ -12,9 +12,11 @@ from friday.memory import (
     consolidate_memory,
     list_memories,
     load_user_profile_settings,
+    read_memory_file,
     relevant_memory,
     remove_memory,
     run_memory_command,
+    save_memory_file,
     search_memories,
     save_user_profile_settings,
     update_memory,
@@ -47,6 +49,38 @@ class MemoryTests(unittest.TestCase):
             save_user_profile_settings({"preferred_name": "", "preferred_language": "", "habits": ""}, home=home)
             self.assertNotIn("friday-profile:start", path.read_text(encoding="utf-8"))
             self.assertIn("Keep this manual memory.", path.read_text(encoding="utf-8"))
+
+    def test_user_profile_save_without_habits_keeps_existing_habits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            save_user_profile_settings(
+                {"preferred_name": "Kai", "preferred_language": "Chinese", "habits": "- Keep answers concise."},
+                home=home,
+            )
+
+            saved = save_user_profile_settings({"preferred_name": "Kai2", "preferred_language": "English"}, home=home)
+
+            self.assertEqual(saved["habits"], "- Keep answers concise.")
+            self.assertEqual(load_user_profile_settings(home=home)["habits"], "- Keep answers concise.")
+
+    def test_memory_file_roundtrip_limit_and_secret_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+
+            empty = read_memory_file("global", home=home)
+            self.assertEqual(empty["content"], "")
+            self.assertTrue(empty["path"].endswith("MEMORY.md"))
+
+            saved = save_memory_file("global", "# Global memory\n\n- Prefer Chinese.\n", home=home)
+            self.assertEqual(saved["chars"], len("# Global memory\n\n- Prefer Chinese.\n"))
+            self.assertEqual(read_memory_file("global", home=home)["content"], "# Global memory\n\n- Prefer Chinese.\n")
+
+            with self.assertRaises(ValueError):
+                save_memory_file("user", "x" * 1501, home=home)
+            with self.assertRaises(ValueError):
+                save_memory_file("global", "api_key = sk-secretvalue123", home=home)
+            with self.assertRaises(ValueError):
+                read_memory_file("project", home=home)
 
     def test_markdown_memory_supports_lifecycle_without_a_database(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
