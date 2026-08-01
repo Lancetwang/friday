@@ -1,8 +1,40 @@
 # Install
 
-This guide installs Friday from GitHub as a global `friday` command. The source checkout must remain on disk because the TUI is launched from it.
+[中文](install.zh-CN.md)
 
-## Requirements
+Friday can be installed as a packaged Windows app or from source. The Windows app is the shortest path for normal use; the source installation provides the global `friday` CLI and TUI.
+
+## Windows App (Recommended)
+
+### Requirements
+
+- 64-bit Windows 10 or Windows 11
+- A model provider API key
+
+Git, Python, Node.js, Rust, and a separate `friday-agent-core` installation are not required. The installer contains the desktop client and its Python sidecar.
+
+### Install
+
+1. Open [GitHub Releases](https://github.com/Lancetwang/friday/releases).
+2. Open the newest release and download its Windows x64 setup executable (currently `Friday_0.1.0_x64-setup.exe`).
+3. Run the installer, then launch Friday from the Start menu or desktop shortcut.
+4. Open **Settings > Models**, expand a provider, enter its API key, and select **Save and use**.
+
+The release notes publish the installer's SHA-256 digest. If Windows SmartScreen appears for an unsigned beta, verify that digest before choosing to continue.
+
+Web search is optional. Configure Tavily or AnySearch under **Settings > Web Search**. Your preferred name and Friday response language live under **Settings > General**; the desktop display language is a separate setting.
+
+### Upgrade
+
+Download the newer installer from GitHub Releases and run it over the existing installation. Sessions, projects, model profiles, memory, and settings remain under `~/.friday/`.
+
+### Uninstall
+
+Remove Friday from **Windows Settings > Apps > Installed apps**. Uninstalling the application does not delete `~/.friday/`; remove that directory separately only when its sessions, memory, and configuration are no longer needed.
+
+## Install From Source
+
+### Requirements
 
 - Git
 - Python 3.12 or newer
@@ -19,7 +51,7 @@ node --version
 npm --version
 ```
 
-## Clone And Install
+### Clone And Install The CLI/TUI
 
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
@@ -29,15 +61,13 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
-`uv tool install` creates an isolated Python environment and installs the exact `friday-agent-core` version pinned by this Friday checkout (resolved from PyPI). The editable Friday install keeps the global command connected to the cloned TUI and Python source.
+`uv tool install` creates an isolated Python environment and installs the exact `friday-agent-core` version pinned by the checkout. The editable install keeps the global `friday` command connected to the cloned Python and TUI source, so the checkout must remain on disk.
 
-If `friday` is not found after installation, run `uv tool update-shell`, reopen the terminal, and try `friday --help`.
+If `friday` is not found, run `uv tool update-shell`, reopen the terminal, and try `friday --help`.
 
-## Model Configuration
+### Configure The Source Installation
 
-Create one global configuration file so Friday works from every workspace.
-
-PowerShell:
+Create one global configuration so Friday works from every workspace:
 
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\.friday" | Out-Null
@@ -47,7 +77,7 @@ notepad "$HOME\.friday\.env"
 notepad "$HOME\.friday\config.json"
 ```
 
-bash:
+On macOS or Linux:
 
 ```bash
 mkdir -p "$HOME/.friday"
@@ -57,7 +87,7 @@ ${EDITOR:-vi} "$HOME/.friday/.env"
 ${EDITOR:-vi} "$HOME/.friday/config.json"
 ```
 
-Put secrets in `.env`:
+Store secrets in `.env`:
 
 ```text
 LLM_API_KEY=your-key
@@ -66,30 +96,9 @@ ANYSEARCH_API_KEY=optional-web-search-fallback-key
 JINA_API_KEY=optional-web-fetch-key
 ```
 
-Put non-secret model settings in `config.json`:
+See [Model Configuration](model-configuration.md) for provider profiles, token limits, configuration precedence, and desktop-managed credentials.
 
-```json
-{
-  "provider": "deepseek",
-  "model": "deepseek-v4-flash",
-  "base_url": "https://api.deepseek.com",
-  "context_window": 353000,
-  "max_output_tokens": 65536,
-  "run_token_budget": 2824000
-}
-```
-
-Friday stores optional project overrides under `~/.friday/projects/<workspace-id>/config.json`; existing `<workspace>/.friday/config.json` files are migrated there on startup. A project config overrides only the keys it contains; all other values come from the global file. Provider-specific keys such as `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` are supported, with `LLM_API_KEY` as the generic fallback. Configuration changes apply the next time Friday starts or rebuilds its context.
-
-Secret priority is:
-
-1. Process environment variables.
-2. The active workspace's `.env`.
-3. `~/.friday/.env`.
-
-This lets one global secret configuration work everywhere while allowing a project to override it locally.
-
-## Verify The Installation
+### Verify The Source Installation
 
 Run these from a directory other than the Friday checkout:
 
@@ -99,13 +108,21 @@ friday ask "Reply with OK and do not use tools"
 friday
 ```
 
-The first two commands verify the global launcher, model connection, and runtime. The final command starts the TUI with the current directory as its workspace.
+The first two commands verify the launcher, model connection, and runtime. The final command starts the TUI with the current directory as its workspace.
 
-## Upgrade Friday And Agent Core
+### Run The Desktop App From Source
 
-Friday pins a tested `friday-agent-core` version in `pyproject.toml`. Do not independently upgrade the runtime inside the tool environment: a newer core may have an incompatible API.
+Desktop development additionally requires the stable Rust toolchain and Microsoft C++ Build Tools. From the repository root:
 
-To update both Friday and its compatible core together:
+```powershell
+powershell -ExecutionPolicy Bypass -File ui-desktop\scripts\start-dev.ps1
+```
+
+The incremental launcher installs desktop npm dependencies when needed, builds missing native pieces, starts Vite, and opens the debug application.
+
+### Upgrade The Source Installation
+
+Friday pins a tested `friday-agent-core` version. Update Friday and its compatible runtime together:
 
 ```powershell
 cd path\to\friday
@@ -115,14 +132,12 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
-If agent-core v2 is released but Friday still pins v1, continue using v1. Once Friday updates its pin after compatibility testing, `git pull` plus the reinstall command upgrades both together.
+Friday checks the installed runtime version against its pin at startup and reports the reinstall command when the source checkout and tool environment differ.
 
-Friday checks the installed runtime version against its pin at startup. If the checkout was updated without reinstalling the isolated tool environment, startup stops with the exact reinstall command instead of failing midway through a turn.
-
-## Uninstall
+### Uninstall The Source Installation
 
 ```powershell
 uv tool uninstall friday-agent
 ```
 
-Removing the cloned repository removes the TUI source. User memory and global configuration remain under `~/.friday/` until deleted explicitly.
+The source checkout can then be removed. User data under `~/.friday/` remains until deleted explicitly.

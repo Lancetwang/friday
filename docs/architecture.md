@@ -51,7 +51,7 @@ Derived state is tagged, not sniffed: the trailing progress checkpoint message c
 
 ```mermaid
 flowchart TD
-    Surface["CLI / TUI gateway (views)"] --> Session["FridaySession facade<br/>live agent+context, approval state machine"]
+    Surface["Desktop / CLI / TUI gateways (views)"] --> Session["FridaySession facade<br/>live agent+context, approval state machine"]
     Session --> Turn["Turn pipeline (turn.py)<br/>checkpoint -> compact -> recall -> loop -> persist/trace"]
     Turn --> Outer["Verify / goal loop (loop.py)<br/>attempt -> verify -> retry/finish"]
     Outer --> Inner["Guarded flow (agent_flow.py)<br/>model -> router -> tools -> guard"]

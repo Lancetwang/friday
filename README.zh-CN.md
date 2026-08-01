@@ -2,11 +2,19 @@
 
 [English](README.md)
 
-Friday 是一个具有个人特色的本地 Personal CLI Agent。在任意目录运行 `friday`，它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
+Friday 是一个本地通用 Agent，提供 Windows 桌面端、TUI 和 CLI。它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
 
-底层的 [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) 负责通用 Agent 执行。Friday Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace、CLI 和 TUI。两者之间的边界契约见[架构文档](docs/architecture.md)。
+底层的 [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) 负责通用 Agent 执行。Friday Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace，以及桌面端、CLI 和 TUI。两者之间的边界契约见[架构文档](docs/architecture.md)。
 
 ## 安装
+
+### Windows 桌面端（推荐）
+
+打开 [GitHub Releases](https://github.com/Lancetwang/friday/releases)，下载最新的 Windows x64 安装程序（当前为 `Friday_0.1.0_x64-setup.exe`）并运行。安装包已包含 Friday 和 Python Runtime，不要求用户额外安装 Git、Python、Node.js 或 Rust。
+
+启动 Friday 后，在**设置 > 模型**中配置至少一个模型供应商的 API Key。联网搜索 Key 和用户偏好也可以在设置中完成。
+
+### 从源码安装
 
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
@@ -16,9 +24,9 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
-Friday 是应用而非库，因此从源码安装：TUI 由本仓库构建，源码目录需保留在磁盘上。所有 Python 依赖——包括 [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) runtime——会在 `uv tool install` 时自动从 PyPI 解析；只有 runtime 以独立库的形式发布。
+源码安装会提供全局 `friday` CLI 与 TUI。源码目录需要保留，所有 Python 依赖，包括 [`friday-agent-core`](https://pypi.org/project/friday-agent-core/)，都会自动从 PyPI 解析。
 
-将 API Key 写入 `~/.friday/.env`，将模型配置写入 `~/.friday/config.json`，之后即可在任意项目目录运行 `friday`。完整的环境要求、配置、验证、升级与卸载步骤见 [安装文档](docs/install.md)。
+两种安装方式的环境要求、配置、升级与卸载步骤见[中文安装文档](docs/install.zh-CN.md)。
 
 ## 特性
 
@@ -39,7 +47,7 @@ Friday 是应用而非库，因此从源码安装：TUI 由本仓库构建，源
 
 ```mermaid
 flowchart TD
-    User["用户"] --> Surface["Friday CLI / TUI"]
+    User["用户"] --> Surface["Friday Desktop / CLI / TUI"]
     Surface --> Harness["Friday Harness"]
 
     Harness --> AgentLoop["Agent Loop<br/>模型 -> 工具 -> 模型 -> 回答"]
@@ -55,8 +63,8 @@ flowchart TD
 
 ## 文档
 
-- [安装](docs/install.md)
-- [快速开始](docs/quick-start.md)
+- [安装](docs/install.zh-CN.md) ([English](docs/install.md))
+- [快速开始](docs/quick-start.zh-CN.md) ([English](docs/quick-start.md))
 - [架构](docs/architecture.md)
 - [模型配置](docs/model-configuration.md)
 - [CLI 命令](docs/cli.md)

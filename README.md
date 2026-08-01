@@ -2,11 +2,19 @@
 
 [中文说明](README.zh-CN.md)
 
-Friday is a personal CLI agent that runs locally. Run `friday` from any directory to work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
+Friday is a local general-purpose agent available as a Windows desktop app, TUI, and CLI. It can work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
 
-It uses [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) for generic agent execution. The Friday harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, CLI, and TUI behavior. [Architecture](docs/architecture.md) describes the boundary between the two.
+It uses [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) for generic agent execution. The Friday harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, and desktop, CLI, and TUI behavior. [Architecture](docs/architecture.md) describes the boundary between the two.
 
 ## Install
+
+### Windows App (Recommended)
+
+Open [GitHub Releases](https://github.com/Lancetwang/friday/releases), download the newest Windows x64 setup executable (currently `Friday_0.1.0_x64-setup.exe`), and run it. The packaged app includes Friday and its Python runtime; Git, Python, Node.js, and Rust are not required.
+
+Launch Friday, open **Settings > Models**, and configure at least one provider API key. Web search keys and user preferences can be configured from the same Settings page.
+
+### From Source
 
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
@@ -16,9 +24,9 @@ npm --prefix ui-tui run build
 uv tool install -e . --force --reinstall
 ```
 
-Friday is an application, so it installs from source: the TUI is built from this repo, and the checkout stays on disk. All Python dependencies — including the [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) runtime — resolve automatically from PyPI during `uv tool install`; only the runtime is published as a standalone library.
+The source installation provides the global `friday` CLI and TUI. The checkout stays on disk, and all Python dependencies, including [`friday-agent-core`](https://pypi.org/project/friday-agent-core/), resolve automatically from PyPI.
 
-Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json`, then run `friday` from any project directory. See [Install](docs/install.md) for prerequisites, configuration, verification, upgrades, and uninstall steps.
+See [Install](docs/install.md) for both installation paths, prerequisites, configuration, upgrades, and uninstall steps.
 
 ## Features
 
@@ -41,7 +49,7 @@ Put the API key in `~/.friday/.env` and model settings in `~/.friday/config.json
 
 ```mermaid
 flowchart TD
-    User["User"] --> Surface["Friday CLI / TUI"]
+    User["User"] --> Surface["Friday Desktop / CLI / TUI"]
     Surface --> Harness["Friday harness"]
 
     Harness --> AgentLoop["Agent loop<br/>model -> tools -> model -> answer"]
@@ -57,8 +65,8 @@ flowchart TD
 
 ## Docs
 
-- [Install](docs/install.md)
-- [Quick Start](docs/quick-start.md)
+- [Install](docs/install.md) ([中文](docs/install.zh-CN.md))
+- [Quick Start](docs/quick-start.md) ([中文](docs/quick-start.zh-CN.md))
 - [Architecture](docs/architecture.md)
 - [Model Configuration](docs/model-configuration.md)
 - [CLI Commands](docs/cli.md)

@@ -1,6 +1,8 @@
 # Friday Docs
 
-Friday is a local general-purpose CLI agent. The README explains what it is; these docs explain how to use it.
+Friday is a local general-purpose agent with desktop, TUI, and CLI clients. The README explains what it is; these docs explain how to use it.
+
+Chinese guides: [安装](install.zh-CN.md) · [快速开始](quick-start.zh-CN.md)
 
 Start here:
 
