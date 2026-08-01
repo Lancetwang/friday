@@ -5,9 +5,10 @@ import os
 import shutil
 import tempfile
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 from uuid import uuid4
 
 from dulwich import porcelain
@@ -40,7 +41,7 @@ ARTIFACT_TYPES = {
     ".txt": "text",
     ".webp": "image",
 }
-_snapshot_lock = threading.Lock()
+_repo_lock = threading.RLock()
 
 
 def begin_checkpoint(
@@ -215,10 +216,9 @@ def _before_messages(entry: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _snapshot(workspace: Path) -> str:
-    with _snapshot_lock:
-        with _open_repo(workspace) as repo:
-            _stage_workspace(repo, workspace)
-            return repo.open_index().commit(repo.object_store).decode("ascii")
+    with _open_repo(workspace) as repo:
+        _stage_workspace(repo, workspace)
+        return repo.open_index().commit(repo.object_store).decode("ascii")
 
 
 def _restore_tree(workspace: Path, current_tree: str, target_tree: str) -> None:
@@ -327,12 +327,14 @@ def _ensure_repo(workspace: Path) -> None:
     exclude.write_text("/.git/\n/.friday/\n", encoding="utf-8")
 
 
-def _open_repo(workspace: Path) -> Repo:
-    _ensure_repo(workspace)
-    repo = Repo(_repo_dir(workspace))
-    repo.bare = False
-    repo.path = str(workspace)
-    return repo
+@contextmanager
+def _open_repo(workspace: Path) -> Iterator[Repo]:
+    with _repo_lock:
+        _ensure_repo(workspace)
+        with Repo(_repo_dir(workspace)) as repo:
+            repo.bare = False
+            repo.path = str(workspace)
+            yield repo
 
 
 def _stage_workspace(repo: Repo, workspace: Path) -> None:
@@ -446,8 +448,13 @@ def _remove_entries(workspace: Path, removed: list[dict[str, Any]]) -> None:
                     del repo.refs[ref]
                 except KeyError:
                     pass
-    with _open_repo(workspace) as repo:
-        porcelain.gc(repo, prune=True, grace_period=0)
+    try:
+        with _open_repo(workspace) as repo:
+            porcelain.gc(repo, prune=True, grace_period=0)
+    except PermissionError:
+        # References are already removed; a later prune can collect a pack
+        # temporarily locked by Windows or another process.
+        pass
 
 
 def _sync_entry_refs(workspace: Path, entry: dict[str, Any]) -> None:

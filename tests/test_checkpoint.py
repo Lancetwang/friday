@@ -201,7 +201,7 @@ class CheckpointTests(unittest.TestCase):
             restored = restore_checkpoint(root, checkpoint_id=ids[-2], force=True)
             self.assertEqual(restored["id"], ids[-2])
 
-    def test_deleting_a_session_removes_its_recovery_and_tool_artifacts(self) -> None:
+    def test_deleting_a_session_removes_its_recovery_and_tool_artifacts_when_pack_is_locked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             save_turn(root, "change", "done", "session-delete", [])
@@ -225,7 +225,8 @@ class CheckpointTests(unittest.TestCase):
             artifacts.mkdir(parents=True)
             (artifacts / "bash.txt").write_text("large output", encoding="utf-8")
 
-            delete_session(root, "session-delete")
+            with patch("friday.checkpoint.porcelain.gc", side_effect=PermissionError("pack is locked")):
+                delete_session(root, "session-delete")
 
             self.assertFalse(path.parent.exists())
             self.assertFalse(artifacts.exists())
