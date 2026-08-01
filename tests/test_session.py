@@ -8,6 +8,7 @@ from agent_core import RunContext
 
 from friday.progress import PROGRESS_ARTIFACT
 from friday.session import FridaySession
+from friday.state import recent_turns
 from friday.turn import TurnResult
 
 
@@ -156,6 +157,20 @@ class SessionApprovalTests(unittest.TestCase):
                 session.chat("hello")
 
         self.assertIsNone(session.suspended)
+
+
+class SessionStateTests(unittest.TestCase):
+    def test_recent_turns_handles_fewer_messages_than_the_limit(self) -> None:
+        messages = [
+            {"role": "system", "content": "prefix"},
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "one"},
+            {"role": "user", "content": "second"},
+            {"role": "assistant", "content": "two"},
+        ]
+
+        self.assertEqual(recent_turns(messages), messages[1:])
+        self.assertEqual(recent_turns(messages, limit=0), [])
 
 
 if __name__ == "__main__":

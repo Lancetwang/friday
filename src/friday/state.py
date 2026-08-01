@@ -87,6 +87,8 @@ def conversation_body(messages: list[Any]) -> list[dict[str, Any]]:
 
 def recent_turns(messages: list[Any], limit: int = RECENT_CONVERSATION_LIMIT) -> list[dict[str, Any]]:
     """The latest complete user turns, verbatim, including tool calls and results."""
+    if limit <= 0:
+        return []
     body = [dict(message) for message in messages if isinstance(message, dict) and not is_progress_checkpoint(message)]
     user_indices = [
         index
@@ -95,7 +97,7 @@ def recent_turns(messages: list[Any], limit: int = RECENT_CONVERSATION_LIMIT) ->
     ]
     if not user_indices:
         return []
-    return body[user_indices[-limit] :]
+    return body[user_indices[-min(limit, len(user_indices))] :]
 
 
 def hydrate(context: RunContext, state: SessionState) -> None:

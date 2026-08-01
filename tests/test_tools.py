@@ -1702,12 +1702,37 @@ class VerificationTests(unittest.TestCase):
         self.assertNotIn("error", result)
 
     def test_verifier_prompt_excludes_main_answer(self) -> None:
-        prompt = verification_prompt("fix the bug", [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}])
+        prompt = verification_prompt(
+            "increment attempts",
+            [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}],
+            ["create state with attempts 1"],
+        )
 
-        self.assertIn("fix the bug", prompt)
+        self.assertIn("increment attempts", prompt)
+        self.assertIn("create state with attempts 1", prompt)
         self.assertIn("Independently verify", prompt)
         self.assertIn('"path": "x.py"', prompt)
         self.assertNotIn("main answer", prompt.lower())
+
+    def test_verifier_receives_prior_user_requirements_but_not_agent_claims(self) -> None:
+        context = RunContext(metadata={"workspace": str(Path.cwd())})
+        context.add_message("user", "create state with attempts 1")
+        context.add_message("assistant", "I definitely completed it")
+        context.add_message("user", "increment attempts")
+        verifier = Mock()
+        verifier.chat.return_value = '{"verdict":"pass","evidence":[]}'
+        verifier_context = RunContext(metadata={"workspace": str(Path.cwd())})
+
+        with (
+            patch("friday.verification.pending_approval", return_value={"pending": False}),
+            patch("friday.verification.build_verifier", return_value=(verifier, verifier_context)),
+            patch("friday.verification.inherit_guarded_run"),
+        ):
+            verify_friday("increment attempts", context, 0, force=True)
+
+        prompt = verifier.chat.call_args.args[0]
+        self.assertIn("create state with attempts 1", prompt)
+        self.assertNotIn("I definitely completed it", prompt)
 
     def test_simple_goal_passes_after_one_verifier_run(self) -> None:
         agent = Mock()

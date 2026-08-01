@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -10,7 +11,7 @@ from agent_core import Agent, RunContext
 
 from friday.loop import LoopResult
 from friday.trace import expand_event, load_trace
-from friday.turn import run_turn
+from friday.turn import _replace_pending_tool_result, run_turn
 
 
 class TurnTests(unittest.TestCase):
@@ -55,6 +56,29 @@ class TurnTests(unittest.TestCase):
         save_turn.assert_called_once()
         self.assertEqual(save_turn.call_args.kwargs["user_message_times"][0]["text"], "hello")
         self.assertEqual(result.context.events, [])
+
+    def test_rejection_guidance_is_a_user_message_not_tool_data(self) -> None:
+        context = RunContext()
+        context.add_message(
+            "tool",
+            '{"approval_required": true, "id": "a1"}',
+            tool_call_id="call-1",
+        )
+
+        _replace_pending_tool_result(
+            context,
+            {
+                "rejected": True,
+                "approval": {"id": "a1"},
+                "instruction": "keep the file and edit it instead",
+            },
+        )
+
+        messages = context.get_messages()
+        self.assertNotIn("instruction", json.loads(messages[-2]["content"]))
+        self.assertEqual(messages[-1]["role"], "user")
+        self.assertEqual(messages[-1]["content"], "keep the file and edit it instead")
+        self.assertTrue(messages[-1]["friday_human_guidance"])
 
     def test_run_turn_reports_each_progress_transition_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
