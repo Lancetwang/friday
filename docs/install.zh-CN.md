@@ -104,11 +104,12 @@ JINA_API_KEY=optional-web-fetch-key
 
 ```powershell
 friday --help
+friday doctor
 friday ask "Reply with OK and do not use tools"
 friday
 ```
 
-前两个命令检查全局启动器、模型连接与 Runtime，最后一个命令以当前目录为工作区启动 TUI。
+`friday doctor` 会在不调用模型的情况下检查本地 Runtime、模型凭据、目录写入权限和 TUI 资源；下一个命令验证模型连接，最后一个命令以当前目录为工作区启动 TUI。
 
 ### 从源码运行桌面端
 

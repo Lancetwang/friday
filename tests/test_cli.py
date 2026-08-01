@@ -12,6 +12,7 @@ from unittest.mock import patch
 from agent_core import RunContext
 
 from friday import cli
+from friday.doctor import doctor_report
 from friday import tui_node
 from friday.session import FridaySession
 from friday.state import save_turn
@@ -23,7 +24,7 @@ class CliTests(unittest.TestCase):
         with patch.object(sys, "stdout", output), self.assertRaises(SystemExit):
             cli.main(["--help"])
 
-        for command in ("memory", "context", "progress", "compact", "goal", "resume", "session", "undo", "checkpoint", "approve", "reject", "reset"):
+        for command in ("doctor", "memory", "context", "progress", "compact", "goal", "resume", "session", "undo", "checkpoint", "approve", "reject", "reset"):
             self.assertIn(command, output.getvalue())
         self.assertNotIn("prompt", output.getvalue())
 
@@ -94,6 +95,49 @@ class CliTests(unittest.TestCase):
                 tui_node._configure_windows_console()
 
         self.assertEqual(kernel32.calls, [("in", 65001), ("out", 65001)])
+
+    def test_doctor_returns_nonzero_for_an_unhealthy_installation(self) -> None:
+        report = {"status": "error", "ok": False, "checks": []}
+        output = StringIO()
+        with patch("friday.cli.doctor_report", return_value=report), patch.object(sys, "stdout", output):
+            with self.assertRaises(SystemExit) as exit:
+                cli.main(["doctor", "--json"])
+
+        self.assertEqual(exit.exception.code, 1)
+        self.assertEqual(json.loads(output.getvalue()), report)
+
+    def test_doctor_is_read_only_for_a_fresh_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            with patch.dict(
+                os.environ,
+                {
+                    "FRIDAY_HOME": str(home),
+                    "LLM_API_KEY": "",
+                    "DEEPSEEK_API_KEY": "",
+                    "OPENAI_API_KEY": "",
+                    "ANTHROPIC_API_KEY": "",
+                    "MIMO_API_KEY": "",
+                },
+                clear=False,
+            ):
+                report = doctor_report(workspace)
+
+            self.assertFalse(home.exists())
+            self.assertEqual(report["status"], "error")
+
+    def test_entrypoint_hides_tracebacks_unless_debugging(self) -> None:
+        error = StringIO()
+        with patch.object(cli, "main", side_effect=ValueError("bad configuration")):
+            with patch.dict(os.environ, {}, clear=True), patch.object(sys, "stderr", error):
+                with self.assertRaises(SystemExit) as exit:
+                    cli.entrypoint()
+
+        self.assertEqual(exit.exception.code, 1)
+        self.assertEqual(error.getvalue(), "Friday error: bad configuration\n")
 
     def test_slash_approve_delegates_to_the_session_state_machine(self) -> None:
         session = FridaySession()

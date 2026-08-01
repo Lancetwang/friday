@@ -295,6 +295,11 @@ def _load_base_config(workspace: Path, *, home: Path | None = None) -> ModelConf
 
 def build_model(config: ModelConfig) -> ChatModel:
     api_key = model_api_key(config)
+    if not api_key:
+        raise ValueError(
+            f"Model '{config.profile_name}' has no API key. Configure it in Friday Settings "
+            "or run `friday model add --help`."
+        )
     if config.provider == "anthropic":
         return AnthropicModel(api_key=api_key, base_url=config.base_url or None, model=config.model)
     return LLM(

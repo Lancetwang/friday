@@ -142,8 +142,6 @@ def run_turn(
         )
         if goal or continuation:
             append_progress_checkpoint(context)
-        if on_progress:
-            on_progress(progress)
         recalled = "" if continuation else relevant_memory(workspace, text)
         if recalled:
             context.add_message("system", recalled, friday_memory_recall=True)

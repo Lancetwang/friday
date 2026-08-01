@@ -12,7 +12,7 @@ from typing import Any
 
 from agent_core import AgentEvent
 
-from friday.app import resume_choices
+from friday.app import ensure_user_home, resume_choices
 from friday.checkpoint import ARTIFACT_TYPES, checkpoint_choices
 from friday.config import (
     delete_model_profile,
@@ -204,8 +204,10 @@ class Gateway:
                 self.session.ensure()
                 self.ok(rid, {"progress": self.session.progress()})
             elif method == "skill.list":
+                ensure_user_home()
                 self.ok(rid, {"skills": discover_skills(Path.cwd().resolve(), friday_home())})
             elif method == "skill.get":
+                ensure_user_home()
                 path = str(params.get("path") or "")
                 skill = next(
                     (

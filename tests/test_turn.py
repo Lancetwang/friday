@@ -56,6 +56,20 @@ class TurnTests(unittest.TestCase):
         self.assertEqual(save_turn.call_args.kwargs["user_message_times"][0]["text"], "hello")
         self.assertEqual(result.context.events, [])
 
+    def test_run_turn_reports_each_progress_transition_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = RunContext(metadata={"workspace": tmp, "session_id": "progress"})
+            agent = type("Agent", (), {"instructions": "test"})()
+            updates = []
+
+            with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
+                with patch("friday.turn.build_tools", return_value=[]):
+                    with patch("friday.turn.run_loop", return_value=LoopResult(answer="done")):
+                        with patch("friday.turn.write_trace"), patch("friday.turn.save_turn"):
+                            run_turn(agent, context, "hello", stream=False, on_progress=updates.append)
+
+        self.assertEqual([update["status"] for update in updates], ["working", "done"])
+
     def test_trace_manifest_keeps_the_actual_loop_stop_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             context = RunContext(metadata={"workspace": tmp, "session_id": "stopped"})

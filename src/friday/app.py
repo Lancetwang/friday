@@ -5,7 +5,7 @@ import re
 import shutil
 import tomllib
 from dataclasses import asdict
-from importlib.metadata import PackageNotFoundError, version as metadata_version
+from importlib.metadata import PackageNotFoundError, requires as metadata_requires, version as metadata_version
 from pathlib import Path
 from typing import Any
 
@@ -137,13 +137,18 @@ def _source_root() -> Path:
 
 def _pinned_core_version() -> str:
     pyproject = _source_root() / "pyproject.toml"
-    if not pyproject.exists():
-        return ""
-    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    for requirement in data.get("project", {}).get("dependencies", []):
+    if pyproject.exists():
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        requirements = data.get("project", {}).get("dependencies", [])
+    else:
+        try:
+            requirements = metadata_requires("friday-agent") or []
+        except PackageNotFoundError:
+            requirements = []
+    for requirement in requirements:
         name, separator, pinned = str(requirement).partition("==")
         if separator and name.strip() == "friday-agent-core":
-            return pinned.strip()
+            return pinned.split(";", 1)[0].strip()
     return ""
 
 

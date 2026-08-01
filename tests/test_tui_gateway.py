@@ -399,6 +399,24 @@ class TuiGatewayTests(unittest.TestCase):
 
         self.assertEqual(ok.call_args.args[1], {"checkpoints": checkpoints})
 
+    def test_fresh_gateway_provisions_the_default_skill_on_first_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            cwd = Path.cwd()
+            os.chdir(workspace)
+            try:
+                with patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home")}):
+                    gateway = Gateway()
+                    with patch.object(gateway, "ok") as ok:
+                        gateway.handle({"id": "1", "method": "skill.list"})
+            finally:
+                os.chdir(cwd)
+
+        skills = ok.call_args.args[1]["skills"]
+        self.assertEqual([skill["name"] for skill in skills], ["friday-cli"])
+
     def test_gateway_opens_trace_server_on_an_available_port(self) -> None:
         gateway = Gateway()
         server = object()
