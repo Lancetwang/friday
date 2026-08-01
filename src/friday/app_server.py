@@ -53,6 +53,12 @@ _MAX_ARTIFACT_BYTES = 25_000_000
 
 
 def main() -> None:
+    if sys.argv[1:2] == ["--cli"]:
+        from friday.cli import main as cli_main
+
+        cli_main(sys.argv[2:])
+        return
+    _install_cli_shim()
     output = _Utf8Output(sys.stdout.buffer)
     sys.stdout = sys.stderr
     gateway = Gateway(output=output, background=True)
@@ -70,6 +76,26 @@ def main() -> None:
                 gateway.err(None, "invalid JSON-RPC request: expected an object")
                 continue
             gateway.handle(message)
+
+
+def _install_cli_shim() -> Path:
+    directory = friday_home() / "bin"
+    directory.mkdir(parents=True, exist_ok=True)
+    frozen = getattr(sys, "frozen", False)
+    args = "--cli" if frozen else "-m friday.cli"
+    if os.name == "nt":
+        path = directory / "friday.cmd"
+        content = f'@"{sys.executable}" {args} %*\n'
+    else:
+        path = directory / "friday"
+        content = f'#!/bin/sh\nexec "{sys.executable}" {args} "$@"\n'
+    if not path.exists() or path.read_text(encoding="utf-8") != content:
+        path.write_text(content, encoding="utf-8")
+        if os.name != "nt":
+            path.chmod(0o755)
+    if str(directory) not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = os.pathsep.join([str(directory), os.environ.get("PATH", "")])
+    return path
 
 
 class _Utf8Output:

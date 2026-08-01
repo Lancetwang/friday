@@ -13,7 +13,7 @@ from unittest.mock import patch
 from agent_core import AgentEvent, RunContext
 
 from friday.session import FridaySession
-from friday.app_server import Gateway, _request_lines, artifact_detail, fork_points, session_history, verification_status
+from friday.app_server import Gateway, _install_cli_shim, _request_lines, artifact_detail, fork_points, session_history, verification_status
 from friday.state import delete_session_tree, fork_session, read_session, resume_choices, save_turn, session_path, session_tree
 from friday.turn import TurnResult
 from friday.turn import TurnCancelled
@@ -82,6 +82,16 @@ class TuiGatewayTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.state_env.stop()
         self.state_tmp.cleanup()
+
+    def test_gateway_installs_process_local_friday_cli(self) -> None:
+        with patch.dict(os.environ, {"PATH": "existing"}), patch(
+            "friday.app_server.sys.executable", "C:/Friday/friday-app-server.exe"
+        ), patch("friday.app_server.sys.frozen", True, create=True):
+            path = _install_cli_shim()
+
+            self.assertTrue(path.exists())
+            self.assertIn("--cli", path.read_text(encoding="utf-8"))
+            self.assertEqual(os.environ["PATH"].split(os.pathsep)[0], str(path.parent))
 
     def test_gateway_writes_unicode_json_without_escaping(self) -> None:
         output = io.StringIO()

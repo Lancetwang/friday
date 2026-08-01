@@ -62,6 +62,7 @@ Put secrets in `.env`:
 ```text
 LLM_API_KEY=your-key
 TAVILY_API_KEY=optional-web-search-key
+ANYSEARCH_API_KEY=optional-web-search-fallback-key
 JINA_API_KEY=optional-web-fetch-key
 ```
 

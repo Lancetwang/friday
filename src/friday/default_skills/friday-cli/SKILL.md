@@ -13,5 +13,6 @@ Use Friday's CLI for Friday-specific inspection instead of reconstructing its be
 - After selecting a skill, read only its `SKILL.md` and the scripts, references, or templates it names.
 - Run `friday memory help` before managing persistent memory. Use `user` for stable profile facts, `global` for cross-project facts, `project` for lasting workspace facts, and `episode` for dated personal context.
 - Use `friday memory list|search --json` for structured inspection and `friday memory add|update|remove` for changes. Run `friday memory consolidate --days 2` to merge repeated episodes and promote stable high-frequency facts. Current task state belongs to `UpdatePlan`, not memory.
+- Persistent memory is managed outside the workspace. Do not use workspace `Glob` to discover it; use `friday memory list|search|status`, then read only a returned memory path when its full content is needed.
 
 Memory may store explicit durable user facts and lasting project facts; never infer a profile from one-off behavior. Do not edit Friday configuration, rules, or permissions unless the user explicitly asks.

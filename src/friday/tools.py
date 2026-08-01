@@ -51,19 +51,25 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
     user_dir.mkdir(parents=True, exist_ok=True)
     loaded_context_files: set[Path] = set()
 
-    def in_workspace(path: str) -> Path:
+    def resolved_path(path: str) -> Path:
         raw = Path(path)
         if not raw.is_absolute() and raw.parts[:2] == (".friday", "tool-results"):
             raw = friday_dir.joinpath(*raw.parts[1:])
-        resolved = (workspace / raw).resolve()
-        if (
-            resolved != workspace
-            and workspace not in resolved.parents
-            and resolved != friday_dir
-            and friday_dir not in resolved.parents
-        ):
+        return (workspace / raw).resolve()
+
+    def in_workspace(path: str) -> Path:
+        resolved = resolved_path(path)
+        if not any(resolved == root or root in resolved.parents for root in (workspace, friday_dir)):
             raise ValueError(f"Path escapes workspace: {path}")
         return resolved
+
+    def readable_path(path: str) -> Path:
+        resolved = resolved_path(path)
+        trusted_files = {user_dir / "USER.md", user_dir / "MEMORY.md"}
+        trusted_dirs = (user_dir / "memory", user_dir / "FridaySkills")
+        if resolved in trusted_files or any(root in resolved.parents for root in trusted_dirs):
+            return resolved
+        return in_workspace(path)
 
     def with_context(result: dict, paths: list[Path]) -> dict:
         context = _context_for_paths(workspace, paths, loaded_context_files)
@@ -71,14 +77,14 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
             result["context"] = context
         return result
 
-    @tool(description="Read a UTF-8 text file or load an image for a vision model inside the current workspace.", name="Read")
+    @tool(description="Read a UTF-8 text file or load an image in the workspace, or read Friday-managed memory and skills.", name="Read")
     def read_file(
-        path: Annotated[str, "Path inside the workspace."],
+        path: Annotated[str, "Path in the workspace or a Friday-managed memory or skill path."],
         start_line: Annotated[int, "1-based line number to start reading from."] = 1,
         line_count: Annotated[int, "Maximum number of lines to read."] = 120,
         max_chars: Annotated[int, "Maximum characters to return."] = 6000,
     ) -> dict:
-        file_path = in_workspace(path)
+        file_path = readable_path(path)
         mime_type = IMAGE_MIME_TYPES.get(file_path.suffix.lower())
         if mime_type:
             context = get_current_context()

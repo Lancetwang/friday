@@ -92,6 +92,27 @@ class ToolTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tools["Read"]("../escape.txt")
 
+    def test_read_allows_managed_memory_but_not_credentials_or_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {"FRIDAY_HOME": str(Path(tmp) / ".friday")},
+        ):
+            root = Path(tmp) / "workspace"
+            home = Path(os.environ["FRIDAY_HOME"])
+            root.mkdir()
+            (home / "memory").mkdir(parents=True)
+            (home / "USER.md").write_text("Ivy", encoding="utf-8")
+            (home / "memory" / "note.md").write_text("prefers Chinese", encoding="utf-8")
+            (home / "model-credentials.json").write_text("secret", encoding="utf-8")
+            tools = {tool.name: tool for tool in build_tools(root)}
+
+            self.assertIn("Ivy", tools["Read"](str(home / "USER.md"))["content"])
+            self.assertIn("prefers Chinese", tools["Read"](str(home / "memory" / "note.md"))["content"])
+            with self.assertRaises(ValueError):
+                tools["Read"](str(home / "model-credentials.json"))
+            with self.assertRaises(ValueError):
+                tools["Write"](str(home / "USER.md"), "changed")
+
     def test_read_and_edit_line_ranges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
