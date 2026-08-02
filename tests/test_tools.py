@@ -82,9 +82,12 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(len(image_messages), 1)
             self.assertTrue(image_messages[0]["content"][-1]["image_url"]["url"].startswith("data:image/png;base64,"))
 
-    def test_file_tools_stay_inside_workspace(self) -> None:
+    def test_read_can_leave_workspace_but_write_and_edit_cannot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            outside = Path(tmp) / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
             tools["Write"]("note.txt", "hello")
@@ -94,10 +97,13 @@ class ToolTests(unittest.TestCase):
             tools["Edit"]("note.txt", "hi", old_text="hello")
             self.assertIn("hi", tools["Read"]("note.txt")["content"])
 
+            self.assertIn("outside", tools["Read"](str(outside))["content"])
             with self.assertRaises(ValueError):
-                tools["Read"]("../escape.txt")
+                tools["Write"](str(outside), "changed")
+            with self.assertRaises(ValueError):
+                tools["Edit"](str(outside), "changed", old_text="outside")
 
-    def test_read_allows_managed_memory_but_not_credentials_or_writes(self) -> None:
+    def test_read_allows_managed_memory_and_credentials_but_not_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
             os.environ,
             {"FRIDAY_HOME": str(Path(tmp) / ".friday")},
@@ -113,8 +119,7 @@ class ToolTests(unittest.TestCase):
 
             self.assertIn("Ivy", tools["Read"](str(home / "USER.md"))["content"])
             self.assertIn("prefers Chinese", tools["Read"](str(home / "memory" / "note.md"))["content"])
-            with self.assertRaises(ValueError):
-                tools["Read"](str(home / "model-credentials.json"))
+            self.assertIn("secret", tools["Read"](str(home / "model-credentials.json"))["content"])
             with self.assertRaises(ValueError):
                 tools["Write"](str(home / "USER.md"), "changed")
 

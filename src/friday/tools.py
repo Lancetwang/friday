@@ -19,7 +19,7 @@ from typing import Annotated, Literal
 from agent_core import RunContext, get_current_context, tool
 
 from friday.progress import update_plan
-from friday.storage import friday_home, migrate_legacy_runtime, project_state_dir
+from friday.storage import migrate_legacy_runtime, project_state_dir
 
 CONTEXT_FILE_LIMIT = 8000
 IMAGE_MIME_TYPES = {
@@ -47,8 +47,6 @@ INSTRUCTION_FILE_NAMES = (
 def build_tools(workspace: Path, friday_dir: Path | None = None):
     workspace = workspace.resolve()
     friday_dir = (friday_dir or migrate_legacy_runtime(workspace)).resolve()
-    user_dir = friday_home()
-    user_dir.mkdir(parents=True, exist_ok=True)
     loaded_context_files: set[Path] = set()
 
     def resolved_path(path: str) -> Path:
@@ -63,28 +61,20 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
             raise ValueError(f"Path escapes workspace: {path}")
         return resolved
 
-    def readable_path(path: str) -> Path:
-        resolved = resolved_path(path)
-        trusted_files = {user_dir / "USER.md", user_dir / "MEMORY.md"}
-        trusted_dirs = (user_dir / "memory", user_dir / "FridaySkills")
-        if resolved in trusted_files or any(root in resolved.parents for root in trusted_dirs):
-            return resolved
-        return in_workspace(path)
-
     def with_context(result: dict, paths: list[Path]) -> dict:
         context = _context_for_paths(workspace, paths, loaded_context_files)
         if context:
             result["context"] = context
         return result
 
-    @tool(description="Read a UTF-8 text file or load an image in the workspace, or read Friday-managed memory and skills.", name="Read")
+    @tool(description="Read any local UTF-8 text file or load a local image.", name="Read")
     def read_file(
-        path: Annotated[str, "Path in the workspace or a Friday-managed memory or skill path."],
+        path: Annotated[str, "Absolute path, or a path relative to the workspace."],
         start_line: Annotated[int, "1-based line number to start reading from."] = 1,
         line_count: Annotated[int, "Maximum number of lines to read."] = 120,
         max_chars: Annotated[int, "Maximum characters to return."] = 6000,
     ) -> dict:
-        file_path = readable_path(path)
+        file_path = resolved_path(path)
         mime_type = IMAGE_MIME_TYPES.get(file_path.suffix.lower())
         if mime_type:
             context = get_current_context()
