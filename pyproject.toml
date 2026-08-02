@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-friday = "friday.cli:main"
+friday = "friday.cli:entrypoint"
 
 [build-system]
 requires = ["hatchling"]

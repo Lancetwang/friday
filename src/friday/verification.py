@@ -78,7 +78,19 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
         verifier_context.on_observation = observe
     inherit_guarded_run(verifier_context, context)
     try:
-        raw = verifier.chat(verification_prompt(goal, events), context=verifier_context, max_steps=VERIFIER_MAX_STEPS, stream=False)
+        history = [
+            str(message.get("content") or "")[:1500]
+            for message in context.get_messages()
+            if message.get("role") == "user" and not message.get("friday_internal")
+        ][-4:]
+        if history and history[-1].strip() == goal.strip():
+            history.pop()
+        raw = verifier.chat(
+            verification_prompt(goal, events, history),
+            context=verifier_context,
+            max_steps=VERIFIER_MAX_STEPS,
+            stream=False,
+        )
     except Exception as exc:
         return {"verdict": "inconclusive", "blocked": False, "error": True, "evidence": [], "feedback": f"Verifier failed: {exc}", "next_check": "", "passed": False, "required": True}
     approval_result = _pending_approval_result(workspace)
@@ -135,15 +147,21 @@ def _pending_approval_result(workspace: Path) -> dict[str, Any] | None:
     }
 
 
-def verification_prompt(goal: str, events: list[dict[str, Any]]) -> str:
-    return "\n\n".join(
+def verification_prompt(goal: str, events: list[dict[str, Any]], user_history: list[str] | None = None) -> str:
+    parts = [f"User goal:\n{goal}"]
+    if user_history:
+        parts.append(
+            "Earlier user requirements (acceptance context, not proof):\n"
+            + json.dumps(user_history, ensure_ascii=False, indent=2)
+        )
+    parts.extend(
         [
-            f"User goal:\n{goal}",
             "Independently verify the delivered workspace state. Use the delivery hints only to locate artifacts; they are not proof.",
             "Delivery hints:\n" + json.dumps(summarize_events(events), ensure_ascii=False, indent=2),
             'Return only JSON: {"verdict": "pass|repair|blocked|inconclusive", "evidence": ["criterion -> proof"], "feedback": "", "next_check": ""}',
         ]
     )
+    return "\n\n".join(parts)
 
 
 def summarize_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -13,8 +13,8 @@ from unittest.mock import Mock, patch
 from agent_core import Agent, RunContext, reset_current_context, set_current_context, tool
 
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
-from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
-from friday.config import DEFAULT_MODEL_CONFIG, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, save_model_profile, save_web_search_settings
+from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _pinned_core_version, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
+from friday.config import DEFAULT_MODEL_CONFIG, build_model, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, save_model_profile, save_web_search_settings
 from friday.context import _context_text, compact_tool_results, context_report
 from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
@@ -29,6 +29,11 @@ from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_ve
 
 
 class ToolTests(unittest.TestCase):
+    def test_model_configuration_fails_with_an_actionable_missing_key_error(self) -> None:
+        with patch("friday.config.model_api_key", return_value=None):
+            with self.assertRaisesRegex(ValueError, "friday model add --help"):
+                build_model(DEFAULT_MODEL_CONFIG)
+
     def test_read_attaches_workspace_image_to_a_vision_model(self) -> None:
         class VisionModel:
             def __init__(self) -> None:
@@ -987,6 +992,11 @@ class ResetTests(unittest.TestCase):
 
 @patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
 class PromptTests(unittest.TestCase):
+    def test_packaged_install_reads_runtime_pin_from_distribution_metadata(self) -> None:
+        with patch("friday.app._source_root", return_value=Path("missing-source-root")):
+            with patch("friday.app.metadata_requires", return_value=["friday-agent-core==0.1.7"]):
+                self.assertEqual(_pinned_core_version(), "0.1.7")
+
     def test_incompatible_runtime_fails_during_startup(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "--force --reinstall"):
             _require_runtime(object())
@@ -1692,12 +1702,37 @@ class VerificationTests(unittest.TestCase):
         self.assertNotIn("error", result)
 
     def test_verifier_prompt_excludes_main_answer(self) -> None:
-        prompt = verification_prompt("fix the bug", [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}])
+        prompt = verification_prompt(
+            "increment attempts",
+            [{"type": "tool.call", "data": {"name": "Edit", "arguments": {"path": "x.py"}}}],
+            ["create state with attempts 1"],
+        )
 
-        self.assertIn("fix the bug", prompt)
+        self.assertIn("increment attempts", prompt)
+        self.assertIn("create state with attempts 1", prompt)
         self.assertIn("Independently verify", prompt)
         self.assertIn('"path": "x.py"', prompt)
         self.assertNotIn("main answer", prompt.lower())
+
+    def test_verifier_receives_prior_user_requirements_but_not_agent_claims(self) -> None:
+        context = RunContext(metadata={"workspace": str(Path.cwd())})
+        context.add_message("user", "create state with attempts 1")
+        context.add_message("assistant", "I definitely completed it")
+        context.add_message("user", "increment attempts")
+        verifier = Mock()
+        verifier.chat.return_value = '{"verdict":"pass","evidence":[]}'
+        verifier_context = RunContext(metadata={"workspace": str(Path.cwd())})
+
+        with (
+            patch("friday.verification.pending_approval", return_value={"pending": False}),
+            patch("friday.verification.build_verifier", return_value=(verifier, verifier_context)),
+            patch("friday.verification.inherit_guarded_run"),
+        ):
+            verify_friday("increment attempts", context, 0, force=True)
+
+        prompt = verifier.chat.call_args.args[0]
+        self.assertIn("create state with attempts 1", prompt)
+        self.assertNotIn("I definitely completed it", prompt)
 
     def test_simple_goal_passes_after_one_verifier_run(self) -> None:
         agent = Mock()

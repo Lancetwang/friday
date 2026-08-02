@@ -6,6 +6,7 @@ Top-level commands:
 friday
 friday init
 friday help
+friday doctor [--json]
 friday skill list
 friday skill list --json
 friday skill help
@@ -40,6 +41,10 @@ friday context
 friday progress
 friday reset
 ```
+
+`friday doctor` performs read-only local checks for the Friday version, pinned
+agent runtime, model credentials, writable data paths, and source TUI assets.
+It does not call the model or consume tokens.
 
 Top-level `friday reset` requires confirmation and clears global Friday state.
 Interactive `/reset` clears only the current project's sessions, checkpoints,

@@ -104,11 +104,12 @@ Run these from a directory other than the Friday checkout:
 
 ```powershell
 friday --help
+friday doctor
 friday ask "Reply with OK and do not use tools"
 friday
 ```
 
-The first two commands verify the launcher, model connection, and runtime. The final command starts the TUI with the current directory as its workspace.
+`friday doctor` checks the local runtime, model credentials, writable paths, and TUI assets without calling the model. The next command verifies the model connection, and the final command starts the TUI with the current directory as its workspace.
 
 ### Run The Desktop App From Source
 

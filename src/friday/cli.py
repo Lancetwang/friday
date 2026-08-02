@@ -10,6 +10,7 @@ from pathlib import Path
 from friday.app import ensure_user_home, init_project, reset_friday, resume_choices
 from friday.checkpoint import checkpoint_choices
 from friday.context import context_report
+from friday.doctor import doctor_report, format_doctor_report
 from friday.config import (
     PROVIDERS,
     delete_model_profile,
@@ -55,6 +56,8 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("init", help="Create the project's AGENTS.md.")
+    doctor = sub.add_parser("doctor", help="Check the local Friday installation and configuration.")
+    doctor.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
     skill = sub.add_parser("skill", help="Inspect reusable Friday skills.", description="Inspect reusable Friday skills.")
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)
@@ -176,6 +179,13 @@ def main(argv: list[str] | None = None) -> None:
         print("created:" if created else "nothing to create")
         for path in created:
             print(path)
+        return
+
+    if command == "doctor":
+        report = doctor_report(Path.cwd())
+        print(json_dump(report) if args.json else format_doctor_report(report))
+        if not report["ok"]:
+            raise SystemExit(1)
         return
 
     if command == "skill":
@@ -665,5 +675,15 @@ def _print_resume_choices() -> None:
         print(f"{item['id']}\t{item['time']}\t{item['status'] or '-'}\t{item['turns']}\t{title}")
 
 
+def entrypoint() -> None:
+    try:
+        main()
+    except Exception as exc:
+        if os.getenv("FRIDAY_DEBUG"):
+            raise
+        print(f"Friday error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+
 if __name__ == "__main__":
-    main()
+    entrypoint()

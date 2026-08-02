@@ -26,9 +26,13 @@ def run_tui() -> None:
     if entry.exists():
         raise SystemExit(subprocess.call([_exe("node"), str(entry)], cwd=root, env=env))
 
+    if not ui.exists():
+        print("This Friday installation does not bundle the TypeScript TUI.")
+        print("Use `friday chat`, the Windows app, or install Friday from source.")
+        raise SystemExit(1)
+
     print("Friday TS TUI needs Node deps first:")
-    print("  cd ui-tui")
-    print("  npm install")
+    print(f'  npm --prefix "{ui}" install')
     raise SystemExit(1)
 
 

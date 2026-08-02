@@ -142,8 +142,6 @@ def run_turn(
         )
         if goal or continuation:
             append_progress_checkpoint(context)
-        if on_progress:
-            on_progress(progress)
         recalled = "" if continuation else relevant_memory(workspace, text)
         if recalled:
             context.add_message("system", recalled, friday_memory_recall=True)
@@ -282,6 +280,8 @@ def _tokens(text: str) -> int:
 
 
 def _replace_pending_tool_result(context: RunContext, approval_result: dict[str, Any]) -> str:
+    guidance = str(approval_result.get("instruction") or "").strip()
+    tool_result = {key: value for key, value in approval_result.items() if key != "instruction"}
     approval = approval_result.get("approval")
     approval_id = str(approval.get("id") or "") if isinstance(approval, dict) else ""
     for message in reversed(context.get_messages()):
@@ -295,7 +295,11 @@ def _replace_pending_tool_result(context: RunContext, approval_result: dict[str,
             continue
         if approval_id and str(value.get("id") or "") != approval_id:
             continue
-        message["content"] = json.dumps(approval_result, ensure_ascii=False)
+        message["content"] = json.dumps(tool_result, ensure_ascii=False)
+        if guidance:
+            context.add_message("user", guidance, friday_internal=True, friday_human_guidance=True)
         return str(message.get("tool_call_id") or "")
-    context.add_message("system", "## Approval Result\n" + json.dumps(approval_result, ensure_ascii=False, indent=2))
+    context.add_message("system", "## Approval Result\n" + json.dumps(tool_result, ensure_ascii=False, indent=2))
+    if guidance:
+        context.add_message("user", guidance, friday_internal=True, friday_human_guidance=True)
     return ""
