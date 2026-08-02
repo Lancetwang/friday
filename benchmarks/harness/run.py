@@ -45,8 +45,8 @@ def load_cases(path: Path = CASES_PATH) -> list[dict[str, Any]]:
 
 
 def validate_cases(cases: list[dict[str, Any]]) -> None:
-    if len(cases) < 50:
-        raise ValueError(f"Harness benchmark requires at least 50 cases, found {len(cases)}.")
+    if not cases:
+        raise ValueError("Harness benchmark requires at least one case.")
     ids: set[str] = set()
     for case in cases:
         case_id = str(case.get("id") or "")
@@ -113,6 +113,9 @@ def run_case(case: dict[str, Any], run_root: Path, profile: str | None = None) -
     return {
         "id": case["id"],
         "category": case["category"],
+        "source": case.get("source", "friday-local"),
+        "difficulty": case.get("difficulty", "unspecified"),
+        "capabilities": case.get("capabilities", []),
         "passed": passed,
         "duration_ms": int((time.perf_counter() - started) * 1000),
         "metrics": {**metrics, "estimated_turns": estimated_turns},
@@ -258,6 +261,7 @@ def _write_results(path: Path, results: list[dict[str, Any]], started: str) -> N
         "estimated_turns": sum(result["metrics"]["estimated_turns"] for result in results),
     }
     categories: dict[str, dict[str, int]] = {}
+    sources: dict[str, dict[str, int]] = {}
     for result in results:
         bucket = categories.setdefault(
             result["category"],
@@ -267,12 +271,21 @@ def _write_results(path: Path, results: list[dict[str, Any]], started: str) -> N
         bucket["passed"] += int(result["passed"])
         for key in ("requests", "input_tokens", "output_tokens"):
             bucket[key] += int(result["metrics"][key])
+        source_bucket = sources.setdefault(
+            result["source"],
+            {"cases": 0, "passed": 0, "requests": 0, "input_tokens": 0, "output_tokens": 0},
+        )
+        source_bucket["cases"] += 1
+        source_bucket["passed"] += int(result["passed"])
+        for key in ("requests", "input_tokens", "output_tokens"):
+            source_bucket[key] += int(result["metrics"][key])
     payload = {
         "started": started,
         "finished": datetime.now().astimezone().isoformat(),
         "model": next((result["model"] for result in results if result["model"]), {}),
         "totals": totals,
         "categories": categories,
+        "sources": sources,
         "results": results,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -280,6 +293,8 @@ def _write_results(path: Path, results: list[dict[str, Any]], started: str) -> N
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cases", type=Path, default=CASES_PATH, help="case JSONL file")
+    parser.add_argument("--run-root", type=Path, default=RUNS_DIR, help="directory for results and traces")
     parser.add_argument("--validate", action="store_true", help="validate all case definitions without model calls")
     parser.add_argument("--case", action="append", default=[], help="run one case id; repeatable")
     parser.add_argument("--category", action="append", default=[], help="run one category; repeatable")
@@ -287,7 +302,7 @@ def main() -> int:
     parser.add_argument("--profile", help="Friday model profile id")
     parser.add_argument("--run-id", help="output directory name")
     args = parser.parse_args()
-    cases = load_cases()
+    cases = load_cases(args.cases)
     if args.validate:
         print(f"Validated {len(cases)} Harness benchmark cases.")
         return 0
@@ -305,7 +320,7 @@ def main() -> int:
         parser.error("no cases selected")
 
     run_id = args.run_id or datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_root = RUNS_DIR / run_id
+    run_root = args.run_root / run_id
     run_root.mkdir(parents=True, exist_ok=False)
     execution_root = _prepare_run(run_root)
     result_path = run_root / "results.json"
