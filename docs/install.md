@@ -2,13 +2,13 @@
 
 [中文](install.zh-CN.md)
 
-Friday can be installed as a packaged Windows app or from source. The Windows app is the shortest path for normal use; the source installation provides the global `friday` CLI and TUI.
+Friday can be installed as a packaged Windows or macOS app, or from source. The desktop app is the shortest path for normal use; the source installation provides the global `friday` CLI and TUI on Windows, macOS, and Linux.
 
-## Windows App (Recommended)
+## Desktop App (Recommended)
 
 ### Requirements
 
-- 64-bit Windows 10 or Windows 11
+- 64-bit Windows 10/11, or macOS 11 or newer
 - A model provider API key
 
 Git, Python, Node.js, Rust, and a separate `friday-agent-core` installation are not required. The installer contains the desktop client and its Python sidecar.
@@ -16,11 +16,11 @@ Git, Python, Node.js, Rust, and a separate `friday-agent-core` installation are 
 ### Install
 
 1. Open [GitHub Releases](https://github.com/Lancetwang/friday/releases).
-2. Open the newest release and download its Windows x64 setup executable (currently `Friday_0.1.0_x64-setup.exe`).
-3. Run the installer, then launch Friday from the Start menu or desktop shortcut.
+2. Download `Friday_0.1.0_x64-setup.exe` for Windows, `Friday_0.1.0_arm64.dmg` for Apple Silicon, or `Friday_0.1.0_x64.dmg` for an Intel Mac.
+3. Run the Windows installer, or open the DMG and move Friday to Applications.
 4. Open **Settings > Models**, expand a provider, enter its API key, and select **Save and use**.
 
-The release notes publish the installer's SHA-256 digest. If Windows SmartScreen appears for an unsigned beta, verify that digest before choosing to continue.
+The release assets publish SHA-256 digests. The beta builds are not code-signed: verify the digest before continuing through Windows SmartScreen or opening the macOS app with **Control-click > Open**. Signing and notarization will be added before a stable release.
 
 Web search is optional. Configure Tavily or AnySearch under **Settings > Web Search**. Your preferred name and Friday response language live under **Settings > General**; the desktop display language is a separate setting.
 
@@ -30,7 +30,7 @@ Download the newer installer from GitHub Releases and run it over the existing i
 
 ### Uninstall
 
-Remove Friday from **Windows Settings > Apps > Installed apps**. Uninstalling the application does not delete `~/.friday/`; remove that directory separately only when its sessions, memory, and configuration are no longer needed.
+Remove Friday from **Windows Settings > Apps > Installed apps**, or remove `Friday.app` from the macOS Applications folder. Uninstalling the application does not delete `~/.friday/`; remove that directory separately only when its sessions, memory, and configuration are no longer needed.
 
 ## Install From Source
 
@@ -113,13 +113,20 @@ friday
 
 ### Run The Desktop App From Source
 
-Desktop development additionally requires the stable Rust toolchain and Microsoft C++ Build Tools. From the repository root:
+Desktop development additionally requires the stable Rust toolchain. Windows needs Microsoft C++ Build Tools; macOS needs Xcode Command Line Tools. From the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ui-desktop\scripts\start-dev.ps1
 ```
 
 The incremental launcher installs desktop npm dependencies when needed, builds missing native pieces, starts Vite, and opens the debug application.
+
+On macOS:
+
+```bash
+npm --prefix ui-desktop ci
+npm --prefix ui-desktop run desktop
+```
 
 ### Upgrade The Source Installation
 

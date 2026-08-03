@@ -4,7 +4,7 @@
 
 Complete one path in [Install](install.md) first.
 
-## Windows Desktop
+## Desktop App
 
 1. Launch Friday and configure a provider under **Settings > Models**.
 2. Start a personal conversation directly, or add a project with the **+** button beside Projects.

@@ -28,7 +28,7 @@ def run_tui() -> None:
 
     if not ui.exists():
         print("This Friday installation does not bundle the TypeScript TUI.")
-        print("Use `friday chat`, the Windows app, or install Friday from source.")
+        print("Use `friday chat`, the desktop app, or install Friday from source.")
         raise SystemExit(1)
 
     print("Friday TS TUI needs Node deps first:")

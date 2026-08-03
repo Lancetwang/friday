@@ -9,20 +9,21 @@
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
   <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/package%20manager-uv-DE5FE9?style=flat-square&logo=uv&logoColor=white" alt="uv"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64">
+  <img src="https://img.shields.io/badge/platform-macOS%20ARM%20%7C%20Intel-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon 与 Intel">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a></p>
 
-Friday 是一个本地通用 Agent，提供 Windows 桌面端、TUI 和 CLI。它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
+Friday 是一个本地通用 Agent，提供 Windows 与 macOS 桌面端，并为 Windows、macOS 和 Linux 提供 TUI 与 CLI。它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
 
 底层的 [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) 负责通用 Agent 执行。Friday Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace，以及桌面端、CLI 和 TUI。两者之间的边界契约见[架构文档](docs/architecture.md)。
 
 ## 安装
 
-### Windows 桌面端（推荐）
+### 桌面端（推荐）
 
-打开 [GitHub Releases](https://github.com/Lancetwang/friday/releases)，下载最新的 Windows x64 安装程序（当前为 `Friday_0.1.0_x64-setup.exe`）并运行。安装包已包含 Friday 和 Python Runtime，不要求用户额外安装 Git、Python、Node.js 或 Rust。
+打开 [GitHub Releases](https://github.com/Lancetwang/friday/releases)，按设备下载 Windows x64 安装程序、macOS Apple Silicon DMG 或 macOS Intel DMG。安装包已包含 Friday 和 Python Runtime，不要求用户额外安装 Git、Python、Node.js 或 Rust。
 
 启动 Friday 后，在**设置 > 模型**中配置至少一个模型供应商的 API Key。联网搜索 Key 和用户偏好也可以在设置中完成。
 

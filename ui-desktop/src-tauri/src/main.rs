@@ -25,6 +25,7 @@ fn workspace_root(requested: Option<String>) -> Result<PathBuf, String> {
     }
     let home = env::var_os("FRIDAY_HOME").map(PathBuf::from).unwrap_or_else(|| {
         env::var_os("USERPROFILE")
+            .or_else(|| env::var_os("HOME"))
             .map(PathBuf::from)
             .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
             .join(".friday")

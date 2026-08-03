@@ -2,13 +2,13 @@
 
 [English](install.md)
 
-Friday 支持两种安装方式：普通用户推荐安装 Windows 桌面端；从源码安装则提供全局 `friday` CLI 与 TUI。
+Friday 支持两种安装方式：普通用户推荐安装 Windows 或 macOS 桌面端；从源码安装则在 Windows、macOS 和 Linux 上提供全局 `friday` CLI 与 TUI。
 
-## Windows 桌面端（推荐）
+## 桌面端（推荐）
 
 ### 环境要求
 
-- 64 位 Windows 10 或 Windows 11
+- 64 位 Windows 10/11，或 macOS 11 及以上版本
 - 至少一个模型供应商的 API Key
 
 安装包已包含桌面客户端与 Python Sidecar，不要求用户额外安装 Git、Python、Node.js、Rust 或 `friday-agent-core`。
@@ -16,11 +16,11 @@ Friday 支持两种安装方式：普通用户推荐安装 Windows 桌面端；�
 ### 安装步骤
 
 1. 打开 [GitHub Releases](https://github.com/Lancetwang/friday/releases)。
-2. 进入最新版本，下载 Windows x64 安装程序（当前为 `Friday_0.1.0_x64-setup.exe`）。
-3. 运行安装程序，然后从开始菜单或桌面快捷方式启动 Friday。
+2. Windows 下载 `Friday_0.1.0_x64-setup.exe`；Apple Silicon Mac 下载 `Friday_0.1.0_arm64.dmg`；Intel Mac 下载 `Friday_0.1.0_x64.dmg`。
+3. Windows 运行安装程序；macOS 打开 DMG，将 Friday 拖入“应用程序”。
 4. 打开**设置 > 模型**，展开一个供应商，填写 API Key，然后选择**保存并使用**。
 
-Release 说明中会公布安装包的 SHA-256。Beta 版本尚未签名，如果 Windows SmartScreen 弹出提示，请先核对哈希再决定是否继续。
+Release 资源会公布 SHA-256。Beta 版本尚未进行代码签名；请先核对哈希，再通过 Windows SmartScreen，或在 macOS 中按住 Control 点击应用并选择“打开”。稳定版发布前会补充签名与公证。
 
 联网搜索是可选能力，可以在**设置 > 联网搜索**中配置 Tavily 或 AnySearch。称呼和 Friday 的回复语言位于**设置 > 通用**，与桌面界面的展示语言彼此独立。
 
@@ -30,7 +30,7 @@ Release 说明中会公布安装包的 SHA-256。Beta 版本尚未签名，如�
 
 ### 卸载
 
-在 **Windows 设置 > 应用 > 已安装的应用**中卸载 Friday。卸载程序不会删除 `~/.friday/`；只有确认不再需要会话、记忆和配置时，才手动删除该目录。
+Windows 可在**设置 > 应用 > 已安装的应用**中卸载 Friday；macOS 可从“应用程序”中移除 `Friday.app`。卸载不会删除 `~/.friday/`；只有确认不再需要会话、记忆和配置时，才手动删除该目录。
 
 ## 从源码安装
 
@@ -113,13 +113,20 @@ friday
 
 ### 从源码运行桌面端
 
-桌面端开发还需要稳定版 Rust 工具链和 Microsoft C++ Build Tools。在仓库根目录运行：
+桌面端开发还需要稳定版 Rust 工具链。Windows 需要 Microsoft C++ Build Tools，macOS 需要 Xcode Command Line Tools。在仓库根目录运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ui-desktop\scripts\start-dev.ps1
 ```
 
 增量启动脚本会按需安装桌面端 npm 依赖、构建缺失的原生组件、启动 Vite 并打开调试应用。
+
+macOS 下运行：
+
+```bash
+npm --prefix ui-desktop ci
+npm --prefix ui-desktop run desktop
+```
 
 ### 升级源码安装
 

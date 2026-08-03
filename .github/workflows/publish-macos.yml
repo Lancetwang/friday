@@ -1,0 +1,51 @@
+name: Publish macOS desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui-desktop/package-lock.json
+      - uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.11.16"
+      - run: npm ci --prefix ui-desktop
+      - run: npm run sidecar --prefix ui-desktop
+      - run: npm run tauri --prefix ui-desktop -- build --bundles dmg
+      - name: Upload DMG
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_ARCH: ${{ matrix.arch }}
+        run: |
+          source="$(find ui-desktop/src-tauri/target/release/bundle/dmg -name '*.dmg' -type f -print -quit)"
+          test -n "$source"
+          version="$(node -p "require('./ui-desktop/package.json').version")"
+          target="$(dirname "$source")/Friday_${version}_${RELEASE_ARCH}.dmg"
+          mv "$source" "$target"
+          gh release upload "$RELEASE_TAG" "$target" --clobber

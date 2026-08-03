@@ -9,20 +9,21 @@
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
   <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/package%20manager-uv-DE5FE9?style=flat-square&logo=uv&logoColor=white" alt="uv"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64">
+  <img src="https://img.shields.io/badge/platform-macOS%20ARM%20%7C%20Intel-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon and Intel">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
 </p>
 
 <p align="center"><a href="README.zh-CN.md">中文说明</a></p>
 
-Friday is a local general-purpose agent available as a Windows desktop app, TUI, and CLI. It can work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
+Friday is a local general-purpose agent available as a Windows and macOS desktop app, plus a TUI and CLI for Windows, macOS, and Linux. It can work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
 
 It uses [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) for generic agent execution. The Friday harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, and desktop, CLI, and TUI behavior. [Architecture](docs/architecture.md) describes the boundary between the two.
 
 ## Install
 
-### Windows App (Recommended)
+### Desktop App (Recommended)
 
-Open [GitHub Releases](https://github.com/Lancetwang/friday/releases), download the newest Windows x64 setup executable (currently `Friday_0.1.0_x64-setup.exe`), and run it. The packaged app includes Friday and its Python runtime; Git, Python, Node.js, and Rust are not required.
+Open [GitHub Releases](https://github.com/Lancetwang/friday/releases) and download the Windows x64 installer, macOS Apple Silicon DMG, or macOS Intel DMG. The packaged app includes Friday and its Python runtime; Git, Python, Node.js, and Rust are not required.
 
 Launch Friday, open **Settings > Models**, and configure at least one provider API key. Web search keys and user preferences can be configured from the same Settings page.
 
