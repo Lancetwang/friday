@@ -2,9 +2,10 @@
 
 Friday records product milestones here instead of duplicating every beta build. Binary downloads are retained for the two newest releases; older source milestones remain available through Git tags and history.
 
-## v0.1.0 Beta 8 - Cross-platform desktop (2026-08-03)
+## v0.1.0 Beta 8-9 - Cross-platform desktop (2026-08-03)
 
 - Added native desktop packages for Windows x64, macOS Apple Silicon, and macOS Intel.
+- Added ad-hoc signing and strict bundle verification so downloaded macOS apps are structurally valid before release.
 - Replaced the Windows-only sidecar build entry with one cross-platform build pipeline.
 - Kept the CLI and TUI available on Windows, macOS, and Linux.
 - Added bilingual installation guidance for packaged and source deployments.

@@ -36,6 +36,14 @@ jobs:
       - run: npm ci --prefix ui-desktop
       - run: npm run sidecar --prefix ui-desktop
       - run: npm run tauri --prefix ui-desktop -- build --bundles dmg
+      - name: Verify app signature
+        shell: bash
+        run: |
+          source="$(find ui-desktop/src-tauri/target/release/bundle/dmg -name '*.dmg' -type f -print -quit)"
+          mount="$(mktemp -d)"
+          hdiutil attach "$source" -nobrowse -readonly -mountpoint "$mount" >/dev/null
+          trap 'hdiutil detach "$mount" >/dev/null' EXIT
+          codesign --verify --deep --strict --verbose=2 "$mount/Friday.app"
       - name: Upload DMG
         shell: bash
         env:
