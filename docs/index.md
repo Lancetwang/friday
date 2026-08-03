@@ -7,6 +7,7 @@ Chinese guides: [安装](install.zh-CN.md) · [快速开始](quick-start.zh-CN.m
 Start here:
 
 - [Install](install.md)
+- [Changelog](../CHANGELOG.md)
 - [Quick Start](quick-start.md)
 - [Architecture](architecture.md)
 - [Model Configuration](model-configuration.md)

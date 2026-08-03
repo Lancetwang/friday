@@ -77,6 +77,7 @@ flowchart TD
 ## 文档
 
 - [安装](docs/install.zh-CN.md) ([English](docs/install.md))
+- [更新日志](CHANGELOG.md)
 - [快速开始](docs/quick-start.zh-CN.md) ([English](docs/quick-start.md))
 - [架构](docs/architecture.md)
 - [模型配置](docs/model-configuration.md)

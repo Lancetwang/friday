@@ -79,6 +79,7 @@ flowchart TD
 ## Docs
 
 - [Install](docs/install.md) ([中文](docs/install.zh-CN.md))
+- [Changelog](CHANGELOG.md)
 - [Quick Start](docs/quick-start.md) ([中文](docs/quick-start.zh-CN.md))
 - [Architecture](docs/architecture.md)
 - [Model Configuration](docs/model-configuration.md)
