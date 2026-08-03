@@ -2,6 +2,12 @@
 
 Friday records product milestones here instead of duplicating every beta build. Binary downloads are retained for the two newest releases; older source milestones remain available through Git tags and history.
 
+## v0.1.0 Beta 11-12 - macOS gateway launch fix (2026-08-03)
+
+- Fixed the macOS desktop gateway dying instantly at launch: Tauri signs bundle executables with the hardened runtime by default, and its library validation rejected the Python runtime that the PyInstaller gateway extracts at startup ("different Team IDs"). Ad-hoc signed builds now skip the hardened runtime.
+- The desktop app now shows why the gateway stopped (exit code, kill signal, stderr tail) instead of an opaque notice.
+- CI smoke-tests the gateway from inside the shipped DMG on both Apple Silicon and Intel, and probes sidecar launches under a simulated quarantine.
+
 ## v0.1.0 Beta 10 - macOS gateway repair (2026-08-03)
 
 - Fixed the macOS desktop gateway dying at launch by freezing the embedded Python sidecar with a managed, self-contained CPython 3.13 instead of the build runner's Homebrew CPython.
