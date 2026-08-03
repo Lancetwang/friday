@@ -14,10 +14,19 @@ if (!triple) throw new Error("Could not determine the Rust target triple.");
 mkdirSync(build, { recursive: true });
 mkdirSync(binaries, { recursive: true });
 
+// macOS runners expose a Homebrew CPython that PyInstaller then embeds;
+// its framework references /usr/local or /opt/homebrew dylibs that do not
+// exist on user machines, so the gateway dies at launch. Force a managed
+// python-build-standalone interpreter (matching the proven Windows builds)
+// so the frozen sidecar is self-contained.
+const pythonArgs =
+  process.platform === "darwin" ? ["--python", "3.13", "--managed-python"] : [];
+
 const result = spawnSync(
   "uv",
   [
     "run",
+    ...pythonArgs,
     "--with",
     "pyinstaller",
     "pyinstaller",

@@ -2,6 +2,11 @@
 
 Friday records product milestones here instead of duplicating every beta build. Binary downloads are retained for the two newest releases; older source milestones remain available through Git tags and history.
 
+## v0.1.0 Beta 10 - macOS gateway repair (2026-08-03)
+
+- Fixed the macOS desktop gateway dying at launch by freezing the embedded Python sidecar with a managed, self-contained CPython 3.13 instead of the build runner's Homebrew CPython.
+- Added a CI smoke test that boots the packaged gateway and answers a JSON-RPC request before any DMG is published.
+
 ## v0.1.0 Beta 8-9 - Cross-platform desktop (2026-08-03)
 
 - Added native desktop packages for Windows x64, macOS Apple Silicon, and macOS Intel.

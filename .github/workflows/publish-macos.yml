@@ -35,6 +35,14 @@ jobs:
           version: "0.11.16"
       - run: npm ci --prefix ui-desktop
       - run: npm run sidecar --prefix ui-desktop
+      - name: Smoke test sidecar
+        shell: bash
+        run: |
+          binary="$GITHUB_WORKSPACE/ui-desktop/src-tauri/binaries/friday-app-server-$(rustc --print host-tuple)"
+          test -f "$binary"
+          chmod +x "$binary"
+          cd "$(mktemp -d)"
+          python3 "$GITHUB_WORKSPACE/ui-desktop/scripts/smoke-sidecar.py" "$binary"
       - run: npm run tauri --prefix ui-desktop -- build --bundles dmg
       - name: Verify app signature
         shell: bash
