@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Friday Social Preview</title>
+    <style>
+      :root {
+        --surface: #f9f9f7;
+        --paper: #ffffff;
+        --ink: #2d2d2b;
+        --muted: #74746f;
+        --line: #d8d8d2;
+        --accent: #cc7d5e;
+        --soft-accent: #f1ded6;
+        --green: #3f7652;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        width: 2560px;
+        height: 1280px;
+        margin: 0;
+        overflow: hidden;
+        background: var(--surface);
+        color: var(--ink);
+        font-family: "Segoe UI", Inter, Arial, sans-serif;
+      }
+
+      .canvas {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        display: grid;
+        grid-template-columns: 830px 1fr;
+        border: 24px solid var(--ink);
+        background: var(--surface);
+      }
+
+      .canvas::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.34;
+        background-image:
+          linear-gradient(var(--line) 2px, transparent 2px),
+          linear-gradient(90deg, var(--line) 2px, transparent 2px);
+        background-size: 64px 64px;
+      }
+
+      .mark-panel,
+      .content {
+        position: relative;
+        z-index: 1;
+      }
+
+      .mark-panel {
+        display: grid;
+        place-items: center;
+        border-right: 4px solid var(--ink);
+        background: rgba(255, 255, 255, 0.74);
+      }
+
+      .mark-wrap {
+        width: 560px;
+      }
+
+      .pixel-mark {
+        display: grid;
+        grid-template-columns: repeat(9, 46px);
+        grid-auto-rows: 46px;
+        gap: 12px;
+        width: max-content;
+        margin: 0 auto 74px;
+      }
+
+      .pixel {
+        width: 46px;
+        height: 46px;
+        background: var(--ink);
+      }
+
+      .pixel.accent { background: var(--accent); }
+
+      .mark-caption {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-top: 4px solid var(--ink);
+        padding-top: 22px;
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 27px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .online {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        color: var(--green);
+      }
+
+      .online::before {
+        content: "";
+        width: 18px;
+        height: 18px;
+        background: var(--green);
+      }
+
+      .content {
+        padding: 118px 128px 92px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        margin-bottom: 42px;
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 28px;
+        font-weight: 700;
+        color: var(--accent);
+        text-transform: uppercase;
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 76px;
+        height: 14px;
+        background: var(--accent);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 190px;
+        line-height: 0.9;
+        font-weight: 800;
+      }
+
+      .subtitle {
+        margin: 36px 0 0;
+        max-width: 1360px;
+        font-size: 52px;
+        line-height: 1.18;
+        font-weight: 500;
+      }
+
+      .loop {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-top: 76px;
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 27px;
+        font-weight: 700;
+      }
+
+      .loop-node {
+        padding: 18px 24px;
+        border: 3px solid var(--ink);
+        background: var(--paper);
+      }
+
+      .loop-node.verify {
+        border-color: var(--accent);
+        background: var(--soft-accent);
+      }
+
+      .arrow { color: var(--muted); }
+
+      .foundations {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 18px;
+        margin-top: 34px;
+      }
+
+      .foundation {
+        min-height: 110px;
+        padding: 22px 24px;
+        border: 3px solid var(--line);
+        background: rgba(255, 255, 255, 0.86);
+      }
+
+      .foundation strong {
+        display: block;
+        margin-bottom: 8px;
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 25px;
+        text-transform: uppercase;
+      }
+
+      .foundation span {
+        font-size: 22px;
+        color: var(--muted);
+      }
+
+      .footer {
+        margin-top: auto;
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        border-top: 4px solid var(--ink);
+        padding-top: 24px;
+      }
+
+      .surfaces {
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 30px;
+        font-weight: 700;
+      }
+
+      .platforms {
+        font-size: 25px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="canvas">
+      <section class="mark-panel">
+        <div class="mark-wrap">
+          <div class="pixel-mark" id="pixel-mark" aria-label="Pixel F logo"></div>
+          <div class="mark-caption">
+            <span>Local first</span>
+            <span class="online">Ready</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="content">
+        <div class="eyebrow">General-purpose agent</div>
+        <h1>Friday</h1>
+        <p class="subtitle">A small runtime. A capable harness.<br />Work that continues through verification.</p>
+
+        <div class="loop">
+          <span class="loop-node">UNDERSTAND</span>
+          <span class="arrow">-&gt;</span>
+          <span class="loop-node">ACT</span>
+          <span class="arrow">-&gt;</span>
+          <span class="loop-node verify">VERIFY</span>
+          <span class="arrow">-&gt;</span>
+          <span class="loop-node">DELIVER</span>
+        </div>
+
+        <div class="foundations">
+          <div class="foundation"><strong>Context</strong><span>prefix-aware</span></div>
+          <div class="foundation"><strong>Memory</strong><span>layered recall</span></div>
+          <div class="foundation"><strong>Skills</strong><span>progressive</span></div>
+          <div class="foundation"><strong>Tools</strong><span>small surface</span></div>
+        </div>
+
+        <footer class="footer">
+          <div class="surfaces">DESKTOP / TUI / CLI</div>
+          <div class="platforms">Windows&nbsp;&nbsp; macOS&nbsp;&nbsp; Linux</div>
+        </footer>
+      </section>
+    </main>
+
+    <script>
+      const rows = [
+        "111111111",
+        "111111111",
+        "110000000",
+        "110000000",
+        "111111100",
+        "111111100",
+        "110000000",
+        "110000000",
+        "110000000",
+        "110000000",
+        "110000000",
+      ];
+      const mark = document.querySelector("#pixel-mark");
+      rows.join("").split("").forEach((value, index) => {
+        const pixel = document.createElement("span");
+        pixel.className = `pixel${index === 7 || index === 8 || index === 43 ? " accent" : ""}`;
+        pixel.style.visibility = value === "1" ? "visible" : "hidden";
+        mark.appendChild(pixel);
+      });
+    </script>
+  </body>
+</html>
