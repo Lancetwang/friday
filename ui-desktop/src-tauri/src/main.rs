@@ -1,7 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     env,
     fs,
     path::PathBuf,
@@ -108,8 +108,20 @@ fn gateway_start(
     let event_workspace = workspace_label.clone();
     let process_workspace = workspace.clone();
     tauri::async_runtime::spawn(async move {
+        // Keep the tail of the child stderr so a gateway crash can surface its
+        // own reason (traceback, dyld failure, Gatekeeper kill) instead of an
+        // opaque "stopped" notice.
+        const STDERR_TAIL_LINES: usize = 40;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
+        let mut stderr_tail: VecDeque<String> = VecDeque::new();
+        let mut termination = String::new();
+        let remember = |line: &str, tail: &mut VecDeque<String>| {
+            if tail.len() == STDERR_TAIL_LINES {
+                tail.pop_front();
+            }
+            tail.push_back(line.to_string());
+        };
         while let Some(event) = receiver.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) => {
@@ -122,9 +134,19 @@ fn gateway_start(
                 CommandEvent::Stderr(bytes) => {
                     for line in take_lines(&mut stderr, &bytes) {
                         if !line.is_empty() {
+                            remember(&line, &mut stderr_tail);
                             let _ = app.emit("gateway-stderr", (event_workspace.clone(), line));
                         }
                     }
+                }
+                CommandEvent::Terminated(payload) => {
+                    termination = match (payload.code, payload.signal) {
+                        (Some(code), _) => format!("process exited with code {code}"),
+                        (None, Some(signal)) => {
+                            format!("process killed by signal {signal} (likely macOS Gatekeeper or code signing)")
+                        }
+                        (None, None) => "process terminated".to_string(),
+                    };
                 }
                 _ => {}
             }
@@ -139,13 +161,9 @@ fn gateway_start(
             );
         }
         if !stderr.is_empty() {
-            let _ = app.emit(
-                "gateway-stderr",
-                (
-                    event_workspace.clone(),
-                    String::from_utf8_lossy(&stderr).to_string(),
-                ),
-            );
+            let line = String::from_utf8_lossy(&stderr).to_string();
+            remember(&line, &mut stderr_tail);
+            let _ = app.emit("gateway-stderr", (event_workspace.clone(), line));
         }
         if let Ok(mut gateways) = app.state::<GatewayState>().0.lock() {
             if gateways
@@ -155,7 +173,12 @@ fn gateway_start(
                 gateways.remove(&process_workspace);
             }
         }
-        let _ = app.emit("gateway-exit", event_workspace);
+        let detail = [termination, stderr_tail.into_iter().collect::<Vec<_>>().join("\n")]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = app.emit("gateway-exit", (event_workspace, detail));
     });
 
     current.insert(workspace, child);

@@ -799,14 +799,15 @@ function App() {
 
     void (async () => {
       unlisten = await listen<[string, string]>('gateway-line', event => handleLine(event.payload[0], event.payload[1]))
-      unlistenExit = await listen<string>('gateway-exit', event => {
-        const workspace = event.payload
+      unlistenExit = await listen<[string, string]>('gateway-exit', event => {
+        const [workspace, detail] = event.payload
         const key = pathKey(workspace)
         startedProjects.current.delete(key)
         if (!openProjects.current.has(key)) return
+        const reason = detail.trim() ? `\n${detail.trim().slice(-2000)}` : ''
         for (const [id, pending] of pendingRequests.current) {
           if (samePath(pending.workspace, workspace)) {
-            pending.reject(new Error('Friday gateway stopped.'))
+            pending.reject(new Error(`Friday gateway stopped.${reason}`))
             pendingRequests.current.delete(id)
           }
         }
@@ -815,7 +816,13 @@ function App() {
           busy: false,
           items: [
             ...current.items,
-            { id: nextId('gateway-exit'), kind: 'system', text: 'Friday stopped. Select the project to restart it.' }
+            {
+              id: nextId('gateway-exit'),
+              kind: 'system',
+              text: reason
+                ? `Friday gateway stopped.${reason}`
+                : 'Friday stopped. Select the project to restart it.'
+            }
           ],
           status: 'error'
         }))

@@ -35,6 +35,12 @@ jobs:
           version: "0.11.16"
       - run: npm ci --prefix ui-desktop
       - run: npm run sidecar --prefix ui-desktop
+      - name: Sign sidecar
+        shell: bash
+        run: |
+          binary="$GITHUB_WORKSPACE/ui-desktop/src-tauri/binaries/friday-app-server-$(rustc --print host-tuple)"
+          codesign --force --sign "-" "$binary"
+          codesign --verify --verbose=2 "$binary"
       - name: Smoke test sidecar
         shell: bash
         run: |
@@ -44,6 +50,33 @@ jobs:
           cd "$(mktemp -d)"
           python3 "$GITHUB_WORKSPACE/ui-desktop/scripts/smoke-sidecar.py" "$binary"
       - run: npm run tauri --prefix ui-desktop -- build --bundles dmg
+      - name: Smoke test bundled sidecar
+        shell: bash
+        run: |
+          binary="$GITHUB_WORKSPACE/ui-desktop/src-tauri/target/release/bundle/macos/Friday.app/Contents/MacOS/friday-app-server"
+          test -f "$binary"
+          cd "$(mktemp -d)"
+          python3 "$GITHUB_WORKSPACE/ui-desktop/scripts/smoke-sidecar.py" "$binary"
+      - name: Probe quarantined sidecar launch
+        shell: bash
+        continue-on-error: true
+        run: |
+          app="$GITHUB_WORKSPACE/ui-desktop/src-tauri/target/release/bundle/macos/Friday.app"
+          for mode in root recursive; do
+            probe="$(mktemp -d)/Friday.app"
+            cp -R "$app" "$probe"
+            if [ "$mode" = root ]; then
+              xattr -w com.apple.quarantine "0083;6890abcd;curl;" "$probe"
+            else
+              xattr -rw com.apple.quarantine "0083;6890abcd;curl;" "$probe"
+            fi
+            cd "$(mktemp -d)"
+            if python3 "$GITHUB_WORKSPACE/ui-desktop/scripts/smoke-sidecar.py" "$probe/Contents/MacOS/friday-app-server"; then
+              echo "QUARANTINE PROBE ($mode): sidecar launched normally"
+            else
+              echo "QUARANTINE PROBE ($mode): sidecar BLOCKED (reproduces user-reported failure)"
+            fi
+          done
       - name: Verify app signature
         shell: bash
         run: |
