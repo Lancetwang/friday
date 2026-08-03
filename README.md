@@ -1,6 +1,18 @@
 # Friday
 
-[中文说明](README.zh-CN.md)
+<p align="center">
+  <img src=".github/friday-social-preview.png" alt="Friday - Local General-Purpose Agent" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/github/v/release/Lancetwang/friday?include_prereleases&sort=semver&style=flat-square&label=release" alt="GitHub release"></a>
+  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
+  <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/package%20manager-uv-DE5FE9?style=flat-square&logo=uv&logoColor=white" alt="uv"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
+</p>
+
+<p align="center"><a href="README.zh-CN.md">中文说明</a></p>
 
 Friday is a local general-purpose agent available as a Windows desktop app, TUI, and CLI. It can work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
 
@@ -83,3 +95,7 @@ uv run python -m unittest discover -s tests
 uv run python -m compileall src tests
 npm --prefix ui-tui run typecheck
 ```
+
+## License
+
+Friday is released under the [MIT License](LICENSE).

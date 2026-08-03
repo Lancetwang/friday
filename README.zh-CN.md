@@ -1,6 +1,18 @@
 # Friday
 
-[English](README.md)
+<p align="center">
+  <img src=".github/friday-social-preview.png" alt="Friday - 本地通用 Agent" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/github/v/release/Lancetwang/friday?include_prereleases&sort=semver&style=flat-square&label=release" alt="GitHub Release"></a>
+  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
+  <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/package%20manager-uv-DE5FE9?style=flat-square&logo=uv&logoColor=white" alt="uv"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
+</p>
+
+<p align="center"><a href="README.md">English</a></p>
 
 Friday 是一个本地通用 Agent，提供 Windows 桌面端、TUI 和 CLI。它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
 
@@ -81,3 +93,7 @@ uv run python -m unittest discover -s tests
 uv run python -m compileall src tests
 npm --prefix ui-tui run typecheck
 ```
+
+## 开源协议
+
+Friday 使用 [MIT License](LICENSE) 发布。
