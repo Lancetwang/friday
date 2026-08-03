@@ -1,49 +1,15 @@
 # Changelog
 
-Friday records product milestones here instead of duplicating every beta build. Binary downloads are retained for the two newest releases; older source milestones remain available through Git tags and history.
+Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
-## v0.1.0 Beta 11-12 - macOS gateway launch fix (2026-08-03)
+## v0.1.0 - First stable release (2026-08-03)
 
-- Fixed the macOS desktop gateway dying instantly at launch: Tauri signs bundle executables with the hardened runtime by default, and its library validation rejected the Python runtime that the PyInstaller gateway extracts at startup ("different Team IDs"). Ad-hoc signed builds now skip the hardened runtime.
-- The desktop app now shows why the gateway stopped (exit code, kill signal, stderr tail) instead of an opaque notice.
-- CI smoke-tests the gateway from inside the shipped DMG on both Apple Silicon and Intel, and probes sidecar launches under a simulated quarantine.
-
-## v0.1.0 Beta 10 - macOS gateway repair (2026-08-03)
-
-- Fixed the macOS desktop gateway dying at launch by freezing the embedded Python sidecar with a managed, self-contained CPython 3.13 instead of the build runner's Homebrew CPython.
-- Added a CI smoke test that boots the packaged gateway and answers a JSON-RPC request before any DMG is published.
-
-## v0.1.0 Beta 8-9 - Cross-platform desktop (2026-08-03)
-
-- Added native desktop packages for Windows x64, macOS Apple Silicon, and macOS Intel.
-- Added ad-hoc signing and strict bundle verification so downloaded macOS apps are structurally valid before release.
-- Replaced the Windows-only sidecar build entry with one cross-platform build pipeline.
-- Kept the CLI and TUI available on Windows, macOS, and Linux.
-- Added bilingual installation guidance for packaged and source deployments.
-
-## v0.1.0 Beta 6-7 - Harness evaluation and hardening (2026-08-02 to 2026-08-03)
-
-- Added a 50-case local Harness benchmark and a 25-case representative agent benchmark suite.
-- Added `friday doctor` for installation and runtime diagnostics without spending model tokens.
-- Hardened compacted sessions, approval continuation, verifier context, CLI/TUI startup, and runtime compatibility checks.
-- Allowed `Read` to inspect external local files while preserving workspace boundaries for writes and edits.
-- Added the MIT license, package metadata, project banner, and release documentation.
-
-## v0.1.0 Beta 4-5 - Desktop productization (2026-08-01)
-
-- Added immediate bilingual UI switching, a startup splash, and resilient Windows checkpoint cleanup.
-- Added managed user and global memory editing with size, secret, and atomic-write safeguards.
-- Added model and search provider branding, cited-source previews, and native folder drag-and-drop.
-- Consolidated model, web search, interface, and user-profile configuration under Settings.
-- Moved volatile environment context to the end of the prompt prefix to improve cache reuse.
-
-## v0.1.0 Beta 2-3 - Self-contained installation (2026-08-01)
-
-- Removed the external Git executable requirement from checkpoints by bundling a pure-Python object store.
-- Made memory and Skill access work in clean desktop installations without a separately installed Friday CLI.
-- Preserved credential and write boundaries while exposing managed context to the packaged Agent.
-
-## v0.1.0 Beta 1 - First public beta (2026-08-01)
-
-- Shipped the first Windows desktop client with an embedded Friday gateway.
-- Included persistent projects and sessions, branching, undo, parallel work, approvals, model profiles, vision input, web search, Skills, memory, and observable traces.
+- Shipped native desktop packages for Windows x64, macOS Apple Silicon, and macOS Intel, alongside the cross-platform CLI and TUI.
+- Added persistent projects and sessions, branching, undo, parallel work, approvals, model profiles, vision input, web search, Skills, memory, and observable traces.
+- Added a two-layer Agent and Verify / Goal loop with resumable progress, evidence-based verification, and long-running task control.
+- Added prefix-aware context assembly, multi-stage compaction, layered memory, progressive Skill disclosure, and program-enforced permissions.
+- Removed external Git and separately installed Friday CLI requirements from the packaged desktop app.
+- Added managed model, web search, language, and user-profile settings with local persistence under `~/.friday/`.
+- Added a 50-case local Harness benchmark, a 25-case representative agent benchmark, and `friday doctor` diagnostics.
+- Hardened desktop startup, checkpoint cleanup, approval continuation, Markdown and math rendering, process cancellation, and cross-platform sidecar packaging.
+- Fixed macOS gateway startup by using managed CPython sidecars, disabling hardened runtime for ad-hoc signatures, and smoke-testing the gateway inside both shipped DMGs.

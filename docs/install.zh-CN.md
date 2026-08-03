@@ -20,7 +20,7 @@ Friday 支持两种安装方式：普通用户推荐安装 Windows 或 macOS 桌
 3. Windows 运行安装程序；macOS 打开 DMG，将 Friday 拖入“应用程序”。
 4. 打开**设置 > 模型**，展开一个供应商，填写 API Key，然后选择**保存并使用**。
 
-Release 资源会公布 SHA-256。Windows Beta 尚未签名；macOS Beta 使用 ad-hoc 签名，但尚未公证。请先核对哈希。如果 macOS 阻止首次启动，请打开**系统设置 > 隐私与安全性**并选择**仍要打开**。稳定版发布前会补充 Developer ID 签名与公证。
+Release 资源会公布 SHA-256。Windows 安装包尚未进行代码签名；macOS 版本使用 ad-hoc 签名，尚未公证。请先核对哈希。如果 macOS 阻止首次启动，请打开**系统设置 > 隐私与安全性**并选择**仍要打开**。
 
 联网搜索是可选能力，可以在**设置 > 联网搜索**中配置 Tavily 或 AnySearch。称呼和 Friday 的回复语言位于**设置 > 通用**，与桌面界面的展示语言彼此独立。
 
