@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -20,7 +19,8 @@ from dulwich.objects import Blob
 from dulwich.repo import Repo
 from dulwich.worktree import WorkTree
 
-from friday.storage import checkpoint_dir, project_state_dir
+from friday.storage import checkpoint_dir, project_state_dir, write_json_atomic
+from friday.text import preview
 from friday.trace import load_trace, load_trace_object
 
 SCHEMA_VERSION = 1
@@ -143,7 +143,7 @@ def checkpoint_choices(workspace: Path | None = None, *, limit: int = 20) -> lis
                 "created": str(entry.get("created") or ""),
                 "session_id": str(entry.get("session_id") or ""),
                 "state": str(entry.get("state") or ""),
-                "user": _preview(str(entry.get("user") or ""), 140),
+                "user": preview(str(entry.get("user") or ""), 140),
             }
         )
         if len(choices) >= max(1, limit):
@@ -401,12 +401,7 @@ def _entries(workspace: Path) -> list[dict[str, Any]]:
 
 
 def _write_entry(workspace: Path, value: dict[str, Any]) -> None:
-    path = _entries_dir(workspace) / f"{value['id']}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=path.parent) as file:
-        json.dump(value, file, ensure_ascii=False)
-        temporary = Path(file.name)
-    temporary.replace(path)
+    write_json_atomic(_entries_dir(workspace) / f"{value['id']}.json", value, indent=None)
     _sync_entry_refs(workspace, value)
 
 
@@ -488,6 +483,3 @@ def _checkpoint_dir(workspace: Path) -> Path:
     return checkpoint_dir(workspace)
 
 
-def _preview(text: str, limit: int) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 3] + "..."

@@ -61,7 +61,8 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
     if not force and not needs_verification(events):
         return None
     workspace = Path(context.metadata["workspace"])
-    approval_result = _pending_approval_result(workspace)
+    session_id = str(context.metadata.get("session_id") or "")
+    approval_result = _pending_approval_result(workspace, session_id)
     if approval_result:
         return approval_result
     context.emit("verification.start", category="verification", data={"goal_chars": len(goal)})
@@ -93,7 +94,7 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
         )
     except Exception as exc:
         return {"verdict": "inconclusive", "blocked": False, "error": True, "evidence": [], "feedback": f"Verifier failed: {exc}", "next_check": "", "passed": False, "required": True}
-    approval_result = _pending_approval_result(workspace)
+    approval_result = _pending_approval_result(workspace, session_id)
     if approval_result:
         return approval_result
     parsed = parse_verification(raw)
@@ -132,8 +133,8 @@ def bash_may_write(command: str) -> bool:
     return bool(re.search(r"\b(set-content|add-content|out-file|new-item|move-item|rename-item|rm|del|remove-item)\b|(^|[^><])>{1,2}(?![=>&])", checked))
 
 
-def _pending_approval_result(workspace: Path) -> dict[str, Any] | None:
-    approval = pending_approval(workspace)
+def _pending_approval_result(workspace: Path, session_id: str = "") -> dict[str, Any] | None:
+    approval = pending_approval(workspace, session_id=session_id)
     if not approval.get("pending"):
         return None
     return {

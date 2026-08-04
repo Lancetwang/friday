@@ -12,24 +12,56 @@ import remarkMath from 'remark-math'
 import fridayAvatar from './assets/friday-avatar.svg'
 import { getLanguage, loadLanguage, setLanguage, t, type Language } from './i18n'
 import { normalizeMarkdownMath } from './markdown'
+import { collectMessageSources, hostOf, safeIconUrl, type WebSource } from './sources'
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath]
 const markdownRehypePlugins = [rehypeKatex]
 
+// Markdown here is model- and tool-authored, so a link is untrusted input. Anything
+// that is not plain http(s) is dropped rather than handed to the webview: a
+// protocol-relative or app-internal URL would navigate the window away from Friday.
+function externalUrl(value: string | undefined) {
+  if (!value) return ''
+  try {
+    const parsed = new URL(value, 'friday:invalid')
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : ''
+  } catch {
+    return ''
+  }
+}
+
+// Inline artifact data or a remote image; every other scheme is dropped.
+function imageUrl(value: string | undefined) {
+  if (!value) return ''
+  if (/^data:(?:image\/(?:gif|jpeg|png|webp)|application\/pdf);base64,/i.test(value)) return value
+  return externalUrl(value)
+}
+
 function markdownComponents(onOpenLink: (url: string) => void): Components {
   return {
-    a: ({ node: _node, ...props }) => (
-      <a
-        {...props}
-        onClick={event => {
-          const href = props.href || ''
-          if (/^https?:\/\//.test(href)) {
+    a: ({ children, node: _node, ...props }) => {
+      // A bare fragment stays in the document, so it needs no external handling.
+      if (props.href?.startsWith('#')) return <a {...props}>{children}</a>
+      const href = externalUrl(props.href)
+      if (!href) return <span>{children}</span>
+      return (
+        <a
+          {...props}
+          href={href}
+          onClick={event => {
             event.preventDefault()
             onOpenLink(href)
-          }
-        }}
-      />
-    )
+          }}
+          rel="noreferrer"
+        >
+          {children}
+        </a>
+      )
+    },
+    img: ({ node: _node, ...props }) => {
+      const src = imageUrl(props.src)
+      return src ? <img {...props} src={src} /> : null
+    }
   }
 }
 
@@ -1196,6 +1228,8 @@ function App() {
     const key = pathKey(workspace)
     openProjects.current.delete(key)
     startedProjects.current.delete(key)
+    activeSessions.current.delete(key)
+    activeAssistants.current.delete(key)
     setExpandedProjects(current => {
       const next = new Set(current)
       next.delete(key)
@@ -1374,12 +1408,16 @@ function App() {
 
   const openObservability = () => {
     if (!activeProject) return
-    void sendGateway<{ url: string }>(activeProject, 'trace.serve').catch(error => {
-      updateView(activeProject, current => ({
-        ...current,
-        items: [...current.items, { id: nextId('trace'), kind: 'system', text: String(error) }]
-      }))
-    })
+    void sendGateway<{ url: string }>(activeProject, 'trace.serve')
+      .then(result => {
+        if (result.url) openLinkExternally(result.url)
+      })
+      .catch(error => {
+        updateView(activeProject, current => ({
+          ...current,
+          items: [...current.items, { id: nextId('trace'), kind: 'system', text: String(error) }]
+        }))
+      })
   }
 
   const selectedSession = sessions.find(session => session.id === activeSession)
@@ -1921,10 +1959,12 @@ function App() {
                 ) : artifactPreview.kind === 'text' ? (
                   <pre>{artifactPreview.content}</pre>
                 ) : artifactPreview.kind === 'image' ? (
-                  <img alt={artifactPreview.name} src={artifactPreview.data_url} />
-                ) : (
-                  <iframe src={artifactPreview.data_url} title={artifactPreview.name} />
-                )}
+                  <img alt={artifactPreview.name} src={imageUrl(artifactPreview.data_url)} />
+                ) : artifactPreview.kind === 'pdf' ? (
+                  // The viewer needs scripts; withholding allow-same-origin keeps the
+                  // frame on an opaque origin so it cannot reach the app or its IPC.
+                  <iframe sandbox="allow-scripts" src={artifactPreview.data_url} title={artifactPreview.name} />
+                ) : null}
               </div>
             </section>
           </div>
@@ -3066,141 +3106,34 @@ function timelineFromHistory(history: HistoryItem[]) {
   }))
 }
 
-type WebSource = {
-  icon?: string
-  title: string
-  url: string
-}
-
-function hostOf(url: string) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return ''
-  }
-}
-
-function cleanSourceUrl(url: string) {
-  return url.replace(/[)\].,;:!?'"]+$/, '')
-}
-
-function normalizeSourceTitle(title: string, url: string) {
-  const clean = title.trim()
-  if (!clean || /^https?:\/\//i.test(clean)) return hostOf(url) || url
-  return clean
-}
-
-function normalizeSourceUrl(url: string) {
-  return cleanSourceUrl(url).replace(/\/+$/, '').toLowerCase()
-}
-
-function safeIconUrl(value: unknown) {
-  if (typeof value !== 'string') return ''
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' ? url.toString() : ''
-  } catch {
-    return ''
-  }
-}
-
-function structuredSearchSources(text: string): WebSource[] {
-  try {
-    const value = JSON.parse(text) as { results?: unknown }
-    if (!Array.isArray(value.results)) return []
-    return value.results.flatMap(result => {
-      if (!result || typeof result !== 'object') return []
-      const item = result as { favicon?: unknown; title?: unknown; url?: unknown }
-      if (typeof item.url !== 'string' || !/^https?:\/\//i.test(item.url)) return []
-      return [{
-        icon: safeIconUrl(item.favicon) || undefined,
-        title: typeof item.title === 'string' ? item.title : hostOf(item.url),
-        url: item.url
-      }]
-    })
-  } catch {
-    return []
-  }
-}
-
-function markdownLinks(text: string): WebSource[] {
-  const links: WebSource[] = []
-  for (const match of text.matchAll(/\[([^\]]{1,120})\]\((https?:\/\/[^)\s]+)\)/g)) {
-    links.push({ title: match[1]!.trim(), url: cleanSourceUrl(match[2]!) })
-  }
-  return links
-}
-
-function bareUrls(text: string): string[] {
-  const urls: string[] = []
-  for (const match of text.matchAll(/https?:\/\/[^\s<>"')\]]+/g)) {
-    urls.push(cleanSourceUrl(match[0]))
-  }
-  return urls
-}
-
-function toolSources(item: TimelineItem): WebSource[] {
-  const name = (item.name || '').toLowerCase()
-  if (name !== 'websearch' && name !== 'webfetch') return []
-  if (name === 'websearch') {
-    const structured = structuredSearchSources(item.text || '')
-    if (structured.length) return structured
-  }
-  const sources: WebSource[] = []
-  if (name === 'webfetch') {
-    try {
-      const parsed = JSON.parse(item.arguments || '{}') as { url?: unknown }
-      if (typeof parsed.url === 'string' && /^https?:\/\//.test(parsed.url)) {
-        sources.push({ title: hostOf(parsed.url), url: parsed.url })
-      }
-    } catch {
-      // Arguments may not be JSON; fall through to text extraction.
-    }
-  }
-  sources.push(...markdownLinks(item.text || ''))
-  for (const url of bareUrls(item.text || '')) sources.push({ title: hostOf(url), url })
-  return sources
-}
-
-function collectMessageSources(items: TimelineItem[]) {
-  const result = new Map<string, WebSource[]>()
-  let pending: WebSource[] = []
-  for (const item of items) {
-    if (item.kind === 'user') {
-      pending = []
-      continue
-    }
-    if (item.kind === 'tool') {
-      pending.push(...toolSources(item))
-      continue
-    }
-    if (item.kind !== 'assistant') continue
-    const seen = new Map<string, WebSource>()
-    const merged: WebSource[] = []
-    for (const source of [...markdownLinks(item.text), ...pending]) {
-      const key = normalizeSourceUrl(source.url)
-      if (!key) continue
-      const existing = seen.get(key)
-      if (existing) {
-        if (!existing.icon && source.icon) existing.icon = source.icon
-        continue
-      }
-      const normalized = {
-        icon: safeIconUrl(source.icon) || undefined,
-        title: normalizeSourceTitle(source.title, source.url),
-        url: cleanSourceUrl(source.url)
-      }
-      seen.set(key, normalized)
-      merged.push(normalized)
-    }
-    if (merged.length) result.set(item.id, merged.slice(0, 8))
-    pending = []
-  }
-  return result
-}
-
+// Thumbnails are base64 data URLs, so a session that scrolls past many image
+// artifacts would otherwise pin every decoded copy for the life of the window.
+// Insertion order doubles as recency: reads reinsert, eviction drops from the front.
+const THUMB_LIMIT = 48
+const THUMB_BYTES = 24 * 1024 * 1024
 const artifactThumbCache = new Map<string, string>()
 const artifactThumbPending = new Set<string>()
+let artifactThumbBytes = 0
+
+function readThumb(path: string) {
+  const value = artifactThumbCache.get(path)
+  if (value === undefined) return undefined
+  artifactThumbCache.delete(path)
+  artifactThumbCache.set(path, value)
+  return value
+}
+
+function writeThumb(path: string, value: string) {
+  artifactThumbBytes -= artifactThumbCache.get(path)?.length ?? 0
+  artifactThumbCache.set(path, value)
+  artifactThumbBytes += value.length
+  while (artifactThumbCache.size > 1 && (artifactThumbCache.size > THUMB_LIMIT || artifactThumbBytes > THUMB_BYTES)) {
+    const oldest = artifactThumbCache.keys().next()
+    if (oldest.done) break
+    artifactThumbBytes -= artifactThumbCache.get(oldest.value)?.length ?? 0
+    artifactThumbCache.delete(oldest.value)
+  }
+}
 
 function artifactExtension(artifact: ArtifactInfo) {
   const match = /\.([A-Za-z0-9]{1,5})$/.exec(artifact.name)
@@ -3221,18 +3154,22 @@ function ArtifactIcon({
 }) {
   const [, force] = useState(0)
   const isImage = artifact.kind === 'image'
-  const cached = isImage ? artifactThumbCache.get(artifact.path) : undefined
+  const cached = isImage ? readThumb(artifact.path) : undefined
 
   useEffect(() => {
     if (!isImage || cached !== undefined || artifactThumbPending.has(artifact.path)) return
+    let live = true
     artifactThumbPending.add(artifact.path)
     onLoad(artifact)
-      .then(detail => artifactThumbCache.set(artifact.path, detail.data_url || ''))
-      .catch(() => artifactThumbCache.set(artifact.path, ''))
+      .then(detail => writeThumb(artifact.path, detail.data_url || ''))
+      .catch(() => writeThumb(artifact.path, ''))
       .finally(() => {
         artifactThumbPending.delete(artifact.path)
-        force(value => value + 1)
+        if (live) force(value => value + 1)
       })
+    return () => {
+      live = false
+    }
   }, [isImage, cached, artifact.path])
 
   if (cached) {
@@ -3312,9 +3249,9 @@ function TimelineRow({
         {item.artifacts?.length ? (
           <div className="message-artifacts">
             {item.artifacts.map(artifact => (
-              <button key={`${item.id}-${artifact.path}`} onClick={() => onOpenArtifact(artifact)} type="button">
+              <button key={`${item.id}-${artifact.path}`} onClick={() => onOpenArtifact(artifact)} title={artifact.name} type="button">
                 <ArtifactIcon artifact={artifact} onLoad={onLoadArtifact} />
-                <span>
+                <span className="artifact-label">
                   <strong>{artifact.name}</strong>
                   <small>{artifactKindLabel(artifact.kind)} · {formatBytes(artifact.size)}</small>
                 </span>
@@ -3338,19 +3275,21 @@ function TimelineRow({
                 </button>
                 <span className="sources-popover" role="tooltip">
                   <p>{t('sources.label', { count: sources.length })}</p>
-                  {sources.map(source => (
-                    <button
-                      className="source-item"
-                      key={source.url}
-                      onClick={() => onOpenLink(source.url)}
-                      title={source.url}
-                      type="button"
-                    >
-                      <SiteIcon icon={source.icon} url={source.url} />
-                      <span className="source-title">{source.title}</span>
-                      <span className="source-host">{hostOf(source.url)}</span>
-                    </button>
-                  ))}
+                  <span className="sources-list">
+                    {sources.map(source => (
+                      <button
+                        className="source-item"
+                        key={source.url}
+                        onClick={() => onOpenLink(source.url)}
+                        title={source.url}
+                        type="button"
+                      >
+                        <SiteIcon icon={source.icon} url={source.url} />
+                        <span className="source-title">{source.title}</span>
+                        <span className="source-host">{hostOf(source.url)}</span>
+                      </button>
+                    ))}
+                  </span>
                 </span>
               </span>
             )}

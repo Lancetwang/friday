@@ -70,10 +70,19 @@ flowchart TD
 | Session snapshots | `~/.friday/projects/<workspace-id>/sessions/*.json` | `state.py` |
 | Turn checkpoints | `~/.friday/projects/<workspace-id>/checkpoints/` | `checkpoint.py` |
 | Large tool results | `~/.friday/projects/<workspace-id>/tool-results/<session-id>/` | `tools.py` |
-| Pending approval | `~/.friday/projects/<workspace-id>/pending_approval.json` | `tools.py` |
+| Pending approval | `~/.friday/projects/<workspace-id>/approvals/<session-id>.json` | `tools.py` |
 | Traces | observability dir (see [Observability](observability.md)) | `trace.py` |
 | Memory | `~/.friday/…` (see [Memory](memory.md)) | `memory.py` |
 
 Deleting a conversation removes its session snapshot, trace, checkpoints, and
 session-scoped large tool results together. Runtime events are persisted to the
 trace and released from the live context after each turn.
+
+One approval file per session keeps concurrent conversations from answering each
+other's prompts, and claiming an approval renames the file so a duplicate
+approval cannot run the command twice. Approval policy is likewise per session:
+`FRIDAY_PERMISSION_MODE` supplies the starting default, and a mode chosen in the
+desktop applies to the current conversation and ones started after it, never to a
+conversation that already exists or is mid-run. Every write to shared state goes
+through the atomic replace in `storage.py`, so a reader never sees a half-written
+file.

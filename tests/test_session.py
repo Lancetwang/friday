@@ -46,7 +46,7 @@ class SessionApprovalTests(unittest.TestCase):
                 with patch.object(FridaySession, "chat", return_value=_turn_result("done")) as chat:
                     outcome = session.approve()
 
-        approve.assert_called_once_with(session.workspace)
+        approve.assert_called_once_with(session.workspace, session_id=session.session_id)
         finish.assert_called_once_with(session.workspace, pending=True)
         chat.assert_called_once_with(
             "delete the stale export",

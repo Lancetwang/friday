@@ -2,7 +2,6 @@
 
 import base64
 import json
-import mimetypes
 import os
 import sys
 import threading
@@ -40,7 +39,6 @@ from friday.state import (
     conversation_body,
     delete_session_tree,
     fork_session,
-    preview,
     read_session,
     rename_session,
     session_path,
@@ -48,7 +46,8 @@ from friday.state import (
     session_tree,
 )
 from friday.storage import friday_home
-from friday.tools import build_tools, pending_approval, permission_mode, set_permission_mode
+from friday.text import preview
+from friday.tools import build_tools, pending_approval
 from friday.trace_web import start_trace_server
 from friday.turn import TurnCancelled
 
@@ -57,6 +56,17 @@ _IMAGE_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:im
 _MAX_IMAGE_CHARS = 14_000_000
 _MAX_TOTAL_IMAGE_CHARS = 20_000_000
 _MAX_ARTIFACT_BYTES = 25_000_000
+_ARTIFACT_MIMES = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+# Each cached session pins an agent and its full message history, so idle ones
+# are dropped; their state lives on disk and `session.resume` rebuilds them.
+_MAX_CACHED_SESSIONS = 8
 
 
 def main() -> None:
@@ -157,11 +167,34 @@ class Gateway:
         self.sessions: dict[str, FridaySession] = {}
         self.runs: dict[str, threading.Thread] = {}
         self.run_labels: dict[str, str] = {}
+        # The mode the user last chose in this window. It seeds new conversations so the
+        # choice is not silently forgotten, but never reaches a resumed or running
+        # session, which keeps its own policy.
+        self.permission_mode: str | None = None
+        # Worker threads and their event callbacks touch the maps above while the
+        # RPC thread reads them; every access goes through this lock.
+        self._state = threading.RLock()
         self.session = self._new_session()
-        self.sessions[self.session.session_id] = self.session
+        self._track(self.session)
+
+    def _track(self, session: FridaySession) -> None:
+        """Cache a session as the most recently used and evict idle extras."""
+        with self._state:
+            self.sessions.pop(session.session_id, None)
+            self.sessions[session.session_id] = session
+            for session_id in list(self.sessions)[:-_MAX_CACHED_SESSIONS]:
+                if session_id != session.session_id and session_id not in self.runs:
+                    self._release(self.sessions.pop(session_id))
+
+    @staticmethod
+    def _release(session: FridaySession) -> None:
+        session.agent = None
+        session.context = None
 
     def _new_session(self, session_id: str | None = None) -> FridaySession:
         session = FridaySession(stream=True, session_id=session_id)
+        if self.permission_mode is not None:
+            session.select_permission_mode(self.permission_mode)
         session.on_delta = lambda chunk: self.session_event(session, "message.delta", {"text": chunk})
         session.on_verify = lambda verification: self.session_event(
             session, "verification.complete", verification_status(verification)
@@ -173,6 +206,35 @@ class Gateway:
         session.on_turn_start = lambda text: self.session_event(session, "message.start", {"text": text})
         session.on_turn_complete = lambda result: self._turn_complete(session, result)
         return session
+
+    def _cached_session(self, session_id: str) -> FridaySession | None:
+        with self._state:
+            return self.sessions.get(session_id)
+
+    def _is_running(self, session_id: str) -> bool:
+        with self._state:
+            return session_id in self.runs
+
+    def _any_running(self) -> bool:
+        with self._state:
+            return bool(self.runs)
+
+    def _running_labels(self) -> list[tuple[str, str]]:
+        with self._state:
+            return [(session_id, self.run_labels.get(session_id, "")) for session_id in self.runs]
+
+    def _reasoning_id(self, key: str) -> str:
+        with self._state:
+            reasoning_id = self.reasoning_ids.get(key)
+            if reasoning_id is None:
+                self.reasoning_seq += 1
+                reasoning_id = f"reasoning-{self.reasoning_seq}"
+                self.reasoning_ids[key] = reasoning_id
+            return reasoning_id
+
+    def _pop_reasoning_id(self, key: str) -> str | None:
+        with self._state:
+            return self.reasoning_ids.pop(key, None)
 
     def handle(self, msg: dict[str, Any]) -> None:
         rid = msg.get("id")
@@ -188,8 +250,8 @@ class Gateway:
                 self.run_chat(rid, str(params.get("text") or ""), goal=True)
             elif method == "chat.cancel":
                 session_id = str(params.get("session_id") or self.session.session_id)
-                session = self.sessions.get(session_id)
-                if session is None or session_id not in self.runs:
+                session = self._cached_session(session_id)
+                if session is None or not self._is_running(session_id):
                     self.ok(rid, {"cancelled": False})
                 else:
                     session.cancel()
@@ -223,7 +285,9 @@ class Gateway:
             elif method == "artifact.get":
                 self.ok(rid, artifact_detail(Path.cwd().resolve(), str(params.get("path") or "")))
             elif method == "permission.set":
-                self.ok(rid, {"permission_mode": set_permission_mode(str(params.get("mode") or ""))})
+                mode = self.session.select_permission_mode(str(params.get("mode") or ""))
+                self.permission_mode = mode
+                self.ok(rid, {"permission_mode": mode, "session_id": self.session.session_id})
             elif method == "thinking.set":
                 effort = self.session.select_thinking(str(params.get("effort") or ""))
                 self.ok(rid, {"thinking_effort": effort, "info": self.session_info()})
@@ -301,14 +365,16 @@ class Gateway:
                     raise ValueError("User profile settings must be an object.")
                 self.ok(rid, save_user_profile_settings(profile))
             elif method == "trace.serve":
-                _server, url = start_trace_server(port=0)
+                # The UI opens the URL itself: this process is a bundled sidecar, and a
+                # browser launched from here fails silently when it cannot find one.
+                _server, url = start_trace_server(port=0, open_browser=False)
                 self.ok(rid, {"url": url})
             elif method == "session.reset":
                 removed = self.session.reset(include_user=bool(params.get("global")))
                 self.ok(rid, {"removed": [str(path) for path in removed], "info": self.session_info()})
             elif method == "session.new":
                 self.session = self._new_session()
-                self.sessions[self.session.session_id] = self.session
+                self._track(self.session)
                 self.ok(rid, {"info": self.session_info(), "history": []})
             elif method == "session.current":
                 self.ok(rid, {"info": self.session_info(), "history": session_history(self.session)})
@@ -316,14 +382,14 @@ class Gateway:
                 self.ok(rid, {"text": self.session.compact()})
             elif method == "session.resume":
                 session_id = str(params.get("id") or "")
-                live = self.sessions.get(session_id)
-                if live is not None:
+                live = self._cached_session(session_id)
+                if live is not None and live.context is not None:
                     self.session = live
                     count = 0
                 else:
                     self.session = self._new_session(session_id or None)
                     count = self.session.resume(session_id or None)
-                    self.sessions[self.session.session_id] = self.session
+                self._track(self.session)
                 self.ok(
                     rid,
                     {
@@ -339,9 +405,9 @@ class Gateway:
                 self.ok(rid, session_tree(Path.cwd().resolve(), str(params.get("id") or self.session.session_id)))
             elif method == "session.fork":
                 source_id = str(params.get("id") or self.session.session_id)
-                if source_id in self.runs:
+                if self._is_running(source_id):
                     raise RuntimeError("Stop the running request before forking this session.")
-                source = self.sessions.get(source_id)
+                source = self._cached_session(source_id)
                 snapshot = fork_session(
                     Path.cwd().resolve(),
                     source_id,
@@ -350,7 +416,7 @@ class Gateway:
                 )
                 self.session = self._new_session(str(snapshot["session_id"]))
                 self.session.resume(str(snapshot["session_id"]))
-                self.sessions[self.session.session_id] = self.session
+                self._track(self.session)
                 self.ok(
                     rid,
                     {
@@ -366,27 +432,28 @@ class Gateway:
             elif method == "session.delete":
                 session_id = str(params.get("id") or "")
                 subtree = session_subtree_ids(Path.cwd().resolve(), session_id)
-                if not subtree and session_id in self.sessions:
-                    subtree = [session_id]
-                threads = []
-                for deleted_id in subtree:
-                    live = self.sessions.get(deleted_id)
-                    if live is not None and deleted_id in self.runs:
-                        live.cancel()
-                        threads.append(self.runs[deleted_id])
+                with self._state:
+                    if not subtree and session_id in self.sessions:
+                        subtree = [session_id]
+                    threads = []
+                    for deleted_id in subtree:
+                        if self.sessions.get(deleted_id) is not None and deleted_id in self.runs:
+                            self.sessions[deleted_id].cancel()
+                            threads.append(self.runs[deleted_id])
                 for thread in threads:
                     thread.join(5)
                 if any(thread.is_alive() for thread in threads):
                     raise RuntimeError("A running command did not stop; the session was not deleted.")
                 persisted = delete_session_tree(Path.cwd().resolve(), session_id)
                 deleted = list(dict.fromkeys([*subtree, *persisted]))
-                for deleted_id in deleted:
-                    live = self.sessions.pop(deleted_id, None)
-                    if live is not None:
-                        live.cancel()
+                with self._state:
+                    for deleted_id in deleted:
+                        live = self.sessions.pop(deleted_id, None)
+                        if live is not None:
+                            live.cancel()
                 if self.session.session_id in deleted:
                     self.session = self._new_session()
-                    self.sessions[self.session.session_id] = self.session
+                    self._track(self.session)
                 self.ok(
                     rid,
                     {
@@ -398,7 +465,7 @@ class Gateway:
             elif method == "checkpoint.list":
                 self.ok(rid, {"checkpoints": checkpoint_choices(Path.cwd().resolve(), limit=50)})
             elif method == "checkpoint.undo":
-                if self.runs:
+                if self._any_running():
                     raise RuntimeError("Stop running requests before restoring a checkpoint.")
                 restored = self.session.undo(params.get("id"), force=bool(params.get("force")))
                 self.ok(
@@ -413,7 +480,7 @@ class Gateway:
                     },
                 )
             elif method == "approval.pending":
-                self.ok(rid, pending_approval())
+                self.ok(rid, pending_approval(session_id=self.session.session_id))
             elif method == "approval.approve":
                 outcome = self.session.approve(for_session=bool(params.get("session")))
                 if not outcome["continued"]:
@@ -455,18 +522,21 @@ class Gateway:
             else:
                 self.err(rid, f"unknown method: {method}")
         except Exception as exc:
-            for reasoning_id in self.reasoning_ids.values():
+            with self._state:
+                orphaned = list(self.reasoning_ids.values())
+                self.reasoning_ids.clear()
+            for reasoning_id in orphaned:
                 self.event("reasoning.complete", {"id": reasoning_id, "error": True})
-            self.reasoning_ids.clear()
             self.err(rid, str(exc))
 
     def run_chat(self, rid: Any, text: str, *, goal: bool = False, images: list[str] | None = None) -> None:
         session = self.session
         session_id = session.session_id
-        if session_id in self.runs:
-            self.err(rid, "This session already has a request in progress.")
-            return
-        self.run_labels[session_id] = text
+        with self._state:
+            if session_id in self.runs:
+                self.err(rid, "This session already has a request in progress.")
+                return
+            self.run_labels[session_id] = text
 
         def work() -> None:
             try:
@@ -479,15 +549,20 @@ class Gateway:
                 self.session_event(session, "message.cancelled", {})
                 self.ok(rid, {"cancelled": True, "session_id": session_id})
             except Exception as exc:
-                self._finish_reasoning(session, error=True)
                 self.err(rid, str(exc))
             finally:
-                self.runs.pop(session_id, None)
-                self.run_labels.pop(session_id, None)
+                # Close any reasoning block the run left open, whatever the
+                # outcome, so the streams do not accumulate across turns.
+                self._finish_reasoning(session)
+                self._forget_tool_names(session)
+                with self._state:
+                    self.runs.pop(session_id, None)
+                    self.run_labels.pop(session_id, None)
                 self.session_event(session, "session.updated", {"running": False})
 
         thread = threading.Thread(target=work, name=f"friday-{session_id}", daemon=True)
-        self.runs[session_id] = thread
+        with self._state:
+            self.runs[session_id] = thread
         if self.background:
             thread.start()
         else:
@@ -511,7 +586,7 @@ class Gateway:
     def session_choices(self) -> list[dict[str, Any]]:
         choices = resume_choices(limit=50)
         by_id = {str(choice["id"]): choice for choice in choices}
-        for session_id in self.runs:
+        for session_id, label in self._running_labels():
             if session_id in by_id:
                 by_id[session_id]["running"] = True
                 continue
@@ -529,7 +604,7 @@ class Gateway:
                     "time": "",
                     "title": "",
                     "turns": "0",
-                    "user": preview(self.run_labels.get(session_id, "New conversation")),
+                    "user": preview(label or "New conversation"),
                 },
             )
         return choices
@@ -551,11 +626,11 @@ class Gateway:
             "model_vision": config.vision,
             "thinking_effort": self.session.thinking_effort or "high",
             "thinking_supported": supports_thinking(config.provider),
-            "permission_mode": permission_mode(),
+            "permission_mode": self.session.effective_permission_mode(),
             "progress": self.session.progress(),
-            "approval": pending_approval(),
+            "approval": pending_approval(session_id=session_id),
             "session_id": session_id,
-            "running": session_id in self.runs,
+            "running": self._is_running(session_id),
             "tools": [tool.name for tool in build_tools(Path.cwd().resolve())],
         }
 
@@ -564,18 +639,13 @@ class Gateway:
         session.raise_if_cancelled()
         reasoning_key = f"{session.session_id}:{event.run_id}:{event.step}"
         if event.type == "model.reasoning.delta":
-            reasoning_id = self.reasoning_ids.get(reasoning_key)
-            if reasoning_id is None:
-                self.reasoning_seq += 1
-                reasoning_id = f"reasoning-{self.reasoning_seq}"
-                self.reasoning_ids[reasoning_key] = reasoning_id
             self.session_event(
                 session,
                 "reasoning.delta",
-                {"id": reasoning_id, "text": str(event.data.get("content") or "")},
+                {"id": self._reasoning_id(reasoning_key), "text": str(event.data.get("content") or "")},
             )
         elif event.type == "model.response" and event.data.get("has_reasoning"):
-            reasoning_id = self.reasoning_ids.pop(reasoning_key, None)
+            reasoning_id = self._pop_reasoning_id(reasoning_key)
             if reasoning_id is not None:
                 self.session_event(session, "reasoning.complete", {"id": reasoning_id})
         elif event.type == "verification.start":
@@ -586,7 +656,8 @@ class Gateway:
             call_id = str(event.data.get("tool_call_id") or "")
             name = str(event.data.get("name") or "")
             if call_id:
-                self.tool_names[f"{session.session_id}:{call_id}"] = name
+                with self._state:
+                    self.tool_names[f"{session.session_id}:{call_id}"] = name
             self.session_event(
                 session,
                 "tool.start",
@@ -606,12 +677,14 @@ class Gateway:
             except json.JSONDecodeError:
                 value = None
             approval = value if isinstance(value, dict) and value.get("approval_required") else None
+            with self._state:
+                tool_name = self.tool_names.pop(f"{session.session_id}:{call_id}", "")
             self.session_event(
                 session,
                 "tool.complete",
                 {
                     "tool_call_id": call_id,
-                    "name": self.tool_names.pop(f"{session.session_id}:{call_id}", ""),
+                    "name": tool_name,
                     "error": bool(event.data.get("is_error")),
                     "content": content,
                     "approval": approval,
@@ -624,10 +697,19 @@ class Gateway:
 
     def _finish_reasoning(self, session: FridaySession, *, error: bool = False) -> None:
         prefix = f"{session.session_id}:"
-        for key, reasoning_id in list(self.reasoning_ids.items()):
-            if key.startswith(prefix):
-                self.session_event(session, "reasoning.complete", {"id": reasoning_id, "error": error})
-                self.reasoning_ids.pop(key, None)
+        with self._state:
+            orphaned = [
+                self.reasoning_ids.pop(key)
+                for key in [key for key in self.reasoning_ids if key.startswith(prefix)]
+            ]
+        for reasoning_id in orphaned:
+            self.session_event(session, "reasoning.complete", {"id": reasoning_id, "error": error})
+
+    def _forget_tool_names(self, session: FridaySession) -> None:
+        prefix = f"{session.session_id}:"
+        with self._state:
+            for key in [key for key in self.tool_names if key.startswith(prefix)]:
+                del self.tool_names[key]
 
     def session_event(self, session: FridaySession, event_type: str, payload: dict[str, Any]) -> None:
         self.event(event_type, {**payload, "session_id": session.session_id})
@@ -786,7 +868,11 @@ def artifact_detail(workspace: Path, relative: str) -> dict[str, Any]:
     if kind in {"markdown", "text"}:
         result["content"] = data.decode("utf-8", errors="replace")
     else:
-        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        # Deliberately not mimetypes.guess_type: that consults the OS registry, and a
+        # data URL the UI hands to <img>/<iframe> must never be able to become text/html.
+        mime = _ARTIFACT_MIMES.get(path.suffix.lower())
+        if not mime:
+            raise ValueError("This artifact type cannot be previewed safely.")
         result["data_url"] = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
     return result
 

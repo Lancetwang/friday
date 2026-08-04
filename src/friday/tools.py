@@ -8,18 +8,21 @@ import platform
 import re
 import signal
 import subprocess
-import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated, Literal
+from uuid import uuid4
 
 from agent_core import RunContext, get_current_context, tool
 
 from friday.progress import update_plan
-from friday.storage import migrate_legacy_runtime, project_state_dir
+from friday.storage import migrate_legacy_runtime, project_state_dir, write_text_atomic
+from friday.text import clip, read_limited
 
 CONTEXT_FILE_LIMIT = 8000
 IMAGE_MIME_TYPES = {
@@ -33,10 +36,41 @@ MAX_IMAGE_BYTES = 10_000_000
 APPROVAL_FILE = "pending_approval.json"
 PERMISSIONS_FILE = "permissions.json"
 SESSION_PERMISSIONS_ALLOWED = "friday.permissions_allowed"
+SESSION_PERMISSION_MODE = "friday.permission_mode"
 PERMISSION_MODES = {"manual", "auto", "bypass"}
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 CREDENTIAL_PATH_PATTERN = (
     r"(?:^|[\\/\s'\"])(?:\.env(?:\.\w+)?|\.ssh|\.aws|\.azure|\.kube|"
     r"model-credentials\.json|credentials(?:\.json)?|id_rsa|id_ed25519)(?:$|[\\/\s'\"])"
+)
+# Anything that can move bytes off this machine. Egress is the second half of
+# every exfiltration chain, so it is reviewed even when the data source looks benign.
+# The lookarounds keep these as command names: `~/.ssh/id_rsa` is a path, not a command.
+_EGRESS_COMMANDS = (
+    r"curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm|"
+    r"scp|sftp|rsync|ssh|nc|ncat|netcat|telnet"
+)
+NETWORK_EGRESS_PATTERN = (
+    rf"(?<![\w.-])(?:{_EGRESS_COMMANDS})(?:\.exe)?(?![\w.-])"
+    # Committing a secret and pushing it is egress too, so the branch review applies.
+    r"|\bgit\s+push\b"
+)
+# Installers execute publisher-supplied build and lifecycle scripts.
+PACKAGE_INSTALL_PATTERN = (
+    r"\b(?:pip|pip3|pipx)\s+install\b|\buv\s+(?:pip\s+install|add|tool\s+install)\b|\buvx\b|"
+    r"\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|add|create|exec)\b|\bnpx\b|"
+    r"\b(?:cargo|gem|go)\s+install\b|\bpoetry\s+add\b|\bdotnet\s+add\b|"
+    r"\b(?:brew|winget|choco|scoop)\s+install\b|"
+    r"\b(?:apt|apt-get|dnf|yum|zypper)\s+install\b|\bpacman\s+-s\b"
+)
+# Reads a secret out of the ambient environment or a credential helper. Whole-environment
+# dumps match unconditionally; a single `$env:` read only matters when the name looks
+# like a secret, since `$env:PATH` is ordinary PowerShell.
+SECRET_READ_PATTERN = (
+    r"\bprintenv\b|(?:^|[;&|]\s*)env\s*(?:$|[;&|])|\b(?:get-childitem|gci|ls|dir)\s+env:\s*$|"
+    r"\$env:\w*(?:key|token|secret|password|passwd|credential)\w*|"
+    r"\bgh\s+auth\s+token\b|\baws\s+configure\s+get\b|\bsecurity\s+find-generic-password\b|"
+    r"\bcmdkey\b|\bget-credential\b|\bkeyctl\b"
 )
 INSTRUCTION_FILE_NAMES = (
     "AGENTS.md",
@@ -256,14 +290,12 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
     return [read_file, write_file, edit_file, run_shell, glob_files, grep_files, web_search, web_fetch, update_session_plan]
 
 
-def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> dict:
+def approve_pending(workspace: Path | None = None, *, session_id: str = "", reject: bool = False) -> dict:
     root = (workspace or Path.cwd()).resolve()
     friday_dir = migrate_legacy_runtime(root)
-    path = friday_dir / APPROVAL_FILE
-    if not path.exists():
+    approval = _claim_approval(friday_dir, session_id)
+    if approval is None:
         return {"approved": False, "message": "No pending approval."}
-    approval = json.loads(path.read_text(encoding="utf-8"))
-    path.unlink()
     if reject:
         return {"approved": False, "rejected": True, "command": approval.get("command", "")}
     result = _run_shell(
@@ -276,16 +308,54 @@ def approve_pending(workspace: Path | None = None, *, reject: bool = False) -> d
     return {"approved": True, "approval": approval, "result": result}
 
 
-def pending_approval(workspace: Path | None = None) -> dict:
+def _claim_approval(friday_dir: Path, session_id: str) -> dict | None:
+    """Take ownership of a pending approval so only one decision can execute it.
+
+    The rename is the claim: a second concurrent approve finds nothing to move
+    and cannot run the same command twice.
+    """
+    path = _approval_path(friday_dir, session_id)
+    claim = path.with_name(f".{path.name}.claim-{os.getpid()}-{time.monotonic_ns()}")
+    try:
+        path.replace(claim)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    try:
+        return json.loads(claim.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    finally:
+        claim.unlink(missing_ok=True)
+
+
+def pending_approval(workspace: Path | None = None, *, session_id: str = "") -> dict:
     root = (workspace or Path.cwd()).resolve()
-    path = migrate_legacy_runtime(root) / APPROVAL_FILE
+    path = _approval_path(migrate_legacy_runtime(root), session_id)
     if not path.exists():
         return {"pending": False, "message": "No pending approval."}
     try:
         approval = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, OSError):
         return {"pending": False, "message": "Invalid pending approval."}
     return {"pending": True, **approval}
+
+
+def _approval_path(friday_dir: Path, session_id: str) -> Path:
+    """One pending slot per session.
+
+    A workspace can host several concurrent sessions, so a single shared file
+    would let one session approve another session's command.
+    """
+    if session_id and SESSION_ID_PATTERN.fullmatch(session_id):
+        return friday_dir / "approvals" / f"{session_id}.json"
+    return friday_dir / APPROVAL_FILE
+
+
+def _current_session_id() -> str:
+    context = get_current_context()
+    if context is None:
+        return ""
+    return str(context.metadata.get("session_id") or "")
 
 
 def allow_permissions_for_session(context: RunContext) -> None:
@@ -354,7 +424,7 @@ def _tavily_result(item: dict) -> dict:
     return {
         "title": item.get("title", ""),
         "url": item.get("url", ""),
-        "content": _clip(" ".join(str(item.get("content", "")).split()), 800),
+        "content": clip(" ".join(str(item.get("content", "")).split()), 800),
         "favicon": item.get("favicon", ""),
         "score": item.get("score"),
         "published_date": item.get("published_date", ""),
@@ -399,12 +469,12 @@ def _anysearch_search(query: str, max_results: int) -> dict:
     content = result.get("content", [])
     text = next((str(item.get("text", "")) for item in content if isinstance(item, dict) and item.get("type") == "text"), "")
     if result.get("isError") or not text:
-        return {"error": f"AnySearch API error: {_clip(text, 1000) or 'missing text result'}"}
+        return {"error": f"AnySearch API error: {clip(text, 1000) or 'missing text result'}"}
 
     results = _anysearch_results(text)
     response = {"query": query, "answer": "", "results": results}
     if not results:
-        response["content"] = _clip(text, 4000)
+        response["content"] = clip(text, 4000)
     return response
 
 
@@ -423,7 +493,7 @@ def _anysearch_results(text: str) -> list[dict]:
             {
                 "title": title.strip(),
                 "url": url_match.group(1),
-                "content": _clip(content, 800),
+                "content": clip(content, 800),
                 "score": None,
                 "published_date": "",
             }
@@ -494,12 +564,6 @@ def _remote_url_error(url: str) -> str:
     return ""
 
 
-def _clip(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
-
 def _bounded_tool_output(
     friday_dir: Path,
     kind: str,
@@ -511,10 +575,9 @@ def _bounded_tool_output(
     if len(content) <= limit:
         return content, {}
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    context = get_current_context()
-    session_id = str(context.metadata.get("session_id") or "") if context is not None else ""
+    session_id = _current_session_id()
     artifact_dir = friday_dir / "tool-results"
-    if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+    if session_id and SESSION_ID_PATTERN.fullmatch(session_id):
         artifact_dir /= session_id
     path = artifact_dir / f"{kind}-{digest[:16]}{suffix}"
     if not path.exists():
@@ -540,11 +603,7 @@ def _join_lines(lines: list[str], trailing_newline: bool) -> str:
 
 
 def _write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=path.parent) as file:
-        file.write(content)
-        temp_path = Path(file.name)
-    temp_path.replace(path)
+    write_text_atomic(path, content)
 
 
 def _run_shell(
@@ -565,6 +624,7 @@ def _run_shell(
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_child_environment(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
@@ -603,6 +663,19 @@ def _run_shell(
         timed_out=False,
         friday_dir=friday_dir,
     )
+
+
+def _child_environment() -> dict[str, str]:
+    """Environment for tool subprocesses, minus the secrets Friday injected.
+
+    Variables the user already had in their own shell are preserved; only the
+    provider and web-search keys Friday loaded from its credential stores and
+    `.env` files are withheld, so a shell command cannot read them back out.
+    """
+    from friday.config import injected_env_names
+
+    withheld = injected_env_names()
+    return {key: value for key, value in os.environ.items() if key not in withheld}
 
 
 def _shell_result(
@@ -652,12 +725,20 @@ def _dangerous_shell(command: str) -> str:
         return "accesses credential-bearing files"
     if re.search(r"\b(?:shutil\.rmtree|os\.(?:remove|unlink)|fs\.(?:rm|rmsync)|pathlib\.path\([^)]*\)\.unlink)\b", raw):
         return "deletes files or directories"
+    if re.search(SECRET_READ_PATTERN, lowered):
+        return "reads credentials from the environment"
     checks = [
         (r"\b(remove-item|rm|del|erase|rmdir|rd)\b", "deletes files or directories"),
         (r"\b(git\s+(reset|clean))\b", "can discard git state"),
+        (r"\bgit\s+push\b[^\n]*(?:--force|--delete|\s-f\b)|\bgit\s+(?:filter-branch|filter-repo)\b", "rewrites or overwrites remote git history"),
         (r"\b(set-content|add-content|out-file|new-item|move-item|rename-item)\b", "writes or moves files"),
         (r"\b(format-volume|format(?!-)|mkfs|dd|shutdown|restart-computer|stop-computer)\b", "can damage the system"),
         (r"\b(iex|invoke-expression|runas|schtasks|reg\s+(?:add|delete))\b|\b-verb\s+runas\b", "executes dynamic code or changes system state"),
+        (NETWORK_EGRESS_PATTERN, "can send data off this machine"),
+        (PACKAGE_INSTALL_PATTERN, "installs packages that run publisher-supplied scripts"),
+        (r"\b(chmod|chown|icacls|takeown|attrib)\b", "changes file permissions or ownership"),
+        (r"\bcrontab\b|\bsystemctl\s+(?:enable|start)\b|\blaunchctl\s+(?:load|bootstrap)\b|\bregister-scheduledtask\b|\bnew-service\b", "installs a persistent background task"),
+        (r"\bdocker\b[^\n]*(?:--privileged|\s-v\s+/:|\s-v\s+[a-z]:[\\/]:)", "grants a container access to the host filesystem"),
     ]
     for pattern, reason in checks:
         if re.search(pattern, lowered):
@@ -670,10 +751,10 @@ def _dangerous_shell(command: str) -> str:
 
 def _hard_denied_shell(command: str) -> str:
     lowered = " ".join(command.lower().split())
-    if re.search(CREDENTIAL_PATH_PATTERN, command.lower()) and re.search(
-        r"\b(?:curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm|scp|sftp)\b", lowered
-    ):
+    if re.search(CREDENTIAL_PATH_PATTERN, command.lower()) and re.search(NETWORK_EGRESS_PATTERN, lowered):
         return "credential exfiltration is blocked"
+    if re.search(SECRET_READ_PATTERN, lowered) and re.search(NETWORK_EGRESS_PATTERN, lowered):
+        return "sending environment secrets off this machine is blocked"
     checks = [
         (r"\b(?:format-volume|clear-disk|initialize-disk|remove-partition|diskpart|bcdedit)\b", "disk or boot configuration changes are blocked"),
         (r"\b(?:mkfs(?:\.\w+)?|fdisk|parted)\b", "disk formatting or partitioning is blocked"),
@@ -707,17 +788,51 @@ def _hard_denied_shell(command: str) -> str:
     return ""
 
 
-def permission_mode() -> str:
+def permission_mode(context: RunContext | None = None) -> str:
+    """The effective mode: a session's own choice, else the process default.
+
+    A single gateway process serves several sessions, so the mode has to live on
+    the session rather than in the environment; the environment only seeds it.
+    """
+    session_mode = (context or get_current_context() or _NO_CONTEXT).metadata.get(SESSION_PERMISSION_MODE)
+    if isinstance(session_mode, str) and session_mode in PERMISSION_MODES:
+        return session_mode
+    return default_permission_mode()
+
+
+def default_permission_mode() -> str:
     mode = os.getenv("FRIDAY_PERMISSION_MODE", "manual").strip().lower()
     return mode if mode in PERMISSION_MODES else "manual"
 
 
-def set_permission_mode(mode: str) -> str:
+def normalize_permission_mode(mode: str) -> str:
     normalized = mode.strip().lower()
     if normalized not in PERMISSION_MODES:
         raise ValueError(f"Unknown permission mode: {mode}")
-    os.environ["FRIDAY_PERMISSION_MODE"] = normalized
     return normalized
+
+
+def set_permission_mode(mode: str, context: RunContext | None = None) -> str:
+    """Set the mode for one session, or the process default when no session is given."""
+    normalized = normalize_permission_mode(mode)
+    if context is not None:
+        context.metadata[SESSION_PERMISSION_MODE] = normalized
+    else:
+        os.environ["FRIDAY_PERMISSION_MODE"] = normalized
+    return normalized
+
+
+class _NoContext:
+    """Stand-in so `permission_mode()` can read metadata without branching.
+
+    Read-only on purpose: every context-less caller shares this one instance, so a
+    write here would become a process-wide permission override.
+    """
+
+    metadata: Mapping[str, object] = MappingProxyType({})
+
+
+_NO_CONTEXT = _NoContext()
 
 
 def _permission_decision(friday_dir: Path, command: str) -> tuple[str, str]:
@@ -793,7 +908,7 @@ def _review_shell_command(command: str, risk: str) -> tuple[str, str]:
         match = re.search(r"\{.*?\}", content, re.DOTALL)
         value = json.loads(match.group(0)) if match else {}
         decision = "allow" if value.get("decision") == "allow" else "deny"
-        review_reason = _clip(str(value.get("reason") or "reviewer did not justify approval"), 240)
+        review_reason = clip(str(value.get("reason") or "reviewer did not justify approval"), 240)
     except Exception as error:
         decision, review_reason = "deny", f"review failed safely ({type(error).__name__})"
     context.emit(
@@ -877,14 +992,17 @@ def _shell_surface(command: str) -> str:
 
 def _write_approval(friday_dir: Path, command: str, timeout_seconds: int, max_chars: int, reason: str) -> dict:
     friday_dir.mkdir(parents=True, exist_ok=True)
+    session_id = _current_session_id()
     approval = {
-        "id": str(int(time.time())),
+        "id": uuid4().hex[:16],
         "command": command,
         "max_chars": max_chars,
         "reason": reason,
         "timeout_seconds": timeout_seconds,
     }
-    _write_text(friday_dir / APPROVAL_FILE, json.dumps(approval, ensure_ascii=False, indent=2))
+    if session_id:
+        approval["session_id"] = session_id
+    _write_text(_approval_path(friday_dir, session_id), json.dumps(approval, ensure_ascii=False, indent=2))
     return approval
 
 
@@ -903,14 +1021,9 @@ def _context_for_paths(workspace: Path, paths: list[Path], loaded: set[Path]) ->
                         found.append(
                             {
                                 "path": str(context_file.relative_to(workspace)),
-                                "content": _read_limited(context_file, CONTEXT_FILE_LIMIT),
+                                "content": read_limited(context_file, CONTEXT_FILE_LIMIT),
                             }
                         )
     return found
 
 
-def _read_limited(path: Path, limit: int) -> str:
-    text = path.read_text(encoding="utf-8")
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + f"\n\n[truncated: read {path} directly for the rest]"

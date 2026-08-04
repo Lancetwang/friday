@@ -304,10 +304,9 @@ class TuiGatewayTests(unittest.TestCase):
         fresh = RunContext(metadata={"workspace": str(Path.cwd()), "session_id": "s1"})
         fresh.add_message("system", "fresh prefix")
 
-        session.cancel()
-
         def cancelled(_agent, context, _text, **_kwargs):
-            self.assertTrue(context.metadata["friday.cancel_event"].is_set())
+            self.assertIs(context.metadata["friday.cancel_event"], session._cancel_event)
+            session.cancel()
             raise TurnCancelled("stop")
 
         with patch("friday.session.run_turn", side_effect=cancelled):
@@ -317,6 +316,21 @@ class TuiGatewayTests(unittest.TestCase):
 
         self.assertEqual([message["content"] for message in session.context.get_messages()], ["fresh prefix", "kept"])
         self.assertFalse(session._cancel_event.is_set())
+
+    def test_a_cancel_with_nothing_running_does_not_cancel_the_next_turn(self) -> None:
+        session = FridaySession(session_id="s1")
+        session.agent = object()
+        session.context = RunContext(metadata={"workspace": str(Path.cwd()), "session_id": "s1"})
+
+        session.cancel()
+
+        def answer(_agent, context, _text, **_kwargs):
+            self.assertFalse(context.metadata["friday.cancel_event"].is_set())
+            return TurnResult(session.agent, context, "done", [], {}, {})
+
+        with patch("friday.session.run_turn", side_effect=answer):
+            with patch("friday.session.pending_approval", return_value={"pending": False}):
+                self.assertEqual(session.chat("next request").answer, "done")
 
     def test_forks_are_hidden_from_recent_sessions_and_delete_as_a_subtree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -424,7 +438,7 @@ class TuiGatewayTests(unittest.TestCase):
             with patch.object(gateway, "ok") as ok:
                 gateway.handle({"id": "1", "method": "trace.serve"})
 
-        start.assert_called_once_with(port=0)
+        start.assert_called_once_with(port=0, open_browser=False)
         ok.assert_called_once_with("1", {"url": "http://127.0.0.1:3210"})
 
     def test_gateway_reads_only_catalogued_skill_files(self) -> None:
@@ -458,15 +472,23 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertEqual(info["cwd"], str(Path(tmp).resolve()))
         self.assertIn("Read", info["tools"])
 
-    def test_gateway_sets_permission_mode_for_the_live_process(self) -> None:
-        gateway = Gateway()
-
+    def test_gateway_scopes_permission_mode_to_one_session(self) -> None:
         with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "manual"}, clear=False):
+            gateway = Gateway()
+            first = gateway.session
+            other = gateway._new_session()
+
             with patch.object(gateway, "ok") as ok:
                 gateway.handle({"id": "1", "method": "permission.set", "params": {"mode": "bypass"}})
 
-            self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "bypass")
-            ok.assert_called_once_with("1", {"permission_mode": "bypass"})
+            ok.assert_called_once_with("1", {"permission_mode": "bypass", "session_id": first.session_id})
+            self.assertEqual(first.effective_permission_mode(), "bypass")
+            # A session that already existed keeps its own policy, and the process
+            # default is untouched so other workspaces are unaffected.
+            self.assertEqual(other.effective_permission_mode(), "manual")
+            self.assertEqual(os.environ["FRIDAY_PERMISSION_MODE"], "manual")
+            # A conversation started afterwards inherits the choice the user just made.
+            self.assertEqual(gateway._new_session().effective_permission_mode(), "bypass")
 
     def test_gateway_sets_thinking_effort_on_the_shared_session(self) -> None:
         gateway = Gateway()

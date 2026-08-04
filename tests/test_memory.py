@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -100,6 +101,60 @@ class MemoryTests(unittest.TestCase):
 
             remove_memory(root, added["id"], home=home)
             self.assertEqual(list_memories(root, scope="user", home=home), [])
+
+    def test_concurrent_captures_keep_every_episode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            start = threading.Barrier(6)
+
+            def capture(index: int) -> None:
+                start.wait()
+                add_memory(root, "episode", f"Remember detail number {index}.", home=home, source="user")
+
+            threads = [threading.Thread(target=capture, args=(index,)) for index in range(6)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            stored = {item["content"] for item in list_memories(root, scope="episode", home=home)}
+            self.assertEqual(stored, {f"Remember detail number {index}." for index in range(6)})
+
+    def test_memory_edited_outside_friday_is_picked_up(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            record = add_memory(root, "global", "Prefer tabs.", home=home)
+            path = Path(record["path"])
+            self.assertEqual(len(list_memories(root, scope="global", home=home)), 1)
+
+            path.write_text(path.read_text(encoding="utf-8") + "\n-   Hand written note.\n", encoding="utf-8")
+
+            entries = list_memories(root, scope="global", home=home)
+            self.assertEqual({item["content"] for item in entries}, {"Prefer tabs.", "Hand written note."})
+
+            hand_written = [item for item in entries if item["content"] == "Hand written note."][0]
+            remove_memory(root, hand_written["id"], home=home)
+            self.assertEqual([item["content"] for item in list_memories(root, scope="global", home=home)], ["Prefer tabs."])
+
+    def test_editing_a_memory_whose_file_moved_fails_instead_of_corrupting_a_neighbour(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            first = add_memory(root, "global", "Prefer tabs.", home=home)
+            add_memory(root, "global", "Prefer trailing commas.", home=home)
+            path = Path(first["path"])
+
+            stale = [item for item in list_memories(root, scope="global", home=home) if item["id"] == first["id"]][0]
+            remove_memory(root, first["id"], home=home)
+
+            with self.assertRaises(ValueError):
+                update_memory(root, stale["id"], "Prefer spaces.", home=home)
+            self.assertIn("Prefer trailing commas.", path.read_text(encoding="utf-8"))
 
     def test_explicit_user_signal_is_captured_and_recalled_from_daily_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

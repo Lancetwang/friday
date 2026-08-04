@@ -64,6 +64,7 @@ def run_turn(
     user = user_label or (f"/goal {text}" if goal else text)
     mode = "goal" if goal else "chat"
     continued_turn_id = str(context.metadata.get(PENDING_TURN_ID) or "") if continuation else ""
+    session_id = str(context.metadata.get("session_id") or "")
     live_path, turn_id = begin_live_trace(
         workspace,
         context=context,
@@ -76,7 +77,7 @@ def run_turn(
     try:
         checkpoint_id = begin_checkpoint(
             workspace,
-            session_id=str(context.metadata.get("session_id") or ""),
+            session_id=session_id,
             turn_id=turn_id,
             user=user,
             progress=current_progress(context),
@@ -196,7 +197,11 @@ def run_turn(
             if cancelled:
                 discard_checkpoint(workspace, checkpoint_id)
             else:
-                finish_checkpoint(workspace, checkpoint_id, pending=bool(pending_approval(workspace).get("pending")))
+                finish_checkpoint(
+                    workspace,
+                    checkpoint_id,
+                    pending=bool(pending_approval(workspace, session_id=session_id).get("pending")),
+                )
         except Exception as checkpoint_error:
             exc.add_note(f"Friday could not finalize the recovery checkpoint: {checkpoint_error}")
         context.events.clear()
@@ -234,7 +239,7 @@ def run_turn(
         checkpoint = finish_checkpoint(
             workspace,
             checkpoint_id,
-            pending=bool(pending_approval(workspace).get("pending")),
+            pending=bool(pending_approval(workspace, session_id=session_id).get("pending")),
         )
         artifacts = checkpoint_artifacts(workspace, checkpoint)
         write_trace(

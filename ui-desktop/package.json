@@ -1,12 +1,13 @@
 {
   "name": "friday-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420",
     "build": "tsc --noEmit && vite build",
     "test:math": "node --experimental-strip-types scripts/test-markdown.ts",
+    "test:sources": "node --experimental-strip-types scripts/test-sources.ts",
     "desktop": "npm run sidecar && tauri dev",
     "bundle": "npm run sidecar && tauri build",
     "sidecar": "node scripts/build-sidecar.mjs",

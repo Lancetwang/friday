@@ -1691,7 +1691,8 @@ input[type="checkbox"] {
 
 .message-artifacts > button {
   display: flex;
-  max-width: 280px;
+  width: 280px;
+  max-width: 100%;
   align-items: center;
   gap: 9px;
   padding: 8px 11px;
@@ -1705,6 +1706,13 @@ input[type="checkbox"] {
 .message-artifacts > button:hover {
   border-color: var(--line-strong);
   background: var(--fill-strong);
+}
+
+/* Without min-width the flex item keeps its nowrap content's intrinsic width and
+   pushes the card past its own bounds, so the ellipsis below never engages. */
+.artifact-label {
+  min-width: 0;
+  flex: 1;
 }
 
 .message-artifacts strong,
@@ -1759,6 +1767,8 @@ input[type="checkbox"] {
 }
 
 .artifact-icon.thumb {
+  /* Definite width, or the thumbnail's own pixel size decides the card layout. */
+  width: 30px;
   overflow: hidden;
   padding: 0;
   border-color: var(--line);
@@ -1990,6 +2000,18 @@ input[type="checkbox"] {
   font-weight: var(--weight-semibold);
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+/* A deep research turn can cite dozens of pages, so the list scrolls rather than
+   growing past the window. Only the list scrolls: the popover itself must stay
+   unclipped so the ::before bridge across the gap to the chip survives. */
+.sources-list {
+  display: grid;
+  max-height: min(46vh, 360px);
+  align-content: start;
+  gap: 1px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .source-item {

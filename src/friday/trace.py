@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import shutil
-import tempfile
 import threading
 from collections import Counter
 from datetime import datetime
@@ -15,7 +14,8 @@ from uuid import uuid4
 from agent_core import RunContext
 
 from friday.progress import current_progress
-from friday.storage import friday_home, project_state_dir
+from friday.storage import friday_home, project_state_dir, write_json_atomic, write_text_atomic
+from friday.text import preview
 
 SCHEMA_VERSION = 3
 _WRITE_LOCK = threading.Lock()
@@ -55,7 +55,7 @@ def begin_live_trace(
     model = context.metadata.get("friday.model_config", {})
     manifest.update(updated_at=now, status="running", last_mode=mode, model=model)
     if not manifest.get("first_user"):
-        manifest["first_user"] = _preview(user, 160)
+        manifest["first_user"] = preview(user, 160)
     _write_json(session_dir / "manifest.json", manifest)
     _append_event(
         events_path,
@@ -185,8 +185,8 @@ def write_trace(
         updated_at=_now(),
         status=str(context.metadata.get("friday.loop_status") or "done"),
         turns=int(manifest.get("turns", 0) or 0) + (0 if continuation else 1),
-        last_user=_preview(user, 160),
-        last_assistant=_preview(assistant, 200),
+        last_user=preview(user, 160),
+        last_assistant=preview(assistant, 200),
     )
     _write_json(session_dir / "manifest.json", manifest)
     return path
@@ -453,7 +453,7 @@ def trace_turns(session_id: str, events: list[dict[str, Any]]) -> list[dict[str,
                     {
                         "kind": "model",
                         "label": "Model response",
-                        "summary": _preview(content, 240) if content else (
+                        "summary": preview(content, 240) if content else (
                             f"Requested {', '.join(name for name in tool_names if name)}" if tool_names else "Empty response"
                         ),
                         "content": content,
@@ -473,14 +473,14 @@ def trace_turns(session_id: str, events: list[dict[str, Any]]) -> list[dict[str,
                 tool_data = tool_result.get("data", {}) if tool_result else {}
                 tool_data = tool_data if isinstance(tool_data, dict) else {}
                 content = tool_data.get("content", {})
-                preview = str(content.get("preview") or "") if isinstance(content, dict) else str(content or "")
+                result = str(content.get("preview") or "") if isinstance(content, dict) else str(content or "")
                 activities.append(
                     {
                         "kind": "tool",
                         "label": str(data.get("name") or "Tool"),
-                        "summary": _preview(preview, 240) if preview else "Waiting for result",
+                        "summary": preview(result, 240) if result else "Waiting for result",
                         "arguments": data.get("arguments", {}),
-                        "result": preview,
+                        "result": result,
                         "status": "failed" if _tool_result_failed(tool_data) else ("done" if tool_result else "running"),
                         "time": row.get("time"),
                         "duration_ms": _elapsed_ms(row, tool_result),
@@ -498,7 +498,7 @@ def trace_turns(session_id: str, events: list[dict[str, Any]]) -> list[dict[str,
                             "context" if event_type == "context.compacted" else "approval"
                         ),
                         "label": event_type.replace(".", " ").title(),
-                        "summary": _preview(event_summary(row), 240),
+                        "summary": preview(event_summary(row), 240),
                         "details": data,
                         "status": str(data.get("verdict") or data.get("status") or "done").lower(),
                         "time": row.get("time"),
@@ -586,7 +586,7 @@ def event_summary(event: dict[str, Any]) -> str:
         detail = f"{data.get('kind', '')} {data.get('notice', '')}"
     else:
         detail = json.dumps(data, ensure_ascii=False, default=str)
-    return f"[event:{event.get('seq', '?')}] {event_type} {_preview(detail, 300)}".strip()
+    return f"[event:{event.get('seq', '?')}] {event_type} {preview(detail, 300)}".strip()
 
 
 def expand_event(session_id: str, event: dict[str, Any], *, max_chars: int = 30000) -> dict[str, Any]:
@@ -630,7 +630,7 @@ def _store_message(session_dir: Path, message: dict[str, Any]) -> dict[str, Any]
         "ref": _store_object(session_dir, message),
         "role": str(message.get("role", "")),
         "chars": len(content),
-        "preview": _preview(content, 240),
+        "preview": preview(content, 240),
     }
 
 
@@ -639,7 +639,7 @@ def _store_value(session_dir: Path, value: Any) -> dict[str, Any]:
     return {
         "ref": _store_object(session_dir, value),
         "chars": len(text),
-        "preview": _preview(text, 500),
+        "preview": preview(text, 500),
     }
 
 
@@ -648,7 +648,7 @@ def _store_object(session_dir: Path, value: Any) -> str:
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     path = session_dir / "objects" / f"{digest}.json"
     if not path.exists():
-        _write_text_atomic(path, raw)
+        write_text_atomic(path, raw)
     return f"objects/{path.name}"
 
 
@@ -712,15 +712,7 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
-    _write_text_atomic(path, json.dumps(value, ensure_ascii=False, indent=2, default=str))
-
-
-def _write_text_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _WRITE_LOCK, tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=path.parent) as file:
-        file.write(text)
-        temp_path = Path(file.name)
-    temp_path.replace(path)
+    write_json_atomic(path, value, indent=2)
 
 
 def _usage_int(usage: Any, *names: str) -> int | None:
@@ -761,11 +753,6 @@ def _elapsed_ms(start: dict[str, Any] | None, end: dict[str, Any] | None) -> int
         return max(0, round((datetime.fromisoformat(str(end["time"])) - datetime.fromisoformat(str(start["time"]))).total_seconds() * 1000))
     except (KeyError, TypeError, ValueError):
         return None
-
-
-def _preview(text: str, limit: int) -> str:
-    clean = " ".join(str(text).split())
-    return clean if len(clean) <= limit else clean[: limit - 3] + "..."
 
 
 def _now() -> str:

@@ -16,7 +16,7 @@ Git, Python, Node.js, Rust, and a separate `friday-agent-core` installation are 
 ### Install
 
 1. Open [GitHub Releases](https://github.com/Lancetwang/friday/releases).
-2. Download `Friday_0.1.0_x64-setup.exe` for Windows, `Friday_0.1.0_arm64.dmg` for Apple Silicon, or `Friday_0.1.0_x64.dmg` for an Intel Mac.
+2. Download `Friday_0.1.1_x64-setup.exe` for Windows, `Friday_0.1.1_arm64.dmg` for Apple Silicon, or `Friday_0.1.1_x64.dmg` for an Intel Mac.
 3. Run the Windows installer, or open the DMG and move Friday to Applications.
 4. Open **Settings > Models**, expand a provider, enter its API key, and select **Save and use**.
 

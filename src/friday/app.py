@@ -32,6 +32,7 @@ from friday.prompts import (
 from friday.progress import current_progress
 from friday.skills import ensure_default_skill, skill_routing
 from friday.storage import friday_home, migrate_legacy_runtime, project_state_dir, record_project
+from friday.text import read_limited
 from friday.state import (
     SessionState,
     USER_MESSAGE_TIMES_KEY,
@@ -456,14 +457,9 @@ def _project_instruction_files(workspace: Path) -> list[str]:
         for name in INSTRUCTION_FILE_NAMES:
             path = parent / name
             if path.exists() and path.resolve() != global_rules:
-                body = _embedded_markdown(_read_limited(path, PROJECT_INSTRUCTIONS_LIMIT), heading_offset=2)
+                body = _embedded_markdown(read_limited(path, PROJECT_INSTRUCTIONS_LIMIT), heading_offset=2)
                 if body:
                     documents.append(f"### {path}\n{body}")
     return documents
 
 
-def _read_limited(path: Path, limit: int) -> str:
-    text = path.read_text(encoding="utf-8")
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + f"\n\n[truncated: read {path} directly for the rest]"

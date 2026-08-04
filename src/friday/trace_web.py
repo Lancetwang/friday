@@ -259,8 +259,25 @@ def _trace_session_dir(session_id: str) -> Path:
 
 
 class TraceRequestHandler(BaseHTTPRequestHandler):
+    def _loopback_host(self) -> bool:
+        """Reject non-loopback Host headers.
+
+        Binding to 127.0.0.1 is not enough on its own: a page on the open web can
+        point a hostname it controls at 127.0.0.1 and then read trace contents
+        through the browser. Only the names this server is actually reachable as
+        are accepted.
+        """
+        host = self.headers.get("Host", "").strip()
+        name = host.rsplit(":", 1)[0].strip("[]").lower() if host else ""
+        if name in {"127.0.0.1", "localhost", "::1", ""}:
+            return True
+        self._json(403, {"error": "Unexpected Host header."})
+        return False
+
     def do_GET(self) -> None:
         _touch_trace_server()
+        if not self._loopback_host():
+            return
         try:
             parts = [part for part in urlparse(self.path).path.split("/") if part]
             if not parts:
@@ -293,6 +310,8 @@ class TraceRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         _touch_trace_server()
+        if not self._loopback_host():
+            return
         try:
             parts = [part for part in urlparse(self.path).path.split("/") if part]
             is_json = len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "analyze"

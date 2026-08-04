@@ -18,6 +18,19 @@ Friday keeps the tool surface small:
 
 Every Bash call passes a code-level pre-execution policy. Destructive system operations and explicit deny rules are rejected even in full-access mode. Other risky commands either suspend the Agent Loop for approval or, in `auto` mode, go to a separate tool-free reviewer that compares the current user request, command, workspace, and risk; reviewer failure denies safely. The TUI offers four manual decisions: approve once, approve without asking again in the active session, reject, or reject and tell Friday how to continue.
 
+Commands that send data off the machine (`curl`, `wget`, `scp`, `rsync`, `ssh`, `nc`, PowerShell's web cmdlets), install packages, read credential stores, rewrite history destructively, change file permissions, or install persistence all require approval. Reading a secret and piping it outward in one command is denied outright rather than offered for approval, because approving such a command is never the intent behind a legitimate request.
+
+Tool subprocesses do not inherit the API keys Friday loaded from its own credential stores or `.env` files. Keys that were already exported in the user's shell are passed through unchanged, since the user put them there.
+
+## Threat model
+
+Friday is a local agent that acts with the privileges of the user who ran it. Two limits follow from that and are deliberate:
+
+- `Read`, `Glob`, and `Grep` are not confined to the workspace. They can reach any file the user can read, including `~/.friday/model-credentials.json`. Confining them would break ordinary work — reading a config in `~`, comparing against a sibling checkout — and would not contain an attacker who already has Bash.
+- Because reads are unconfined, the approval prompt on network egress is the control that matters. A prompt-injected instruction can get file contents into the model's context without asking, but it cannot move them off the machine without an approved `Bash` egress command or a `WebFetch` call.
+
+The practical consequence: treat an egress approval as approving the *contents of the current context*, not just the command. In `bypass` mode there is no such checkpoint, so use it only in workspaces whose inputs you trust.
+
 After a completed turn, Friday compares its existing checkpoint trees and attaches changed Markdown, text, image, PDF, JSON, CSV, and HTML files to that assistant reply. The desktop reads previews only through workspace-relative paths, renders HTML as source text, and rejects unsupported, escaped, missing, or over-25-MB files.
 
 `WebSearch` uses Tavily first when `TAVILY_API_KEY` is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Set `ANYSEARCH_API_KEY` for higher AnySearch limits; anonymous fallback remains available. Keys can be configured through **Settings > Web Search**, the process environment, the workspace `.env`, or `~/.friday/.env`. Desktop-managed keys are stored privately in `~/.friday/web-credentials.json` and are never returned to the UI.

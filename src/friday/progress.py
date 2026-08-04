@@ -7,6 +7,8 @@ from typing import Any
 
 from agent_core import RunContext
 
+from friday.text import clip
+
 PROGRESS_ARTIFACT = "friday.progress"
 PROGRESS_HEADING = "## Current Session Progress"
 STEP_STATUSES = {"pending", "in_progress", "completed", "blocked"}
@@ -126,20 +128,20 @@ def is_progress_checkpoint(message: dict[str, Any]) -> bool:
 def progress_checkpoint(state: dict[str, Any]) -> str:
     lines = [
         PROGRESS_HEADING,
-        f"Objective: {_clip(str(state.get('objective') or ''), 1000)}",
+        f"Objective: {clip(str(state.get('objective') or ''), 1000)}",
         f"Mode: {state.get('mode', 'normal')}",
         f"Status: {state.get('status', 'working')}",
     ]
     latest = str(state.get("latest_request") or "").strip()
     if latest and latest != state.get("objective"):
-        lines.append(f"Latest user update: {_clip(latest, 1000)}")
+        lines.append(f"Latest user update: {clip(latest, 1000)}")
     steps = state.get("steps", [])
     if steps:
         lines.append("Plan:")
         marks = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]", "blocked": "[!]"}
-        lines.extend(f"- {marks[step['status']]} {_clip(step['step'], 500)}" for step in steps)
+        lines.extend(f"- {marks[step['status']]} {clip(step['step'], 500)}" for step in steps)
     if state.get("next_action"):
-        lines.append(f"Next action: {_clip(str(state['next_action']), 1000)}")
+        lines.append(f"Next action: {clip(str(state['next_action']), 1000)}")
     return "\n".join(lines)
 
 
@@ -184,5 +186,3 @@ def _store(context: RunContext, state: dict[str, Any], *, explanation: str = "")
     return current_progress(context)
 
 
-def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 3] + "..."

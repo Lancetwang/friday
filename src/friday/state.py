@@ -21,7 +21,6 @@ import hashlib
 import json
 import re
 import shutil
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -33,7 +32,8 @@ from agent_core import RunContext
 from friday.checkpoint import delete_session_checkpoints
 from friday.model_options import DEFAULT_THINKING_EFFORT
 from friday.progress import append_progress_checkpoint, is_progress_checkpoint, restore_progress
-from friday.storage import migrate_legacy_runtime, project_state_dir
+from friday.storage import migrate_legacy_runtime, project_state_dir, write_json_atomic
+from friday.text import preview
 from friday.trace import delete_trace
 
 RECENT_CONVERSATION_LIMIT = 10
@@ -419,11 +419,7 @@ def read_session(path: Path) -> dict[str, Any] | None:
 
 
 def write_session(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=path.parent) as file:
-        json.dump(data, file, ensure_ascii=False)
-        temp_path = Path(file.name)
-    temp_path.replace(path)
+    write_json_atomic(path, data, indent=None)
 
 
 def _message_fingerprint(message: dict[str, Any]) -> str:
@@ -431,6 +427,3 @@ def _message_fingerprint(message: dict[str, Any]) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
 
 
-def preview(text: str, limit: int = 80) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[:limit - 3] + "..."

@@ -16,7 +16,7 @@ Friday 支持两种安装方式：普通用户推荐安装 Windows 或 macOS 桌
 ### 安装步骤
 
 1. 打开 [GitHub Releases](https://github.com/Lancetwang/friday/releases)。
-2. Windows 下载 `Friday_0.1.0_x64-setup.exe`；Apple Silicon Mac 下载 `Friday_0.1.0_arm64.dmg`；Intel Mac 下载 `Friday_0.1.0_x64.dmg`。
+2. Windows 下载 `Friday_0.1.1_x64-setup.exe`；Apple Silicon Mac 下载 `Friday_0.1.1_arm64.dmg`；Intel Mac 下载 `Friday_0.1.1_x64.dmg`。
 3. Windows 运行安装程序；macOS 打开 DMG，将 Friday 拖入“应用程序”。
 4. 打开**设置 > 模型**，展开一个供应商，填写 API Key，然后选择**保存并使用**。
 

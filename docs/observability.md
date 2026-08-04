@@ -26,7 +26,10 @@ friday trace show <session-id>
 friday trace serve
 ```
 
-`friday trace serve` binds to `127.0.0.1` and opens a local three-pane WebUI:
+`friday trace serve` binds to `127.0.0.1` and rejects requests whose `Host`
+header is not a loopback name, so a page on the open web cannot point a hostname
+it controls at `127.0.0.1` and read traces through the browser. It opens a local
+three-pane WebUI:
 session list, agent behavior timeline, and Trace Analyst. The timeline projects
 the lossless trace into only `YOU`, `FRI`, and grouped `TOOL` entries; node and
 flow events remain on disk for evaluation but do not clutter the human view.

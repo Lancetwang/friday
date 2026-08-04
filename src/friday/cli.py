@@ -34,7 +34,7 @@ from friday.session import FridaySession
 from friday.skills import discover_skills
 from friday.state import delete_session, rename_session
 from friday.storage import friday_home, project_state_dir
-from friday.tools import build_tools, permission_mode, set_permission_mode
+from friday.tools import build_tools, set_permission_mode
 from friday.trace import behavior_events, list_traces, load_trace, trace_stats
 from friday.trace_web import serve_trace_ui, start_trace_server
 from friday.tui_node import run_tui
@@ -440,11 +440,11 @@ def _slash(text: str, session: FridaySession) -> None:
         aliases = {"ask": "manual", "full": "bypass"}
         if requested:
             try:
-                set_permission_mode(aliases.get(requested, requested))
+                session.select_permission_mode(aliases.get(requested, requested))
             except ValueError:
                 print("usage: /permission manual|auto|bypass")
                 return
-        print(f"permission mode: {permission_mode()}")
+        print(f"permission mode: {session.effective_permission_mode()}")
     elif command.startswith("goal"):
         goal = text.split(" ", 1)[1].strip() if " " in text else ""
         if not goal:

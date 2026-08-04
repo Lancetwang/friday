@@ -11,7 +11,7 @@ from typing import Any
 from agent_core import ChatModel, LLM
 
 from friday.providers import AnthropicModel
-from friday.storage import friday_home, project_state_dir
+from friday.storage import friday_home, project_state_dir, write_json_atomic
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,9 @@ PROFILES_FILE = "models.json"
 CREDENTIALS_FILE = "model-credentials.json"
 WEB_CREDENTIALS_FILE = "web-credentials.json"
 WEB_SEARCH_KEYS = {"tavily": "TAVILY_API_KEY", "anysearch": "ANYSEARCH_API_KEY"}
+# Secrets Friday itself put into this process. Tool subprocesses must not inherit
+# them: the user never opted their shell into Friday's credential stores.
+_INJECTED_ENV_NAMES: set[str] = set()
 PROVIDERS = (
     {
         "id": "deepseek",
@@ -268,6 +271,7 @@ def save_web_search_settings(
                 raise ValueError(f"Invalid {provider} API key.")
             saved[env_name] = secret
             os.environ[env_name] = secret
+            _INJECTED_ENV_NAMES.add(env_name)
     _write_json(friday_home(home) / WEB_CREDENTIALS_FILE, saved, private=True)
     for env_name, previous in cleared:
         if previous and os.getenv(env_name) == previous:
@@ -331,7 +335,15 @@ def load_model_environment(workspace: Path, *, home: Path | None = None) -> None
             if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
                 value = value[1:-1]
             os.environ[key] = value
-    os.environ.update(_read_web_credentials(home))
+            _INJECTED_ENV_NAMES.add(key)
+    web_credentials = _read_web_credentials(home)
+    os.environ.update(web_credentials)
+    _INJECTED_ENV_NAMES.update(web_credentials)
+
+
+def injected_env_names() -> frozenset[str]:
+    """Credential variables Friday loaded from its own stores into this process."""
+    return frozenset(_INJECTED_ENV_NAMES)
 
 
 def default_config_text() -> str:
@@ -478,15 +490,7 @@ def _read_web_credentials(home: Path | None = None) -> dict[str, str]:
 
 
 def _write_json(path: Path, value: Any, *, private: bool = False) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    if private:
-        try:
-            temporary.chmod(0o600)
-        except OSError:
-            pass
-    temporary.replace(path)
+    write_json_atomic(path, value, private=private)
 
 
 def _first_env(*names: str) -> str | None:

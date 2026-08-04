@@ -22,7 +22,14 @@ from friday.config import load_model_config
 from friday.model_options import DEFAULT_THINKING_EFFORT, normalize_thinking_effort, supports_thinking
 from friday.progress import current_progress, finish_progress
 from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, conversation_body, hydrate, new_session_id
-from friday.tools import allow_permissions_for_session, approve_pending, pending_approval
+from friday.tools import (
+    SESSION_PERMISSION_MODE,
+    allow_permissions_for_session,
+    approve_pending,
+    default_permission_mode,
+    normalize_permission_mode,
+    pending_approval,
+)
 from friday.turn import PENDING_TURN_ID, TurnCancelled, TurnResult, run_turn
 
 
@@ -58,6 +65,7 @@ class FridaySession:
         self.context: RunContext | None = None
         self.model_profile: str | None = None
         self.thinking_effort: str | None = None
+        self.permission_mode: str | None = None
         self.suspended: dict[str, Any] | None = None
         self.session_id = session_id or new_session_id()
         self._cancel_event = Event()
@@ -86,6 +94,9 @@ class FridaySession:
         images: Sequence[str] = (),
     ) -> TurnResult:
         agent, context = self.ensure()
+        # A cancel that arrived while nothing was running must not cancel this
+        # turn: the flag is scoped to one turn, so each turn starts clean.
+        self._cancel_event.clear()
         previous = SessionState(
             session_id=self.session_id,
             body=conversation_body(context.get_messages()),
@@ -133,7 +144,7 @@ class FridaySession:
             self._cancel_event.clear()
             raise
         self._adopt(result.agent, result.context)
-        if pending_approval(self.workspace).get("pending"):
+        if pending_approval(self.workspace, session_id=self.session_id).get("pending"):
             self.suspended = {"text": text, "goal": goal}
             if turn_id := str(result.context.metadata.get(PENDING_TURN_ID) or ""):
                 self.suspended["turn_id"] = turn_id
@@ -149,7 +160,7 @@ class FridaySession:
         The continuation turn reuses the still-pending checkpoint, so /undo
         rolls back the suspended turn and its continuation together.
         """
-        result = approve_pending(self.workspace)
+        result = approve_pending(self.workspace, session_id=self.session_id)
         if not result.get("approved"):
             # No pending command means any remembered suspension is stale.
             self.suspended = None
@@ -175,7 +186,7 @@ class FridaySession:
 
     def reject(self, guidance: str = "") -> dict[str, Any]:
         """Discard the pending command; optionally continue with human guidance."""
-        result = approve_pending(self.workspace, reject=True)
+        result = approve_pending(self.workspace, session_id=self.session_id, reject=True)
         if not result.get("rejected"):
             self.suspended = None
             return {"approval": result, "continued": False}
@@ -250,6 +261,16 @@ class FridaySession:
         self.model_profile = config.profile_id
         self._rebuild()
 
+    def select_permission_mode(self, mode: str) -> str:
+        """Change the approval policy for this session only."""
+        self.permission_mode = normalize_permission_mode(mode)
+        if self.context is not None:
+            self.context.metadata[SESSION_PERMISSION_MODE] = self.permission_mode
+        return self.permission_mode
+
+    def effective_permission_mode(self) -> str:
+        return self.permission_mode or default_permission_mode()
+
     def select_thinking(self, effort: str) -> str:
         config = load_model_config(self.workspace, profile_id=self.model_profile)
         if not supports_thinking(config.provider):
@@ -297,6 +318,8 @@ class FridaySession:
         self.context = context
         self.session_id = str(context.metadata.get("session_id") or self.session_id)
         context.metadata["friday.cancel_event"] = self._cancel_event
+        if self.permission_mode is not None:
+            context.metadata[SESSION_PERMISSION_MODE] = self.permission_mode
         config = context.metadata.get("friday.model_config")
         if isinstance(config, dict) and config.get("profile_id"):
             self.model_profile = str(config["profile_id"])

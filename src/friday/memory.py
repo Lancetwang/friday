@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from friday.config import build_model, load_model_config, load_model_environment, output_token_limit
 from friday.prompts import MEMORY_CONSOLIDATE_PROMPT, SECURITY_NOTES
-from friday.storage import friday_home, project_state_dir
+from friday.storage import friday_home, project_state_dir, write_lock, write_text_atomic
 
 USER_LIMIT = 1500
 MEMORY_LIMIT = 2500
@@ -20,6 +22,10 @@ _PROFILE_END = "<!-- friday-profile:end -->"
 _PROFILE_BLOCK_RE = re.compile(re.escape(_PROFILE_START) + r"\n(.*?)\n" + re.escape(_PROFILE_END), re.DOTALL)
 
 _META_RE = re.compile(r"^<!-- friday-memory (\{.*\}) -->$")
+# Parsed Markdown keyed by (path, scope), validated against the file's stat stamp.
+_ENTRY_CACHE: dict[tuple[str, str], tuple[tuple[int, int], list[dict[str, Any]]]] = {}
+_CACHE_LOCK = threading.Lock()
+_MAX_CACHED_FILES = 512
 _SECRET_RE = re.compile(
     r"(?i)(?:api[_ -]?key|password|passwd|secret|access[_ -]?token)\s*[:=]\s*\S+"
     r"|\b(?:sk-|hf_|tvly-|as_sk_)[A-Za-z0-9_-]{8,}"
@@ -77,25 +83,23 @@ def save_user_profile_settings(value: dict[str, Any], *, home: Path | None = Non
     if "\n" in profile["preferred_name"] or "\n" in profile["preferred_language"]:
         raise ValueError("Preferred name and language must each fit on one line.")
     path = friday_home(home) / "USER.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    current = path.read_text(encoding="utf-8") if path.exists() else "# User Profile\n"
-    base = _PROFILE_BLOCK_RE.sub("", current).rstrip()
-    if any(profile.values()):
-        habits = "\n".join(f"  {line}" for line in profile["habits"].splitlines())
-        block = (
-            f"{_PROFILE_START}\n## Personal Profile\n"
-            f"Preferred name: {profile['preferred_name']}\n"
-            f"Preferred language: {profile['preferred_language']}\n"
-            f"Habits and preferences:\n{habits}\n{_PROFILE_END}"
-        )
-        updated = f"{base}\n\n{block}\n"
-    else:
-        updated = f"{base}\n"
-    if len(updated) > USER_LIMIT:
-        raise ValueError(f"User profile would exceed {USER_LIMIT} characters.")
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(updated, encoding="utf-8")
-    temporary.replace(path)
+    with write_lock():
+        current = path.read_text(encoding="utf-8") if path.exists() else "# User Profile\n"
+        base = _PROFILE_BLOCK_RE.sub("", current).rstrip()
+        if any(profile.values()):
+            habits = "\n".join(f"  {line}" for line in profile["habits"].splitlines())
+            block = (
+                f"{_PROFILE_START}\n## Personal Profile\n"
+                f"Preferred name: {profile['preferred_name']}\n"
+                f"Preferred language: {profile['preferred_language']}\n"
+                f"Habits and preferences:\n{habits}\n{_PROFILE_END}"
+            )
+            updated = f"{base}\n\n{block}\n"
+        else:
+            updated = f"{base}\n"
+        if len(updated) > USER_LIMIT:
+            raise ValueError(f"User profile would exceed {USER_LIMIT} characters.")
+        _write_memory(path, updated)
     return profile
 
 
@@ -140,10 +144,7 @@ def save_memory_file(scope: str, content: Any, *, home: Path | None = None) -> d
     if _SECRET_RE.search(content):
         raise ValueError("Memory file appears to contain a secret or credential.")
     path = friday_home(home) / _MEMORY_FILE_NAMES[scope]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(path)
+    _write_memory(path, content)
     return {"chars": len(content), "limit": limit, "path": str(path)}
 
 
@@ -200,33 +201,35 @@ def add_memory(
         raise ValueError("Memory content appears to contain a secret or credential.")
 
     timestamp = now or datetime.now()
-    existing = list_memories(workspace, scope=scope, home=home)
-    duplicate = next((item for item in existing if _normalize(item["content"]) == _normalize(text)), None)
-    if duplicate:
-        if scope == "episode":
-            return _increment_episode(workspace.resolve(), duplicate["id"], max(1, count), timestamp, session_id, home)
-        return {**duplicate, "duplicate": True}
+    # The duplicate scan and the append are one critical section: concurrent turns
+    # capturing memory would otherwise both read the pre-append file and lose a write.
+    with write_lock():
+        existing = list_memories(workspace, scope=scope, home=home)
+        duplicate = next((item for item in existing if _normalize(item["content"]) == _normalize(text)), None)
+        if duplicate:
+            if scope == "episode":
+                return _increment_episode(workspace.resolve(), duplicate["id"], max(1, count), timestamp, session_id, home)
+            return {**duplicate, "duplicate": True}
 
-    path, limit = _write_target(workspace.resolve(), scope, home, timestamp)
-    record_id = hashlib.sha256(f"{scope}\0{text}".encode("utf-8")).hexdigest()[:12]
-    metadata = {
-        "id": record_id,
-        "source": source,
-        "created": timestamp.isoformat(timespec="seconds"),
-    }
-    if session_id:
-        metadata["session"] = session_id
-    if scope == "episode":
-        metadata["count"] = max(1, count)
-        metadata["workspaces"] = [str(workspace.resolve())]
-    header = _header(scope, timestamp)
-    current = path.read_text(encoding="utf-8") if path.exists() else header
-    entry = f"- {text}\n<!-- friday-memory {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))} -->\n"
-    updated = current.rstrip() + "\n\n" + entry
-    if limit is not None and len(updated) > limit:
-        raise ValueError(f"{scope} memory would exceed {limit} characters; update or remove old entries first.")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(updated, encoding="utf-8")
+        path, limit = _write_target(workspace.resolve(), scope, home, timestamp)
+        record_id = hashlib.sha256(f"{scope}\0{text}".encode("utf-8")).hexdigest()[:12]
+        metadata = {
+            "id": record_id,
+            "source": source,
+            "created": timestamp.isoformat(timespec="seconds"),
+        }
+        if session_id:
+            metadata["session"] = session_id
+        if scope == "episode":
+            metadata["count"] = max(1, count)
+            metadata["workspaces"] = [str(workspace.resolve())]
+        header = _header(scope, timestamp)
+        current = path.read_text(encoding="utf-8") if path.exists() else header
+        entry = f"- {text}\n{_metadata_line(metadata)}\n"
+        updated = current.rstrip() + "\n\n" + entry
+        if limit is not None and len(updated) > limit:
+            raise ValueError(f"{scope} memory would exceed {limit} characters; update or remove old entries first.")
+        _write_memory(path, updated)
     return {"id": record_id, "scope": scope, "content": text, "path": str(path), "source": source}
 
 
@@ -238,31 +241,29 @@ def update_memory(workspace: Path, record_id: str, content: str, *, home: Path |
         raise ValueError(f"Memory entry exceeds {EPISODE_LIMIT} characters.")
     if _SECRET_RE.search(text):
         raise ValueError("Memory content appears to contain a secret or credential.")
-    record = _find_memory(workspace.resolve(), record_id, home)
-    duplicate = next(
-        (
-            item
-            for item in list_memories(workspace, scope=record["scope"], home=home)
-            if item["id"] != record_id and _normalize(item["content"]) == _normalize(text)
-        ),
-        None,
-    )
-    if duplicate:
-        raise ValueError(f"Memory already exists as id={duplicate['id']}.")
-    metadata = dict(record["metadata"])
-    metadata["id"] = record["id"]
-    metadata["updated"] = datetime.now().isoformat(timespec="seconds")
-    replacement = [
-        f"- {text}",
-        f"<!-- friday-memory {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))} -->",
-    ]
-    _replace_entry(record, replacement)
+    with write_lock():
+        record = _find_memory(workspace.resolve(), record_id, home)
+        duplicate = next(
+            (
+                item
+                for item in list_memories(workspace, scope=record["scope"], home=home)
+                if item["id"] != record_id and _normalize(item["content"]) == _normalize(text)
+            ),
+            None,
+        )
+        if duplicate:
+            raise ValueError(f"Memory already exists as id={duplicate['id']}.")
+        metadata = dict(record["metadata"])
+        metadata["id"] = record["id"]
+        metadata["updated"] = datetime.now().isoformat(timespec="seconds")
+        _replace_entry(record, [f"- {text}", _metadata_line(metadata)])
     return _public_record({**record, "content": text, "metadata": metadata})
 
 
 def remove_memory(workspace: Path, record_id: str, *, home: Path | None = None) -> dict[str, Any]:
-    record = _find_memory(workspace.resolve(), record_id, home)
-    _replace_entry(record, [])
+    with write_lock():
+        record = _find_memory(workspace.resolve(), record_id, home)
+        _replace_entry(record, [])
     return {"id": record["id"], "scope": record["scope"], "removed": True, "content": record["content"]}
 
 
@@ -529,8 +530,40 @@ def _write_target(workspace: Path, scope: str, home: Path | None, now: datetime)
 
 
 def _read_entries(path: Path, scope: str) -> list[dict[str, Any]]:
-    if not path.exists():
+    """Parsed entries for one Markdown file, reusing the last parse when unchanged.
+
+    A turn scans every scope several times (recall, duplicate detection, id lookup),
+    and episodic memory is one file per day, so an uncached parse grows without bound
+    as history accumulates. Writes through this module invalidate their own path; the
+    stat stamp covers files edited outside Friday.
+    """
+    try:
+        status = path.stat()
+    except OSError:
         return []
+    stamp = (status.st_mtime_ns, status.st_size)
+    key = (str(path), scope)
+    with _CACHE_LOCK:
+        cached = _ENTRY_CACHE.get(key)
+        if cached is not None and cached[0] == stamp:
+            return [dict(record) for record in cached[1]]
+    records = _parse_entries(path, scope)
+    with _CACHE_LOCK:
+        if len(_ENTRY_CACHE) >= _MAX_CACHED_FILES:
+            for stale in list(_ENTRY_CACHE)[: len(_ENTRY_CACHE) - _MAX_CACHED_FILES + 1]:
+                _ENTRY_CACHE.pop(stale, None)
+        _ENTRY_CACHE[key] = (stamp, records)
+    return [dict(record) for record in records]
+
+
+def _write_memory(path: Path, text: str) -> None:
+    write_text_atomic(path, text)
+    with _CACHE_LOCK:
+        for key in [key for key in _ENTRY_CACHE if key[0] == str(path)]:
+            _ENTRY_CACHE.pop(key, None)
+
+
+def _parse_entries(path: Path, scope: str) -> list[dict[str, Any]]:
     lines = path.read_text(encoding="utf-8").splitlines()
     records = []
     for index, line in enumerate(lines):
@@ -578,16 +611,17 @@ def _increment_episode(
     session_id: str,
     home: Path | None,
 ) -> dict[str, Any]:
-    record = _find_memory(workspace, record_id, home)
-    metadata = dict(record["metadata"])
-    metadata["count"] = _record_count(record) + increment
-    metadata["last_seen"] = now.isoformat(timespec="seconds")
-    if session_id:
-        metadata["last_session"] = session_id
-    workspaces = _record_workspaces(record)
-    workspaces.add(workspace.resolve())
-    metadata["workspaces"] = sorted(str(path) for path in workspaces)
-    _replace_entry(record, [f"- {record['content']}", _metadata_line(metadata)])
+    with write_lock():
+        record = _find_memory(workspace, record_id, home)
+        metadata = dict(record["metadata"])
+        metadata["count"] = _record_count(record) + increment
+        metadata["last_seen"] = now.isoformat(timespec="seconds")
+        if session_id:
+            metadata["last_session"] = session_id
+        workspaces = _record_workspaces(record)
+        workspaces.add(workspace.resolve())
+        metadata["workspaces"] = sorted(str(path) for path in workspaces)
+        _replace_entry(record, [f"- {record['content']}", _metadata_line(metadata)])
     return {**_public_record({**record, "metadata": metadata}), "duplicate": True}
 
 
@@ -655,14 +689,21 @@ def _permanent_scope(text: str) -> str:
 
 def _replace_entry(record: dict[str, Any], replacement: list[str]) -> None:
     path = Path(record["path"])
-    lines = path.read_text(encoding="utf-8").splitlines()
-    end = record["_meta_line"] + 1 if record["_meta_line"] is not None else record["_line"] + 1
-    lines[record["_line"] : end] = replacement
-    updated = "\n".join(lines).rstrip() + "\n"
-    limit = USER_LIMIT if record["scope"] == "user" else MEMORY_LIMIT if record["scope"] in {"global", "project"} else None
-    if limit is not None and len(updated) > limit:
-        raise ValueError(f"{record['scope']} memory would exceed {limit} characters; shorten the replacement first.")
-    path.write_text(updated, encoding="utf-8")
+    with write_lock():
+        lines = path.read_text(encoding="utf-8").splitlines()
+        start = record["_line"]
+        # The line numbers were captured by an earlier read. Splicing a file that moved
+        # underneath us would rewrite an unrelated entry, so refuse instead of guessing.
+        line = lines[start] if start < len(lines) else ""
+        if not line.startswith("- ") or line[2:].strip() != record["content"]:
+            raise ValueError(f"Memory id={record['id']} moved on disk; retry the operation.")
+        end = record["_meta_line"] + 1 if record["_meta_line"] is not None else start + 1
+        lines[start:end] = replacement
+        updated = "\n".join(lines).rstrip() + "\n"
+        limit = USER_LIMIT if record["scope"] == "user" else MEMORY_LIMIT if record["scope"] in {"global", "project"} else None
+        if limit is not None and len(updated) > limit:
+            raise ValueError(f"{record['scope']} memory would exceed {limit} characters; shorten the replacement first.")
+        _write_memory(path, updated)
 
 
 def _public_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -688,17 +729,20 @@ def _clean_content(text: str) -> str:
     return " ".join(str(text).split()).strip()
 
 
+@lru_cache(maxsize=2048)
 def _normalize(text: str) -> str:
     return re.sub(r"[^\w\u3400-\u9fff]+", "", text.lower())
 
 
-def _terms(text: str) -> set[str]:
+# Callers never mutate the result, so one cached set can be shared across scores.
+@lru_cache(maxsize=2048)
+def _terms(text: str) -> frozenset[str]:
     lowered = text.lower()
     words = {word for word in re.findall(r"[a-z0-9_+#.-]{2,}", lowered) if word not in {"the", "and", "for", "with"}}
     cjk_terms: set[str] = set()
     for chunk in re.findall(r"[\u3400-\u9fff]+", lowered):
         cjk_terms.update(chunk[index : index + 2] for index in range(max(0, len(chunk) - 1)))
-    return words | cjk_terms
+    return frozenset(words | cjk_terms)
 
 
 def _score(query: str, content: str) -> float:

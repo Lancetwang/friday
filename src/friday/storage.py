@@ -5,10 +5,47 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 RUNTIME_ENTRIES = ("sessions", "tool-results", "pending_approval.json", "permissions.json", "config.json")
+
+# One lock for every atomic write in the process. Contention is irrelevant next to
+# the disk write it guards, and a single lock keeps two threads editing the same
+# state file from interleaving their read-modify-write cycles.
+_WRITE_LOCK = threading.RLock()
+
+
+def write_lock() -> threading.RLock:
+    """The lock guarding on-disk state, for callers that read then write."""
+    return _WRITE_LOCK
+
+
+def write_text_atomic(path: Path, text: str, *, private: bool = False) -> None:
+    """Replace `path` in one step so a reader never observes a half-written file.
+
+    `private` restricts the result to the owner before it becomes visible, which
+    matters for credential stores: chmod after the rename would leave a window
+    where the secret is world-readable.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _WRITE_LOCK:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=path.parent) as file:
+            file.write(text)
+            temporary = Path(file.name)
+        if private:
+            try:
+                temporary.chmod(0o600)
+            except OSError:
+                pass
+        temporary.replace(path)
+
+
+def write_json_atomic(path: Path, value: Any, *, indent: int | None = 2, private: bool = False) -> None:
+    text = json.dumps(value, ensure_ascii=False, indent=indent, default=str)
+    write_text_atomic(path, text if indent is None else text + "\n", private=private)
 
 
 def friday_home(home: Path | None = None) -> Path:
@@ -42,11 +79,7 @@ def record_project(workspace: Path, home: Path | None = None) -> Path:
         "created": existing.get("created") or datetime.now().isoformat(timespec="seconds"),
         "updated": datetime.now().isoformat(timespec="seconds"),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=path.parent) as file:
-        json.dump(value, file, ensure_ascii=False, indent=2)
-        temporary = Path(file.name)
-    temporary.replace(path)
+    write_json_atomic(path, value)
     return path
 
 
