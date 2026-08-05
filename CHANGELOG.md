@@ -2,8 +2,10 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
-## Unreleased
+## v0.1.2 - Verification feedback and sidebar polish (2026-08-05)
 
+- A failed verification now carries the verifier's reason in the desktop UI instead of stopping at a bare error label, and the verifier gets enough output tokens for thinking models to finish writing their verdict instead of being cut off before the JSON arrives.
+- Hovering a conversation in the Recent list now draws the full rounded highlight and keeps both action buttons visible; the row no longer overflows the sidebar's clip edge.
 - Fixed the phone bridge never starting in the installed desktop app: the packaged build is one binary whose entry point is the gateway, so the child was spawned with a spelling only a source checkout understands and it started a second gateway that exited immediately. Starting any Friday child now goes through one place that knows both forms.
 - The packaged desktop build now carries the Feishu SDK, so the phone switch no longer depends on which optional extras the machine that built it happened to have installed. A build without the SDK says so under the switch instead of failing quietly.
 - Settings forms share one save path, so a save that finishes after you leave its section no longer writes to a screen that is gone, and API key fields behave the same in Models, Web search, and Phone.
