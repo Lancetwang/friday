@@ -2,6 +2,16 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## Unreleased
+
+- Fixed the phone bridge never starting in the installed desktop app: the packaged build is one binary whose entry point is the gateway, so the child was spawned with a spelling only a source checkout understands and it started a second gateway that exited immediately. Starting any Friday child now goes through one place that knows both forms.
+- The packaged desktop build now carries the Feishu SDK, so the phone switch no longer depends on which optional extras the machine that built it happened to have installed. A build without the SDK says so under the switch instead of failing quietly.
+- Settings forms share one save path, so a save that finishes after you leave its section no longer writes to a screen that is gone, and API key fields behave the same in Models, Web search, and Phone.
+- Conversations started from your phone now show up in the desktop sidebar under their own Phone section, which stays in place whether or not it currently holds anything. Projects, Phone, and Recent each fold away when you click their heading, and what sits under a heading is now indented under it.
+- The rename and delete marks on a conversation row now line up with each other, as do the marks on every other row and button in the app. They used to be typed characters, which each font places differently and some fonts do not carry at all, so Windows was drawing the pencil from an emoji face that sat lower and heavier than the cross beside it. They are drawings now, and a drawing lands where it is put.
+- A skill's file path is no longer sliced through the middle of its letters when the window is not tall enough to show the whole skill. The dialog was handing its shortfall to every row at once, including a row that hides what does not fit; only the scrolling pane gives up height now. The sidebar, the branch map, the memory editor, and the composer had the same latent flaw and were pinned the same way.
+- Paths shown in the skills dialog, the artifact preview, and the memory editor now shorten the same way, from the front, so the file name stays readable. A model name too long for the model menu is now shortened rather than pushing the menu out of shape.
+
 ## v0.1.1 - Security and reliability hardening (2026-08-04)
 
 - Bash now requires approval for network egress, package installation, credential reads, destructive history rewrites, permission changes, and persistence installs, and denies reading a secret and sending it outward in a single command.

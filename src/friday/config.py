@@ -182,13 +182,13 @@ def save_model_profile(
         profiles.append(profile)
     active = profile_id if activate else catalog["active"]
     user_dir = friday_home(home)
-    _write_json(user_dir / PROFILES_FILE, {"active": active, "profiles": profiles})
+    write_json_atomic(user_dir / PROFILES_FILE, {"active": active, "profiles": profiles})
     credentials = _read_credentials(home)
     if clear_api_key:
         credentials.pop(profile_id, None)
     elif api_key is not None and api_key.strip():
         credentials[profile_id] = api_key.strip()
-    _write_json(user_dir / CREDENTIALS_FILE, credentials, private=True)
+    write_json_atomic(user_dir / CREDENTIALS_FILE, credentials, private=True)
     return load_model_catalog(workspace, home=home)
 
 
@@ -199,7 +199,7 @@ def delete_model_profile(workspace: Path, profile_id: str, *, home: Path | None 
         raise ValueError("Friday needs at least one model configuration.")
     active = catalog["active"] if catalog["active"] != profile_id else profiles[0]["id"]
     user_dir = friday_home(home)
-    _write_json(
+    write_json_atomic(
         user_dir / PROFILES_FILE,
         {
             "active": active,
@@ -211,7 +211,7 @@ def delete_model_profile(workspace: Path, profile_id: str, *, home: Path | None 
     )
     credentials = _read_credentials(home)
     credentials.pop(profile_id, None)
-    _write_json(user_dir / CREDENTIALS_FILE, credentials, private=True)
+    write_json_atomic(user_dir / CREDENTIALS_FILE, credentials, private=True)
     return load_model_catalog(workspace, home=home)
 
 
@@ -219,7 +219,7 @@ def select_model_profile(workspace: Path, profile_id: str, *, home: Path | None 
     catalog = load_model_catalog(workspace, home=home)
     if not any(profile["id"] == profile_id for profile in catalog["profiles"]):
         raise ValueError(f"Unknown Friday model configuration: {profile_id}")
-    _write_json(
+    write_json_atomic(
         friday_home(home) / PROFILES_FILE,
         {
             "active": profile_id,
@@ -273,7 +273,7 @@ def save_web_search_settings(
             saved[env_name] = secret
             os.environ[env_name] = secret
             _INJECTED_ENV_NAMES.add(env_name)
-    _write_json(friday_home(home) / WEB_CREDENTIALS_FILE, saved, private=True)
+    write_json_atomic(friday_home(home) / WEB_CREDENTIALS_FILE, saved, private=True)
     for env_name, previous in cleared:
         if previous and os.getenv(env_name) == previous:
             os.environ.pop(env_name, None)
@@ -333,7 +333,7 @@ def save_feishu_settings(
         saved["allowed_users"] = _feishu_users(allowed_users)
     if allow_group is not None:
         saved["allow_group"] = bool(allow_group)
-    _write_json(friday_home(home) / FEISHU_FILE, saved, private=True)
+    write_json_atomic(friday_home(home) / FEISHU_FILE, saved, private=True)
     return load_feishu_settings(workspace, home=home)
 
 
@@ -563,10 +563,6 @@ def _read_web_credentials(home: Path | None = None) -> dict[str, str]:
         for key in WEB_SEARCH_KEYS.values()
         if isinstance(values.get(key), str) and str(values[key]).strip()
     }
-
-
-def _write_json(path: Path, value: Any, *, private: bool = False) -> None:
-    write_json_atomic(path, value, private=private)
 
 
 def _first_env(*names: str) -> str | None:

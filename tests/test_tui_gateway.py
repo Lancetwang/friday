@@ -191,6 +191,17 @@ class TuiGatewayTests(unittest.TestCase):
         stop.assert_called_once_with()
         self.assertFalse(ok.call_args.args[1]["running"])
 
+    def test_gateway_lists_phone_conversations_for_the_sidebar(self) -> None:
+        gateway = Gateway()
+        choices = [{"id": "s1", "title": "from the phone", "time": "", "turns": "1"}]
+
+        with patch("friday.app_server.phone_sessions", return_value=choices) as listing:
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle({"id": "1", "method": "bridge.sessions"})
+
+        listing.assert_called_once_with(Path.cwd().resolve())
+        self.assertEqual(ok.call_args.args[1], {"choices": choices})
+
     def test_a_closing_gateway_takes_the_bridge_offline(self) -> None:
         read_fd, write_fd = os.pipe()
         os.close(write_fd)

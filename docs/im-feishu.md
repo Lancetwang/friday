@@ -4,6 +4,8 @@ Friday keeps running on your computer and your phone is only a client. The bridg
 
 Phone and desktop do not share a conversation. Each Feishu chat gets its own Friday session, and the desktop keeps the session you were already using. The switch below decides whether the phone can reach this workspace at all, not which conversation it lands in.
 
+They do share the workspace, though, so a phone conversation appears in the desktop sidebar under Phone, a few seconds after the turn finishes. Opening one there loads its history and continues it on this machine; the phone picks up those turns the next time it writes to that chat. Both sides read and write the same files, so the only thing to avoid is driving one conversation from both places at the same moment.
+
 ## Turn it on
 
 Settings has a Phone section:
@@ -15,6 +17,18 @@ Settings has a Phone section:
 The TUI has the same switch as `/phone`, `/phone on`, and `/phone off`.
 
 The switch reflects the process, not the click: if Feishu rejects the credentials the bridge exits and the switch falls back to off with the reason underneath it.
+
+### The SDK it needs
+
+The bridge talks to Feishu through the `lark-oapi` SDK, which is not part of what Friday installs by default.
+
+| How you run Friday | What to do |
+| --- | --- |
+| Installed desktop app | Nothing; the SDK is built into it |
+| Source checkout | `uv sync --extra feishu` |
+| `pip install friday-agent` | `pip install "friday-agent[feishu]"` |
+
+Turning the switch on without the SDK stops the bridge and says so under the switch, rather than failing quietly.
 
 ## Feishu setup
 
@@ -58,7 +72,7 @@ Short answers arrive as one card rather than opening a streaming one.
 | `/status` | Show workspace, model, permission mode, and objective |
 | `/help` | List these commands |
 
-The chat-to-session mapping lives in the project state directory, so a chat resumes its own conversation after a restart. Turns run one at a time because the bridge holds a single selected session; `/cancel` bypasses that queue so a stuck turn can always be stopped.
+The chat-to-session mapping lives in the project state directory, so a chat resumes its own conversation after a restart. It is also what the desktop sidebar reads to tell a phone conversation from a desktop one. Turns run one at a time because the bridge holds a single selected session; `/cancel` bypasses that queue so a stuck turn can always be stopped.
 
 ## Approvals
 
@@ -72,6 +86,8 @@ The bridge is also a command, which is useful for a headless machine or a second
 uv pip install "friday-agent[feishu]"
 friday feishu
 ```
+
+The desktop switch runs this same command as a child process, so a failure you can reproduce here is the same failure the switch reports.
 
 It reads the same saved settings. Environment variables override them, so one terminal can point at a different app without changing what the settings screen shows:
 

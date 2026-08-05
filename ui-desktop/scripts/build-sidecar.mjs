@@ -22,11 +22,17 @@ mkdirSync(binaries, { recursive: true });
 const pythonArgs =
   process.platform === "darwin" ? ["--python", "3.13", "--managed-python"] : [];
 
+// The phone bridge is an optional extra, so a default `uv run` resolves without
+// it and PyInstaller silently ships a sidecar whose Feishu switch cannot work.
+// Naming it here keeps the artifact a function of this file rather than of
+// whichever extras the machine running the build happens to have installed.
 const result = spawnSync(
   "uv",
   [
     "run",
     ...pythonArgs,
+    "--extra",
+    "feishu",
     "--with",
     "pyinstaller",
     "pyinstaller",

@@ -9,13 +9,13 @@ switch mean "my computer is reachable from my phone right now".
 
 from __future__ import annotations
 
-import os
 import subprocess
-import sys
 import threading
 from collections import deque
 from pathlib import Path
 from typing import Any
+
+from friday.child import child_environment, cli_command
 
 STOP_GRACE_SECONDS = 5.0
 LOG_TAIL = 40
@@ -56,6 +56,11 @@ class BridgeSupervisor:
                     proc.wait(timeout=STOP_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+                    proc.wait(timeout=STOP_GRACE_SECONDS)
+            # The reader thread ends at EOF, but the pipe is this process's to close:
+            # a switch flipped all day would otherwise leak one handle per turn.
+            if proc.stdout is not None:
+                proc.stdout.close()
             self._proc = None
             return self._status()
 
@@ -64,13 +69,10 @@ class BridgeSupervisor:
             return self._status()
 
     def _spawn(self, workspace: Path) -> subprocess.Popen[str]:
-        import friday
-
-        package_root = str(Path(friday.__file__).resolve().parent.parent)
         return subprocess.Popen(
-            [sys.executable, "-m", "friday.app_server", "--cli", "feishu"],
+            cli_command("feishu"),
             cwd=str(workspace),
-            env=_bridge_env(package_root),
+            env=child_environment(),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -108,9 +110,3 @@ class BridgeSupervisor:
             "exit_code": exit_code,
             "log": list(self._lines),
         }
-
-
-def _bridge_env(package_root: str) -> dict[str, str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
-    return env

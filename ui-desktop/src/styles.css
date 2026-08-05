@@ -78,6 +78,9 @@
   --leading-reading: 1.75;
   --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
 
+  /* Every icon on the sidebar's vertical line shares this size */
+  --sidebar-icon: 16px;
+
   /* Radii */
   --radius-s: 6px;
   --radius-m: 8px;
@@ -212,6 +215,47 @@ input[type="checkbox"] {
 }
 
 /* ============================================================
+   Paths
+   ============================================================ */
+
+/* Every place that shows a filesystem path shortens it the same way, from the
+   front, because the end of a path is the part that identifies the file while the
+   front is boilerplate the reader already knows. Laying the box out right-to-left
+   is what moves the ellipsis to the front; `plaintext` then re-reads the string in
+   its own logical order, so the path itself is not reversed with the box.
+   A path must never wrap: these all sit on one line of a header. */
+.skill-modal > small,
+.artifact-preview > header span,
+.memory-editor > header p {
+  display: block;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Icons
+   ============================================================ */
+
+/* Interface icons are drawn, not typed. A Unicode glyph is positioned by the
+   metrics of whichever font ends up carrying it, which differs per character and
+   per machine, so two glyphs in adjacent buttons cannot be relied on to share a
+   centre. A path in a square viewBox always can: centring the box centres the
+   drawing, so every icon button lines up with every other one by construction. */
+.glyph-icon {
+  width: var(--glyph-size, 15px);
+  height: var(--glyph-size, 15px);
+  flex: 0 0 auto;
+  stroke: currentColor;
+  stroke-width: var(--glyph-weight, 1.7);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ============================================================
    Window chrome — floating overlay, no dedicated bar
    ============================================================ */
 
@@ -267,7 +311,9 @@ input[type="checkbox"] {
   height: 42px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  /* 20px on the left puts the mark on the same vertical line as the sidebar icons
+     below it: 10px of sidebar padding plus 10px inside each row. */
+  padding: 0 12px 0 20px;
   color: var(--ink);
   user-select: none;
 }
@@ -275,15 +321,15 @@ input[type="checkbox"] {
 .titlebar-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: var(--text-label);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.01em;
 }
 
 .titlebar-brand img {
-  width: 17px;
-  height: 17px;
+  width: var(--sidebar-icon, 16px);
+  height: var(--sidebar-icon, 16px);
   border-radius: 5px;
 }
 
@@ -419,6 +465,12 @@ input[type="checkbox"] {
   margin-top: 0;
 }
 
+/* Only the tree gives up height; see the note on .skill-modal. */
+.sidebar-nav,
+.sidebar-footer {
+  flex: 0 0 auto;
+}
+
 .sidebar-nav {
   display: grid;
   gap: 2px;
@@ -456,35 +508,118 @@ input[type="checkbox"] {
   opacity: 0.4;
 }
 
-.nav-icon {
-  width: 15px;
-  height: 15px;
+/* The wordmark, the nav icons, and the section icons share one left edge and one
+   width, so every icon in the sidebar sits on the same vertical line. */
+.nav-icon,
+.section-icon {
+  width: var(--sidebar-icon, 16px);
+  height: var(--sidebar-icon, 16px);
   flex: 0 0 auto;
-  color: var(--muted);
   stroke: currentColor;
   stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
+.nav-icon {
+  color: var(--muted);
+}
+
+.section-icon {
+  color: var(--faint);
+}
+
 .section-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   min-height: 26px;
   margin: 0 4px 4px 10px;
 }
 
 .section-heading h2 {
   margin: 0;
+  overflow: hidden;
   color: var(--faint);
   font-size: var(--text-micro);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.09em;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The heading itself folds the section away, so it claims the whole row up to the
+   trailing action and keeps its hover quiet enough for a label. */
+.section-heading .section-toggle {
+  display: flex;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+}
+
+.section-heading .section-toggle:hover {
+  background: transparent;
+}
+
+.section-heading .section-toggle:hover .section-icon,
+.section-heading .section-toggle:hover h2,
+.section-heading .section-toggle:hover .section-chevron {
+  color: var(--muted);
+}
+
+.section-chevron {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  margin-left: -3px;
+  color: var(--line-strong);
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition:
+    transform var(--dur-2) var(--ease),
+    color var(--dur-1) ease-out;
+}
+
+.section-toggle[aria-expanded='true'] .section-chevron {
+  transform: rotate(90deg);
+}
+
+.section-body {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows var(--dur-3) var(--ease),
+    opacity var(--dur-2) ease-out;
+}
+
+.sidebar-section.collapsed .section-body {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.section-body-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Everything under a heading is one level deeper than it. */
+.section-body-content > .project-group,
+.section-body-content > .session-entry,
+.section-body-content > .empty-sessions {
+  margin-left: 14px;
 }
 
 .section-heading button {
+  --glyph-size: 13px;
   display: grid;
   width: 22px;
   height: 22px;
@@ -494,8 +629,6 @@ input[type="checkbox"] {
   border-radius: var(--radius-s);
   color: var(--muted);
   background: transparent;
-  font-size: 15px;
-  line-height: 1;
 }
 
 .section-heading button:hover {
@@ -656,8 +789,7 @@ input[type="checkbox"] {
 }
 
 .project-actions button {
-  font-size: 14px;
-  line-height: 1;
+  --glyph-size: 13px;
 }
 
 .project-entry:hover .project-actions,
@@ -779,8 +911,7 @@ input[type="checkbox"] {
 }
 
 .session-actions button {
-  font-size: 13px;
-  line-height: 1;
+  --glyph-size: 13px;
 }
 
 .empty-sessions {
@@ -819,8 +950,15 @@ input[type="checkbox"] {
 }
 
 .sidebar-status-copy {
-  display: flex;
+  display: grid;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sidebar-status-copy > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-status strong {
@@ -830,9 +968,10 @@ input[type="checkbox"] {
 }
 
 .sidebar-status .footer-chevron {
+  --glyph-size: 13px;
+  --glyph-weight: 2.1;
   margin-left: auto;
   color: var(--faint);
-  font-size: 17px;
 }
 
 .status-dot {
@@ -909,8 +1048,10 @@ input[type="checkbox"] {
   backdrop-filter: blur(18px);
 }
 
+/* Only the graph gives up height; see the note on .skill-modal. */
 .fork-map header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   padding: 2px 4px 8px;
@@ -928,6 +1069,7 @@ input[type="checkbox"] {
 }
 
 .fork-map-collapse {
+  --glyph-size: 13px;
   display: grid;
   width: 20px;
   height: 20px;
@@ -938,8 +1080,6 @@ input[type="checkbox"] {
   border-radius: var(--radius-s);
   color: var(--muted);
   background: transparent;
-  font-size: 15px;
-  line-height: 1;
 }
 
 .fork-map-collapse:hover {
@@ -1002,6 +1142,9 @@ input[type="checkbox"] {
   right: calc(100% + 8px);
   display: grid;
   width: 210px;
+  /* Grid tracks default to their content's minimum, which is a whole conversation
+     title here, so the ellipsis inside would never get the chance to appear. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 3px;
   padding: 10px 11px;
   border: 1px solid var(--line);
@@ -1190,6 +1333,7 @@ input[type="checkbox"] {
 }
 
 .skill-search {
+  --glyph-size: 16px;
   display: flex;
   width: 100%;
   min-height: 42px;
@@ -1275,7 +1419,9 @@ input[type="checkbox"] {
   animation-delay: 40ms;
 }
 
+/* The tile is the box; the diamond it holds is drawn at its own size. */
 .skill-card-icon {
+  --glyph-size: 15px;
   display: grid;
   width: 38px;
   height: 38px;
@@ -1284,8 +1430,6 @@ input[type="checkbox"] {
   border-radius: 10px;
   color: var(--accent);
   background: var(--fill-strong);
-  font-size: 17px;
-  line-height: 1;
 }
 
 .skill-card-copy {
@@ -1313,8 +1457,8 @@ input[type="checkbox"] {
 }
 
 .skill-card-check {
+  --glyph-size: 14px;
   color: var(--faint);
-  font-size: 13px;
 }
 
 .skills-empty,
@@ -1359,6 +1503,19 @@ input[type="checkbox"] {
   box-shadow: var(--shadow-3);
 }
 
+/* Only the content pane may give up height. Everything above it is a flex item
+   with the default shrink factor, so a window too short for the dialog squeezes
+   these rows instead of scrolling the pane — and the path line, which hides its
+   overflow, ends up sliced through the middle of its letters rather than
+   ellipsised. Pinning them sends the shortfall to the one child that can absorb
+   it. The same reasoning applies wherever a column flex box holds a scroll pane. */
+.skill-modal > header,
+.skill-modal > h2,
+.skill-modal > p,
+.skill-modal > small {
+  flex: 0 0 auto;
+}
+
 .skill-modal > header {
   display: flex;
   align-items: center;
@@ -1366,14 +1523,16 @@ input[type="checkbox"] {
 }
 
 .skill-modal > header button {
+  --glyph-size: 15px;
+  display: grid;
   width: 28px;
   height: 28px;
+  place-items: center;
   padding: 0;
   border: 0;
   border-radius: var(--radius-m);
   color: var(--muted);
   background: transparent;
-  font-size: 18px;
 }
 
 .skill-modal > header button:hover {
@@ -1403,13 +1562,10 @@ input[type="checkbox"] {
 }
 
 .skill-modal > small {
-  overflow: hidden;
   margin-bottom: 16px;
   color: var(--faint);
   font-family: var(--font-mono);
   font-size: var(--text-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .skill-content {
@@ -1583,8 +1739,7 @@ input[type="checkbox"] {
 }
 
 .restore-icon {
-  font-size: 15px;
-  line-height: 1;
+  --glyph-size: 14px;
 }
 
 .message-meta > button:hover,
@@ -1814,9 +1969,15 @@ input[type="checkbox"] {
   border-bottom: 1px solid var(--line);
 }
 
-.artifact-preview > header strong,
-.artifact-preview > header span {
+.artifact-preview > header > div {
+  min-width: 0;
+}
+
+.artifact-preview > header strong {
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .artifact-preview > header span {
@@ -1826,14 +1987,17 @@ input[type="checkbox"] {
 }
 
 .artifact-preview > header button {
+  --glyph-size: 16px;
+  display: grid;
   width: 30px;
   height: 30px;
+  place-items: center;
+  flex: 0 0 auto;
   padding: 0;
   border: 0;
   border-radius: 50%;
   color: var(--muted);
   background: transparent;
-  font-size: 20px;
 }
 
 .artifact-preview > header button:hover {
@@ -1881,6 +2045,7 @@ input[type="checkbox"] {
 }
 
 .image-preview-backdrop > button {
+  --glyph-size: 17px;
   position: absolute;
   top: 14px;
   right: 18px;
@@ -1893,8 +2058,6 @@ input[type="checkbox"] {
   border-radius: 50%;
   color: #fff;
   background: rgba(255, 255, 255, 0.14);
-  font-size: 20px;
-  line-height: 1;
 }
 
 .image-preview-backdrop > button:hover {
@@ -2640,8 +2803,10 @@ input[type="checkbox"] {
    Composer
    ============================================================ */
 
+/* Only the timeline gives up height; see the note on .skill-modal. */
 .composer {
   z-index: 2;
+  flex: 0 0 auto;
   margin: 0 max(24px, calc((100% - 930px) / 2)) 16px;
   padding: 12px 16px 10px;
   border: 1px solid var(--line);
@@ -2682,11 +2847,11 @@ input[type="checkbox"] {
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 50%;
+  --glyph-size: 10px;
+  --glyph-weight: 2;
   color: var(--ink);
   background: var(--surface);
   box-shadow: var(--shadow-1);
-  font-size: 13px;
-  line-height: 1;
 }
 
 .composer textarea {
@@ -2877,10 +3042,19 @@ input[type="checkbox"] {
 
 .model-menu-copy strong {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   font-size: var(--text-caption);
   font-weight: var(--weight-medium);
+}
+
+/* A model name is whatever its owner typed, so it gets its own box to be cut in;
+   the vision mark beside it is not part of the name and must not be cut with it. */
+.model-menu-copy strong > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-menu-copy small {
@@ -2966,6 +3140,8 @@ input[type="checkbox"] {
 }
 
 .composer-footer .send-button {
+  --glyph-size: 15px;
+  --glyph-weight: 2;
   display: grid;
   width: 28px;
   height: 28px;
@@ -2976,9 +3152,6 @@ input[type="checkbox"] {
   border-radius: 50%;
   color: var(--on-ink);
   background: var(--ink);
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1;
 }
 
 .composer-footer .send-button:hover:not(:disabled) {
@@ -3058,10 +3231,10 @@ input[type="checkbox"] {
   background: var(--fill);
 }
 
-.settings-back span[aria-hidden] {
-  font-size: 16px;
-  line-height: 1;
-  transform: translateY(-1px);
+.settings-back .back-chevron {
+  --glyph-size: 13px;
+  --glyph-weight: 2.1;
+  transform: rotate(180deg);
 }
 
 .settings-nav-group {
@@ -3280,8 +3453,9 @@ input[type="checkbox"] {
 }
 
 .memory-file-chevron {
+  --glyph-size: 13px;
+  --glyph-weight: 2.1;
   color: var(--faint);
-  font-size: 15px;
   transition:
     color var(--dur-1) ease-out,
     transform var(--dur-2) var(--ease-out);
@@ -3319,12 +3493,23 @@ input[type="checkbox"] {
   animation: rise-in var(--dur-2) var(--ease-out) backwards;
 }
 
+/* Only the textarea gives up height; see the note on .skill-modal. */
+.memory-editor > header,
+.memory-editor > footer {
+  flex: 0 0 auto;
+}
+
 .memory-editor > header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
   padding: 16px 18px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.memory-editor > header > div {
+  min-width: 0;
 }
 
 .memory-editor h3 {
@@ -3339,10 +3524,10 @@ input[type="checkbox"] {
   color: var(--faint);
   font-family: var(--font-mono);
   font-size: var(--text-micro);
-  overflow-wrap: anywhere;
 }
 
 .memory-editor > header > button {
+  --glyph-size: 15px;
   display: grid;
   width: 28px;
   height: 28px;
@@ -3353,7 +3538,6 @@ input[type="checkbox"] {
   border-radius: var(--radius-m);
   color: var(--muted);
   background: transparent;
-  font-size: 18px;
 }
 
 .memory-editor > header > button:hover {
@@ -3786,7 +3970,7 @@ input[type="checkbox"] {
 
 .phone-action {
   position: relative;
-  padding: 2px 1px 5px;
+  padding: 2px 0 5px;
   border: 0;
   color: var(--ink);
   background: transparent;
@@ -3890,6 +4074,8 @@ input[type="checkbox"] {
   flex: 1;
   padding: 4px 2px 6px;
   border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
   outline: 0;
   color: var(--ink);
   background: transparent;
@@ -3938,8 +4124,8 @@ input[type="checkbox"] {
 
 .settings-page .save-model {
   position: relative;
-  padding-right: 1px;
-  padding-left: 1px;
+  padding-right: 0;
+  padding-left: 0;
   border: 0;
   border-radius: 0;
   color: var(--ink);

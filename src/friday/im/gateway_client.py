@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Sequence
 from typing import Any, Callable
+
+from friday.child import child_environment, gateway_command
 
 _STDERR_TAIL = 20
 
@@ -52,15 +52,10 @@ class GatewayClient:
     def start(self) -> None:
         if self._proc is not None:
             return
-        import friday
-
-        package_root = str(Path(friday.__file__).resolve().parent.parent)
-        env = {key: value for key, value in os.environ.items() if key not in self.withhold_env}
-        env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
         self._proc = subprocess.Popen(
-            [sys.executable, "-m", "friday.app_server"],
+            gateway_command(),
             cwd=str(self.workspace),
-            env=env,
+            env=child_environment(withhold=self.withhold_env),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

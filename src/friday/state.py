@@ -254,6 +254,21 @@ def load_session(workspace: Path, resume_id: str | None = None) -> dict[str, Any
     return read_session(files[-1])
 
 
+def session_choice(data: dict[str, Any], fallback_id: str = "") -> dict[str, str]:
+    """One saved conversation as a picker shows it."""
+    progress = data.get("progress") if isinstance(data.get("progress"), dict) else {}
+    return {
+        "assistant": preview(str(data.get("assistant", ""))),
+        "id": str(data.get("session_id") or fallback_id),
+        "objective": preview(str(progress.get("objective", ""))),
+        "status": str(progress.get("status", "")),
+        "time": str(data.get("updated") or ""),
+        "title": preview(str(data.get("title", "")), 120),
+        "turns": str(data.get("turns", 0)),
+        "user": preview(str(data.get("user", ""))),
+    }
+
+
 def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dict[str, str]]:
     root = (workspace or Path.cwd()).resolve()
     choices: list[dict[str, str]] = []
@@ -261,19 +276,7 @@ def resume_choices(workspace: Path | None = None, *, limit: int = 8) -> list[dic
         data = read_session(path)
         if not data or data.get("fork_parent"):
             continue
-        progress = data.get("progress") if isinstance(data.get("progress"), dict) else {}
-        choices.append(
-            {
-                "assistant": preview(str(data.get("assistant", ""))),
-                "id": str(data.get("session_id") or path.stem),
-                "objective": preview(str(progress.get("objective", ""))),
-                "status": str(progress.get("status", "")),
-                "time": str(data.get("updated") or ""),
-                "title": preview(str(data.get("title", "")), 120),
-                "turns": str(data.get("turns", 0)),
-                "user": preview(str(data.get("user", ""))),
-            }
-        )
+        choices.append(session_choice(data, path.stem))
     return choices
 
 

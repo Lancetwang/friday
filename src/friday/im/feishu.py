@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from friday.child import frozen
 from friday.config import IM_BRIDGE_ENV_NAMES, feishu_credentials, load_model_environment
 from friday.im.bridge import FridayBridge, Stream
 from friday.im.feishu_card import (
@@ -27,7 +28,13 @@ SEEN_MESSAGE_LIMIT = 512
 TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 TOKEN_TIMEOUT_SECONDS = 10
 
+# A packaged Friday has no pip to run, so telling its user to run one would send
+# them somewhere they cannot go.
 INSTALL_HINT = "The Feishu bridge needs the lark-oapi SDK: pip install 'friday-agent[feishu]'"
+PACKAGED_HINT = (
+    "This build of Friday does not include the Feishu SDK, so the phone bridge "
+    "cannot start. Run it from a source install instead: see docs/im-feishu.md."
+)
 
 
 @dataclass(frozen=True)
@@ -260,7 +267,7 @@ def _import_lark() -> Any:
     try:
         import lark_oapi
     except ModuleNotFoundError as exc:
-        raise SystemExit(INSTALL_HINT) from exc
+        raise SystemExit(PACKAGED_HINT if frozen() else INSTALL_HINT) from exc
     return lark_oapi
 
 

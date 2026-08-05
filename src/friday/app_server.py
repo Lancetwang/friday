@@ -13,6 +13,7 @@ from agent_core import AgentEvent
 
 from friday.app import ensure_user_home, resume_choices
 from friday.checkpoint import ARTIFACT_TYPES, checkpoint_choices
+from friday.child import cli_command
 from friday.config import (
     delete_model_profile,
     load_feishu_settings,
@@ -25,6 +26,8 @@ from friday.config import (
     select_model_profile,
 )
 from friday.context import context_report
+from friday.im.bridge import phone_sessions
+from friday.im.supervisor import BridgeSupervisor
 from friday.memory import (
     format_memory_result,
     load_user_profile_settings,
@@ -35,7 +38,6 @@ from friday.memory import (
 )
 from friday.model_options import supports_thinking
 from friday.session import FridaySession
-from friday.im.supervisor import BridgeSupervisor
 from friday.skills import discover_skills, skill_body
 from friday.state import (
     USER_MESSAGE_TIMES_KEY,
@@ -105,14 +107,14 @@ def main() -> None:
 def _install_cli_shim() -> Path:
     directory = friday_home() / "bin"
     directory.mkdir(parents=True, exist_ok=True)
-    frozen = getattr(sys, "frozen", False)
-    args = "--cli" if frozen else "-m friday.cli"
+    executable, *prefix = cli_command()
+    args = " ".join(prefix)
     if os.name == "nt":
         path = directory / "friday.cmd"
-        content = f'@"{sys.executable}" {args} %*\n'
+        content = f'@"{executable}" {args} %*\n'
     else:
         path = directory / "friday"
-        content = f'#!/bin/sh\nexec "{sys.executable}" {args} "$@"\n'
+        content = f'#!/bin/sh\nexec "{executable}" {args} "$@"\n'
     if not path.exists() or path.read_text(encoding="utf-8") != content:
         path.write_text(content, encoding="utf-8")
         if os.name != "nt":
@@ -393,6 +395,8 @@ class Gateway:
                 )
             elif method == "bridge.status":
                 self.ok(rid, self.bridge.status())
+            elif method == "bridge.sessions":
+                self.ok(rid, {"choices": phone_sessions(Path.cwd().resolve())})
             elif method == "bridge.start":
                 self.ok(rid, self.bridge.start(Path.cwd().resolve()))
             elif method == "bridge.stop":

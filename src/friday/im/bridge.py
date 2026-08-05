@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Protocol
 
 from friday.im.gateway_client import GatewayClient, GatewayError
-from friday.storage import project_state_dir
+from friday.state import read_session, session_choice, session_path
+from friday.storage import project_state_dir, write_json_atomic
 
 TURN_TIMEOUT_SECONDS = 1800.0
 PROGRESS_NOTICE_SECONDS = 30.0
@@ -71,7 +72,7 @@ class FridayBridge:
         self.turn_timeout = turn_timeout
         self.progress_notice_seconds = progress_notice_seconds
         self.open_stream = open_stream
-        self._state_path = project_state_dir(workspace or client.workspace) / "im" / "chats.json"
+        self._state_path = chat_bindings_path(workspace or client.workspace)
         self._sessions: dict[str, str] = self._load()
         self._awaiting: dict[str, dict[str, Any]] = {}
         self._last_tool = ""
@@ -292,14 +293,45 @@ class FridayBridge:
         return stop
 
     def _load(self) -> dict[str, str]:
-        try:
-            data = json.loads(self._state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return {str(key): str(value) for key, value in data.items()} if isinstance(data, dict) else {}
+        return read_chat_bindings(self._state_path)
 
     def _save(self) -> None:
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self._state_path.with_suffix(".tmp")
-        temp.write_text(json.dumps(self._sessions, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(self._state_path)
+        write_json_atomic(self._state_path, self._sessions)
+
+
+def chat_bindings_path(workspace: Path) -> Path:
+    return project_state_dir(workspace) / "im" / "chats.json"
+
+
+def read_chat_bindings(path: Path) -> dict[str, str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {str(key): str(value) for key, value in data.items()} if isinstance(data, dict) else {}
+
+
+def phone_sessions(workspace: Path) -> list[dict[str, str]]:
+    """Conversations a phone chat is bound to, newest first.
+
+    Both sides write the same session files, so this reads the bridge's own chat
+    bindings from disk rather than asking the bridge process. The desktop can
+    therefore list phone conversations whether or not the bridge is running, and
+    opening one is an ordinary resume.
+    """
+    root = workspace.resolve()
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for session_id in read_chat_bindings(chat_bindings_path(root)).values():
+        if not session_id or session_id in seen:
+            continue
+        seen.add(session_id)
+        try:
+            data = read_session(session_path(root, session_id))
+        except ValueError:
+            continue
+        if data and not data.get("fork_parent"):
+            found.append(session_choice(data, session_id))
+    # Saved times are second-resolution, so ties fall back to the id, which carries
+    # the microsecond the conversation started.
+    return sorted(found, key=lambda item: (item["time"], item["id"]), reverse=True)

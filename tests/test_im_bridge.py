@@ -2,27 +2,38 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
 import unittest
+import io
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 from unittest.mock import MagicMock, patch
 
+import friday
+from friday.app_server import _install_cli_shim
+from friday.child import child_environment, cli_command, gateway_command
 from friday.config import (
     FEISHU_FILE,
     IM_BRIDGE_ENV_NAMES,
     feishu_credentials,
     save_feishu_settings,
 )
-from friday.im.bridge import FridayBridge
+from friday.im.bridge import (
+    FridayBridge,
+    chat_bindings_path,
+    phone_sessions,
+    read_chat_bindings,
+)
 from friday.im.feishu import (
     FeishuBridge,
     FeishuConfig,
     _chunks,
+    _import_lark,
     _message_text,
     _strip_mentions,
     credential_problem,
@@ -37,6 +48,8 @@ from friday.im.feishu_card import (
 )
 from friday.im.gateway_client import GatewayClient, GatewayError
 from friday.im.supervisor import BridgeSupervisor
+from friday.state import save_turn
+from friday.storage import write_json_atomic
 
 FEISHU_ENV = {
     "FRIDAY_FEISHU_APP_ID": "app",
@@ -383,6 +396,73 @@ class ImBridgeTests(_IsolatedHome):
         self.assertEqual(stream.pushes, [])
 
 
+class PhoneSessionListingTests(_IsolatedHome):
+    """The desktop lists phone conversations by reading the files both sides write."""
+
+    def _bound(self, chat_key: str, user: str, assistant: str) -> str:
+        session_id = save_turn(self.workspace, user, assistant).stem
+        bindings = read_chat_bindings(chat_bindings_path(self.workspace))
+        write_json_atomic(chat_bindings_path(self.workspace), {**bindings, chat_key: session_id})
+        return session_id
+
+    def test_a_workspace_without_a_bridge_lists_nothing(self) -> None:
+        self.assertEqual(phone_sessions(self.workspace), [])
+
+    def test_a_bound_chat_shows_up_with_its_conversation(self) -> None:
+        session_id = self._bound("oc_1", "fix the build", "fixed it")
+
+        listed = phone_sessions(self.workspace)
+
+        self.assertEqual([item["id"] for item in listed], [session_id])
+        self.assertEqual(listed[0]["user"], "fix the build")
+        self.assertEqual(listed[0]["turns"], "1")
+
+    def test_desktop_conversations_are_left_out(self) -> None:
+        phone = self._bound("oc_1", "from the phone", "answered")
+        save_turn(self.workspace, "from the desktop", "answered")
+
+        self.assertEqual([item["id"] for item in phone_sessions(self.workspace)], [phone])
+
+    def test_a_binding_whose_conversation_never_saved_is_skipped(self) -> None:
+        write_json_atomic(chat_bindings_path(self.workspace), {"oc_1": "20260101120000000000-abcdef12"})
+
+        self.assertEqual(phone_sessions(self.workspace), [])
+
+    def test_a_corrupt_binding_file_does_not_break_the_sidebar(self) -> None:
+        path = chat_bindings_path(self.workspace)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not json", encoding="utf-8")
+
+        self.assertEqual(phone_sessions(self.workspace), [])
+
+    def test_a_malformed_session_id_is_refused_rather_than_read(self) -> None:
+        write_json_atomic(chat_bindings_path(self.workspace), {"oc_1": "../../escape"})
+
+        self.assertEqual(phone_sessions(self.workspace), [])
+
+    def test_newest_conversation_comes_first(self) -> None:
+        older = self._bound("oc_1", "older", "answered")
+        time.sleep(0.01)
+        newer = self._bound("oc_2", "newer", "answered")
+
+        self.assertEqual([item["id"] for item in phone_sessions(self.workspace)], [newer, older])
+
+    def test_two_chats_on_one_conversation_are_listed_once(self) -> None:
+        session_id = self._bound("oc_1", "shared", "answered")
+        bindings = read_chat_bindings(chat_bindings_path(self.workspace))
+        write_json_atomic(chat_bindings_path(self.workspace), {**bindings, "oc_2": session_id})
+
+        self.assertEqual([item["id"] for item in phone_sessions(self.workspace)], [session_id])
+
+    def test_the_bridge_binds_where_the_desktop_reads(self) -> None:
+        client = FakeGatewayClient(self.workspace)
+        bridge = FridayBridge(client, lambda _chat, _text: None, workspace=self.workspace)
+
+        bridge.handle("oc_1", "hello")
+
+        self.assertIn("oc_1", read_chat_bindings(chat_bindings_path(self.workspace)))
+
+
 class FeishuTargetTests(_IsolatedHome):
     def _bridge(self, **env: str) -> FeishuBridge:
         with patch.dict(os.environ, {**FEISHU_ENV, **env}):
@@ -537,6 +617,22 @@ class FeishuCredentialCheckTests(unittest.TestCase):
         with patch("urllib.request.urlopen", side_effect=OSError("offline")):
             self.assertEqual(credential_problem(self.config), "")
 
+    def test_a_packaged_build_without_the_sdk_says_so_instead_of_naming_pip(self) -> None:
+        """A frozen Friday carries no pip, so `pip install` is not a way out of it."""
+        with patch.dict(sys.modules, {"lark_oapi": None}), patch.object(sys, "frozen", True, create=True):
+            with self.assertRaises(SystemExit) as raised:
+                _import_lark()
+
+        self.assertNotIn("pip install", str(raised.exception))
+        self.assertIn("source install", str(raised.exception))
+
+    def test_a_source_install_without_the_sdk_names_the_extra_to_install(self) -> None:
+        with patch.dict(sys.modules, {"lark_oapi": None}):
+            with self.assertRaises(SystemExit) as raised:
+                _import_lark()
+
+        self.assertIn("friday-agent[feishu]", str(raised.exception))
+
     def test_a_refused_app_stops_the_bridge_before_it_retries_forever(self) -> None:
         bridge = FeishuBridge(self.config)
 
@@ -594,6 +690,89 @@ class BridgeSupervisorTests(_IsolatedHome):
 
         self.assertFalse(status["running"])
         self.assertIn("no python", status["log"][0])
+
+    def test_a_real_child_reaches_the_bridge_and_explains_why_it_stopped(self) -> None:
+        """Spawn for real: every other test fakes the process this one exercises.
+
+        With no credentials the bridge is expected to refuse to start, and saying
+        so is the point. A child that instead answered as a gateway would exit 0
+        with a JSON-RPC line, which is what a mis-spelled argv looks like.
+        """
+        supervisor = BridgeSupervisor()
+
+        supervisor.start(self.workspace)
+        _wait_for(lambda: not supervisor.status()["running"] and bool(supervisor.status()["log"]), timeout=30.0)
+        status = supervisor.status()
+        supervisor.stop()
+
+        self.assertEqual(status["exit_code"], 1)
+        self.assertIn("app secret", " ".join(status["log"]))
+        self.assertNotIn("jsonrpc", " ".join(status["log"]))
+
+
+class ChildCommandTests(unittest.TestCase):
+    """The argv of a Friday child, which only the packaged build gets wrong.
+
+    A frozen Friday is one binary whose entry point is the gateway. It routes to
+    the CLI on a leading `--cli` and treats anything else as gateway argv, so a
+    source-checkout spelling silently starts a second gateway on a closed stdin
+    and exits. Every other test fakes the process, which is why this asserts the
+    argv itself.
+    """
+
+    def test_the_bridge_child_reaches_the_cli_when_frozen(self) -> None:
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", "/app/Friday"):
+            self.assertEqual(cli_command("feishu"), ["/app/Friday", "--cli", "feishu"])
+
+    def test_the_bridge_child_reaches_the_cli_from_a_source_checkout(self) -> None:
+        with patch.object(sys, "executable", "/usr/bin/python3"):
+            self.assertEqual(
+                cli_command("feishu"),
+                ["/usr/bin/python3", "-m", "friday.cli", "feishu"],
+            )
+
+    def test_the_frozen_marker_has_to_lead_or_the_gateway_claims_the_argv(self) -> None:
+        with patch.object(sys, "frozen", True, create=True):
+            self.assertEqual(cli_command("feishu")[1], "--cli")
+
+    def test_the_gateway_child_needs_no_module_flag_when_frozen(self) -> None:
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", "/app/Friday"):
+            self.assertEqual(gateway_command(), ["/app/Friday"])
+
+    def test_the_gateway_child_runs_the_module_from_a_source_checkout(self) -> None:
+        with patch.object(sys, "executable", "/usr/bin/python3"):
+            self.assertEqual(gateway_command(), ["/usr/bin/python3", "-m", "friday.app_server"])
+
+    def test_a_source_checkout_tells_the_child_where_friday_lives(self) -> None:
+        env = child_environment()
+
+        self.assertIn(str(Path(friday.__file__).resolve().parent.parent), env["PYTHONPATH"].split(os.pathsep))
+
+    def test_a_frozen_child_carries_its_own_imports(self) -> None:
+        with patch.object(sys, "frozen", True, create=True):
+            env = child_environment()
+
+        self.assertNotIn("PYTHONPATH", env)
+
+    def test_withheld_names_never_reach_the_child(self) -> None:
+        with patch.dict(os.environ, {"FRIDAY_FEISHU_APP_SECRET": "secret", "PATH": os.environ.get("PATH", "")}):
+            env = child_environment(withhold=IM_BRIDGE_ENV_NAMES)
+
+        self.assertNotIn("FRIDAY_FEISHU_APP_SECRET", env)
+        self.assertIn("PATH", env)
+
+    def test_the_installed_shim_uses_the_same_spelling_as_a_spawned_child(self) -> None:
+        """The shim on PATH and a spawned child must not disagree about the form."""
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"FRIDAY_HOME": home}):
+            with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", "/app/Friday"):
+                path = _install_cli_shim()
+                frozen_shim = path.read_text(encoding="utf-8")
+            with patch.object(sys, "executable", "/usr/bin/python3"):
+                source_shim = _install_cli_shim().read_text(encoding="utf-8")
+
+        self.assertIn("--cli", frozen_shim)
+        self.assertNotIn("friday.cli", frozen_shim)
+        self.assertIn("-m friday.cli", source_shim)
 
 
 class FeishuCardTests(unittest.TestCase):
@@ -736,7 +915,9 @@ class _FakeChild:
     """Stands in for the bridge subprocess so tests never spawn one."""
 
     def __init__(self, *, lines: list[str] | None = None, returncode: int = 0, alive: bool = True) -> None:
-        self.stdout = iter([f"{line}\n" for line in (lines or [])])
+        # A real child hands back a pipe the supervisor has to close, so the double
+        # offers something closeable rather than a bare iterator.
+        self.stdout = io.StringIO("".join(f"{line}\n" for line in (lines or [])))
         self.returncode = returncode
         self.pid = 4242
         self._alive = alive

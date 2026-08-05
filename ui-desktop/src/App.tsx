@@ -11,7 +11,22 @@ import remarkMath from 'remark-math'
 
 import fridayAvatar from './assets/friday-avatar.svg'
 import { getLanguage, loadLanguage, setLanguage, t, type Language } from './i18n'
+import {
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronIcon,
+  CloseIcon,
+  DiamondIcon,
+  MinusIcon,
+  PencilIcon,
+  PlusIcon,
+  SearchIcon,
+  UndoIcon
+} from './Icons'
 import { normalizeMarkdownMath } from './markdown'
+import { MenuDetails } from './MenuDetails'
+import { PhoneBridgeSettings, type BridgeStatus, type FeishuSettings } from './PhoneBridgeSettings'
+import { SaveFooter, SecretField, SettingsMessage, useSettingsSave } from './SettingsForm'
 import { collectMessageSources, hostOf, safeIconUrl, type WebSource } from './sources'
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath]
@@ -176,21 +191,6 @@ type MemoryFileDetail = MemoryFileInfo & {
 
 type MemoryFileScope = 'global' | 'user'
 
-type FeishuSettings = {
-  allow_group: boolean
-  allowed_users: string[]
-  app_id: string
-  app_secret_configured: boolean
-}
-
-type BridgeStatus = {
-  exit_code: number | null
-  log: string[]
-  pid: number | null
-  running: boolean
-  workspace: string
-}
-
 type AppSettings = {
   bridge: BridgeStatus
   feishu: FeishuSettings
@@ -336,6 +336,9 @@ const ACTIVE_PROJECT_KEY = 'friday.desktop.activeProject'
 const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
 const THEME_KEY = 'friday.desktop.theme'
 const DEFAULT_SIDEBAR_WIDTH = 252
+const PHONE_POLL_MS = 8000
+
+type SidebarSection = 'phone' | 'projects' | 'recent'
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 520
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -432,35 +435,6 @@ function clampSidebarWidth(width: number) {
   return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH, available)
 }
 
-// macOS buttons do not take focus on click, so a blur-based dismiss closes the
-// menu before the click lands. Dismiss on outside pointerdown instead.
-function MenuDetails({ children, className }: { children: ReactNode; className: string }) {
-  const ref = useRef<HTMLDetailsElement>(null)
-
-  useEffect(() => {
-    const element = ref.current
-    if (!element) return
-    const onPointerDown = (event: PointerEvent) => {
-      if (element.open && !element.contains(event.target as Node)) element.removeAttribute('open')
-    }
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape' && element.open) element.removeAttribute('open')
-    }
-    document.addEventListener('pointerdown', onPointerDown, true)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [])
-
-  return (
-    <details className={className} ref={ref}>
-      {children}
-    </details>
-  )
-}
-
 function App() {
   const initialProjects = useRef(loadProjects())
   const [projects, setProjects] = useState<string[]>(initialProjects.current)
@@ -468,6 +442,8 @@ function App() {
   const [defaultWorkspace, setDefaultWorkspace] = useState('')
   const [renaming, setRenaming] = useState<{ id: string; original: string; title: string; workspace: string } | null>(null)
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
+  const [collapsedSections, setCollapsedSections] = useState<Set<SidebarSection>>(new Set())
+  const [phoneSessions, setPhoneSessions] = useState<ResumeChoice[]>([])
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [theme, setTheme] = useState<Theme>(loadTheme)
@@ -1068,6 +1044,26 @@ function App() {
   })
 
   const settingsWorkspace = activeProject || defaultWorkspace
+
+  // A phone turn is answered by the bridge's own gateway, so none of its events
+  // reach this window. The conversations land in the same files either way, so the
+  // sidebar polls for them instead of waiting for an event that never arrives.
+  useEffect(() => {
+    if (!settingsWorkspace) return
+    let live = true
+    const read = () => {
+      void sendGateway<{ choices: ResumeChoice[] }>(settingsWorkspace, 'bridge.sessions')
+        .then(result => { if (live) setPhoneSessions(result.choices) })
+        .catch(() => undefined)
+    }
+    read()
+    const timer = setInterval(read, PHONE_POLL_MS)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+  }, [settingsWorkspace])
+
   const changeLanguage = (next: Language) => {
     setLanguage(next)
     setLanguageState(next)
@@ -1508,12 +1504,41 @@ function App() {
     setResizingSidebar(false)
   }
 
+  const toggleSection = (section: SidebarSection) =>
+    setCollapsedSections(current => {
+      const next = new Set(current)
+      if (!next.delete(section)) next.add(section)
+      return next
+    })
+
+  const renderSectionHeading = (section: SidebarSection, label: string, icon: ReactNode) => (
+    <button
+      aria-expanded={!collapsedSections.has(section)}
+      className="section-toggle"
+      onClick={() => toggleSection(section)}
+      type="button"
+    >
+      {icon}
+      <h2>{label}</h2>
+      <svg aria-hidden="true" className="section-chevron" fill="none" viewBox="0 0 24 24">
+        <path d="M9 5.5 15.5 12 9 18.5" />
+      </svg>
+    </button>
+  )
+
   const renderSessions = (workspace: string) => {
     const projectView = views[workspace] || emptyView(workspace)
+    const onPhone = new Set(phoneSessions.map(session => session.id))
+    // A phone conversation has its own section, so listing it here as well would
+    // show the same conversation twice under two names.
+    return renderSessionList(workspace, projectView.sessions.filter(session => !onPhone.has(session.id)))
+  }
+
+  const renderSessionList = (workspace: string, sessions: ResumeChoice[]) => {
     const isCurrent = samePath(workspace, activeProject)
     const isRenaming = (session: ResumeChoice) =>
       renaming?.id === session.id && samePath(renaming.workspace, workspace)
-    return projectView.sessions.length ? projectView.sessions.map(session => (
+    return sessions.length ? sessions.map(session => (
     <div className={`session-entry ${isCurrent && session.id === activeSession ? 'active' : ''} ${isRenaming(session) ? 'renaming' : ''}`} key={session.id}>
       {isRenaming(session) ? (
         <div className="session-main">
@@ -1543,10 +1568,10 @@ function App() {
       )}
       <div className="session-actions">
         <button aria-label={t('sidebar.rename')} onClick={event => beginRenameConversation(event, workspace, session)} title={t('sidebar.rename')} type="button">
-          <span aria-hidden="true">{'\u270e'}</span>
+          <PencilIcon />
         </button>
         <button aria-label="Delete conversation" onClick={event => deleteConversation(event, workspace, session)} title="Delete" type="button">
-          <span aria-hidden="true">{'\u00d7'}</span>
+          <CloseIcon />
         </button>
       </div>
     </div>
@@ -1595,54 +1620,71 @@ function App() {
           </nav>
 
           <div className="sidebar-tree">
-            <section className="sidebar-section projects">
+            <section className={`sidebar-section projects ${collapsedSections.has('projects') ? 'collapsed' : ''}`}>
               <div className="section-heading">
-                <h2>{t('sidebar.projects')}</h2>
-                <button aria-label={t('sidebar.addProject')} onClick={() => void addProject()} title={t('sidebar.addProject')} type="button">+</button>
+                {renderSectionHeading('projects', t('sidebar.projects'), <ProjectsIcon />)}
+                <button aria-label={t('sidebar.addProject')} onClick={() => void addProject()} title={t('sidebar.addProject')} type="button"><PlusIcon /></button>
               </div>
-              {projects.map(path => {
-                const projectView = views[path]
-                const isActive = samePath(path, activeProject)
-                const isExpanded = expandedProjects.has(pathKey(path))
-                return (
-                  <div className={`project-group ${isExpanded ? 'expanded' : ''}`} key={path}>
-                    <div className={`project-entry ${isActive && !activeSession ? 'active' : ''}`}>
-                      <button className="project-main" onClick={() => toggleProject(path)} title={path} type="button">
-                        <FolderIcon className={projectView?.busy ? 'busy' : projectView?.status || ''} open={isExpanded} />
-                        <span>{projectLabel(path)}</span>
-                      </button>
-                      <div className="project-actions">
-                        <button
-                          aria-label={`${t('sidebar.newConversation')} · ${projectLabel(path)}`}
-                          disabled={isActive && status !== 'ready'}
-                          onClick={event => addProjectSession(event, path)}
-                          title={t('sidebar.newConversation')}
-                          type="button"
-                        >
-                          <span aria-hidden="true">+</span>
-                        </button>
-                        <button
-                          aria-label={`${t('sidebar.closeProject')} · ${projectLabel(path)}`}
-                          className="project-close"
-                          onClick={event => void closeProject(event, path)}
-                          title={t('sidebar.closeProject')}
-                          type="button"
-                        >
-                          <span aria-hidden="true">{'\u00d7'}</span>
-                        </button>
+              <div aria-hidden={collapsedSections.has('projects')} className="section-body" inert={collapsedSections.has('projects')}>
+                <div className="section-body-content">
+                  {projects.map(path => {
+                    const projectView = views[path]
+                    const isActive = samePath(path, activeProject)
+                    const isExpanded = expandedProjects.has(pathKey(path))
+                    return (
+                      <div className={`project-group ${isExpanded ? 'expanded' : ''}`} key={path}>
+                        <div className={`project-entry ${isActive && !activeSession ? 'active' : ''}`}>
+                          <button className="project-main" onClick={() => toggleProject(path)} title={path} type="button">
+                            <FolderIcon className={projectView?.busy ? 'busy' : projectView?.status || ''} open={isExpanded} />
+                            <span>{projectLabel(path)}</span>
+                          </button>
+                          <div className="project-actions">
+                            <button
+                              aria-label={`${t('sidebar.newConversation')} · ${projectLabel(path)}`}
+                              disabled={isActive && status !== 'ready'}
+                              onClick={event => addProjectSession(event, path)}
+                              title={t('sidebar.newConversation')}
+                              type="button"
+                            >
+                              <PlusIcon />
+                            </button>
+                            <button
+                              aria-label={`${t('sidebar.closeProject')} · ${projectLabel(path)}`}
+                              className="project-close"
+                              onClick={event => void closeProject(event, path)}
+                              title={t('sidebar.closeProject')}
+                              type="button"
+                            >
+                              <CloseIcon />
+                            </button>
+                          </div>
+                        </div>
+                        <div aria-hidden={!isExpanded} className="nested-sessions" inert={!isExpanded}>
+                          <div className="nested-sessions-content">{renderSessions(path)}</div>
+                        </div>
                       </div>
-                    </div>
-                    <div aria-hidden={!isExpanded} className="nested-sessions" inert={!isExpanded}>
-                      <div className="nested-sessions-content">{renderSessions(path)}</div>
-                    </div>
-                  </div>
-                )
-              })}
+                    )
+                  })}
+                </div>
+              </div>
             </section>
 
-            <section className="sidebar-section conversation-space">
+            <section className={`sidebar-section phone-space ${collapsedSections.has('phone') ? 'collapsed' : ''}`}>
               <div className="section-heading">
-                <h2>{t('sidebar.recent')}</h2>
+                {renderSectionHeading('phone', t('sidebar.phone'), <PhoneIcon />)}
+              </div>
+              <div aria-hidden={collapsedSections.has('phone')} className="section-body" inert={collapsedSections.has('phone')}>
+                <div className="section-body-content">
+                  {phoneSessions.length > 0
+                    ? renderSessionList(settingsWorkspace, phoneSessions)
+                    : <div className="empty-sessions">{t('sidebar.phoneEmpty')}</div>}
+                </div>
+              </div>
+            </section>
+
+            <section className={`sidebar-section conversation-space ${collapsedSections.has('recent') ? 'collapsed' : ''}`}>
+              <div className="section-heading">
+                {renderSectionHeading('recent', t('sidebar.recent'), <ClockIcon />)}
                 <button
                   aria-label={t('sidebar.newConversation')}
                   disabled={isDefaultWorkspace && status !== 'ready'}
@@ -1650,10 +1692,12 @@ function App() {
                   title={t('sidebar.newConversation')}
                   type="button"
                 >
-                  +
+                  <PlusIcon />
                 </button>
               </div>
-              {defaultWorkspace && renderSessions(defaultWorkspace)}
+              <div aria-hidden={collapsedSections.has('recent')} className="section-body" inert={collapsedSections.has('recent')}>
+                <div className="section-body-content">{defaultWorkspace && renderSessions(defaultWorkspace)}</div>
+              </div>
             </section>
           </div>
 
@@ -1675,7 +1719,7 @@ function App() {
               <span className="sidebar-status-copy">
                 <strong>{t('sidebar.settings')}</strong>
               </span>
-              <span aria-hidden="true" className="footer-chevron">{'\u203a'}</span>
+              <ChevronIcon className="footer-chevron" />
             </button>
             <button
               aria-label={theme === 'dark' ? t('theme.toLight') : t('theme.toDark')}
@@ -1808,7 +1852,7 @@ function App() {
                 title={t('composer.removeAttachment')}
                 type="button"
               >
-                ×
+                <CloseIcon />
               </button>
             </div>
           )}
@@ -1904,7 +1948,7 @@ function App() {
                       <span className="model-menu-main">
                         <ProviderIcon label={profile.name} provider={profile.provider} />
                         <span className="model-menu-copy">
-                          <strong>{profile.name}{profile.vision && <VisionIcon />}</strong>
+                          <strong><span>{profile.name}</span>{profile.vision && <VisionIcon />}</strong>
                           <small>{profile.provider} / {profile.model}</small>
                         </span>
                       </span>
@@ -1970,7 +2014,7 @@ function App() {
                 title={busy ? t('composer.stop') : t('composer.send')}
                 type={busy ? 'button' : 'submit'}
               >
-                {busy ? <span className="stop-icon" /> : '↑'}
+                {busy ? <span className="stop-icon" /> : <ArrowUpIcon />}
               </button>
             </div>
           </div>
@@ -1994,7 +2038,7 @@ function App() {
                   <strong>{artifactPreview.name}</strong>
                   <span>{artifactPreview.path}</span>
                 </div>
-                <button aria-label="Close artifact preview" onClick={() => setArtifactPreview(null)} type="button">{'×'}</button>
+                <button aria-label="Close artifact preview" onClick={() => setArtifactPreview(null)} type="button"><CloseIcon /></button>
               </header>
               <div className="artifact-preview-content message-text">
                 {artifactPreview.kind === 'markdown' ? (
@@ -2020,7 +2064,7 @@ function App() {
         )}
         {previewImage && (
           <div aria-modal="true" className="image-preview-backdrop" onMouseDown={() => setPreviewImage('')} role="dialog">
-            <button aria-label="Close image preview" onClick={() => setPreviewImage('')} type="button">{'\u00d7'}</button>
+            <button aria-label="Close image preview" onClick={() => setPreviewImage('')} type="button"><CloseIcon /></button>
             <img alt="Attached image preview" onMouseDown={event => event.stopPropagation()} src={previewImage} />
           </div>
         )}
@@ -2188,7 +2232,7 @@ function ForkMap({
           title={t('fork.hide')}
           type="button"
         >
-          {'\u2212'}
+          <MinusIcon />
         </button>
       </header>
       <div className="fork-graph-scroll">
@@ -2240,6 +2284,32 @@ function ForkMap({
         </div>
       )}
     </aside>
+  )
+}
+
+function ProjectsIcon() {
+  return (
+    <svg aria-hidden="true" className="section-icon" fill="none" viewBox="0 0 24 24">
+      <path d="M3.5 6.2a2 2 0 0 1 2-2h4.3l2.1 2.4h6.6a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" />
+    </svg>
+  )
+}
+
+function ClockIcon() {
+  return (
+    <svg aria-hidden="true" className="section-icon" fill="none" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.4" />
+      <path d="M12 7.2V12l3.2 2.1" />
+    </svg>
+  )
+}
+
+function PhoneIcon() {
+  return (
+    <svg aria-hidden="true" className="section-icon" fill="none" viewBox="0 0 24 24">
+      <rect height="18.4" rx="2.6" width="12.4" x="5.8" y="2.8" />
+      <path d="M10.4 18.2h3.2" />
+    </svg>
   )
 }
 
@@ -2390,12 +2460,9 @@ function SettingsPage({
   const [draft, setDraft] = useState<ModelDraft | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [clearApiKey, setClearApiKey] = useState(false)
-  const [showKey, setShowKey] = useState(false)
   const [expandedProvider, setExpandedProvider] = useState('')
   const [editingFile, setEditingFile] = useState<MemoryFileScope | null>(null)
-  const [error, setError] = useState('')
-  const [saved, setSaved] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const modelForm = useSettingsSave()
 
   useEffect(() => {
     let active = true
@@ -2418,8 +2485,7 @@ function SettingsPage({
   }, [onClose, editingFile])
 
   const openProvider = (item: ModelProvider) => {
-    setError('')
-    setSaved(false)
+    modelForm.clear()
     if (expandedProvider === item.id) {
       setExpandedProvider('')
       return
@@ -2429,23 +2495,16 @@ function SettingsPage({
     setDraft({ ...modelDraft(profile, item), name: item.label })
     setApiKey('')
     setClearApiKey(false)
-    setShowKey(false)
   }
 
   const save = (event: FormEvent) => {
     event.preventDefault()
     if (!draft) return
-    setSaving(true)
-    setError('')
-    setSaved(false)
-    void onSave(draft, apiKey, clearApiKey)
-      .then(() => {
-        setApiKey('')
-        setClearApiKey(false)
-        setSaved(true)
-      })
-      .catch(value => setError(String(value)))
-      .finally(() => setSaving(false))
+    modelForm.submit(onSave(draft, apiKey, clearApiKey), () => {
+      setApiKey('')
+      setClearApiKey(false)
+      return t('models.savedActive')
+    })
   }
 
   const persistWeb = (value: Record<string, unknown>) => onSaveWeb(value).then(webSearch => {
@@ -2467,7 +2526,7 @@ function SettingsPage({
     <div className="settings-page">
       <aside className="settings-nav">
         <button className="settings-back" onClick={onClose} title="Back (Esc)" type="button">
-          <span aria-hidden="true">{'\u2039'}</span>
+          <ChevronIcon className="back-chevron" />
           <span>{t('settings.back')}</span>
         </button>
         <div className="settings-nav-group">
@@ -2569,50 +2628,26 @@ function SettingsPage({
                                 <input required value={draft.model} onChange={event => setDraft(current => current && { ...current, model: event.target.value })} />
                               </span>
                             </label>
-                            <label className="line-field">
-                              <span>{t('models.apiKey')}</span>
-                              <span className="field-line">
-                                <input
-                                  autoComplete="off"
-                                  placeholder={configured ? t('models.keySaved') : t('models.keyEmpty')}
-                                  type={showKey ? 'text' : 'password'}
-                                  value={apiKey}
-                                  onChange={event => {
-                                    setApiKey(event.target.value)
-                                    if (event.target.value) setClearApiKey(false)
-                                  }}
-                                />
-                                {configured && (
-                                  <span aria-label={t('badge.configured')} className="field-flag" title={t('badge.configured')}>
-                                    <svg aria-hidden="true" fill="none" viewBox="0 0 10 10"><path d="M1.6 5.4 4 7.8 8.4 2.6" /></svg>
-                                  </span>
-                                )}
-                                <button
-                                  aria-label={showKey ? 'Hide API key' : 'Show API key'}
-                                  className="line-action"
-                                  onClick={() => setShowKey(value => !value)}
-                                  type="button"
-                                >
-                                  {showKey ? 'hide' : 'show'}
-                                </button>
-                              </span>
-                            </label>
+                            <SecretField
+                              cleared={clearApiKey}
+                              configured={configured}
+                              label={t('models.apiKey')}
+                              onChange={setApiKey}
+                              onToggleClear={() => setClearApiKey(value => !value)}
+                              placeholderEmpty={t('models.keyEmpty')}
+                              placeholderSaved={t('models.keySaved')}
+                              removeArmedLabel={t('models.removeKeyArmed')}
+                              removeLabel={t('models.removeKey')}
+                              revealable
+                              value={apiKey}
+                            />
                             {vision && <small className="vision-note">{t('models.vision')}</small>}
-                            {configured && (
-                              <button
-                                aria-pressed={clearApiKey}
-                                className={`quiet-toggle ${clearApiKey ? 'on' : ''}`}
-                                onClick={() => setClearApiKey(value => !value)}
-                                type="button"
-                              >
-                                {clearApiKey ? t('models.removeKeyArmed') : t('models.removeKey')}
-                              </button>
-                            )}
-                            {error && <div className="settings-error">{error}</div>}
-                            <footer>
-                              <span className="settings-saved">{saved ? t('models.savedActive') : ''}</span>
-                              <button className="save-model" disabled={saving} type="submit">{saving ? t('settings.saving') : t('models.saveUse')}</button>
-                            </footer>
+                            {modelForm.failed && <div className="settings-error">{modelForm.message}</div>}
+                            <SaveFooter
+                              label={t('models.saveUse')}
+                              note={modelForm.failed ? '' : modelForm.message}
+                              saving={modelForm.pending === 'save'}
+                            />
                           </form>
                         )}
                       </div>
@@ -2668,7 +2703,7 @@ function SettingsPage({
                               <strong>{file === 'user' ? 'USER.md' : 'MEMORY.md'}</strong>
                               <small>{file === 'user' ? t('memory.userFile') : t('memory.globalFile')} · {t('memory.chars', { chars: info.chars, limit: info.limit })}</small>
                             </span>
-                            <span aria-hidden="true" className="memory-file-chevron">{'\u203a'}</span>
+                            <ChevronIcon className="memory-file-chevron" />
                           </button>
                         )
                       })}
@@ -2737,9 +2772,7 @@ function MemoryEditor({
   const [text, setText] = useState<string | null>(null)
   const [original, setOriginal] = useState('')
   const [loadError, setLoadError] = useState('')
-  const [error, setError] = useState('')
-  const [saved, setSaved] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const form = useSettingsSave()
 
   useEffect(() => {
     let active = true
@@ -2765,16 +2798,10 @@ function MemoryEditor({
 
   const save = () => {
     if (text === null) return
-    setSaving(true)
-    setError('')
-    setSaved(false)
-    void onSave(file, text)
-      .then(() => {
-        setOriginal(text)
-        setSaved(true)
-      })
-      .catch(value => setError(String(value)))
-      .finally(() => setSaving(false))
+    form.submit(onSave(file, text), () => {
+      setOriginal(text)
+      return t('settings.saved')
+    })
   }
 
   return (
@@ -2785,7 +2812,7 @@ function MemoryEditor({
             <h3>{file === 'user' ? 'USER.md' : 'MEMORY.md'}</h3>
             <p>{info.path}</p>
           </div>
-          <button aria-label="Close editor" onClick={onClose} title="Close" type="button">{'\u00d7'}</button>
+          <button aria-label="Close editor" onClick={onClose} title="Close" type="button"><CloseIcon /></button>
         </header>
         {text !== null
           ? (
@@ -2793,18 +2820,25 @@ function MemoryEditor({
               autoFocus
               onChange={event => {
                 setText(event.target.value)
-                setSaved(false)
+                form.clear()
               }}
               spellCheck={false}
               value={text}
             />
           )
-          : <div className={`settings-loading ${loadError ? 'error' : ''}`}>{loadError || 'Loading…'}</div>}
+          : <div className={`settings-loading ${loadError ? 'error' : ''}`}>{loadError || t('settings.loading')}</div>}
         <footer>
           <span className="memory-editor-count">{(text ?? '').length} / {info.limit}</span>
-          {error ? <span className="settings-error">{error}</span> : saved ? <span className="settings-saved">{t('settings.saved')}</span> : null}
-          <button className="save-model" disabled={saving || text === null || text === original} onClick={save} type="button">
-            {saving ? t('settings.saving') : t('settings.save')}
+          {form.message && (
+            <span className={form.failed ? 'settings-error' : 'settings-saved'}>{form.message}</span>
+          )}
+          <button
+            className="save-model"
+            disabled={form.pending === 'save' || text === null || text === original}
+            onClick={save}
+            type="button"
+          >
+            {form.pending === 'save' ? t('settings.saving') : t('settings.save')}
           </button>
         </footer>
       </section>
@@ -2838,32 +2872,23 @@ function WebSearchSettings({
   const [expanded, setExpanded] = useState('')
   const [key, setKey] = useState('')
   const [clear, setClear] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [failed, setFailed] = useState(false)
-  const [message, setMessage] = useState('')
+  const form = useSettingsSave()
 
   const open = (id: string) => {
     setExpanded(current => (current === id ? '' : id))
     setKey('')
     setClear(false)
-    setMessage('')
-    setFailed(false)
+    form.clear()
   }
 
   const save = (event: FormEvent, provider: (typeof WEB_PROVIDERS)[number]) => {
     event.preventDefault()
-    setSaving(true)
-    setFailed(false)
-    setMessage('')
-    void onSave({ [provider.keyField]: key || undefined, [provider.flag]: clear })
-      .then(value => {
-        setConfigured(value)
-        setKey('')
-        setClear(false)
-        setMessage(t('web.saved'))
-      })
-      .catch(value => { setFailed(true); setMessage(String(value)) })
-      .finally(() => setSaving(false))
+    form.submit(onSave({ [provider.keyField]: key || undefined, [provider.flag]: clear }), value => {
+      setConfigured(value)
+      setKey('')
+      setClear(false)
+      return t('web.saved')
+    })
   }
 
   return (
@@ -2889,37 +2914,20 @@ function WebSearchSettings({
               <div className="provider-config-inner">
                 {isExpanded && (
                   <form className="settings-form" onSubmit={event => save(event, provider)}>
-                    <label className="line-field">
-                      <span>{t('models.apiKey')}</span>
-                      <span className="field-line">
-                        <input
-                          autoComplete="off"
-                          disabled={clear}
-                          onChange={event => {
-                            setKey(event.target.value)
-                            if (event.target.value) setClear(false)
-                          }}
-                          placeholder={isConfigured ? t('web.keySaved') : t('web.keyEmpty')}
-                          type="password"
-                          value={key}
-                        />
-                        {isConfigured && (
-                          <span aria-label={t('badge.configured')} className="field-flag" title={t('badge.configured')}>
-                            <svg aria-hidden="true" fill="none" viewBox="0 0 10 10"><path d="M1.6 5.4 4 7.8 8.4 2.6" /></svg>
-                          </span>
-                        )}
-                      </span>
-                    </label>
-                    {isConfigured && (
-                      <button aria-pressed={clear} className={`quiet-toggle ${clear ? 'on' : ''}`} onClick={() => setClear(value => !value)} type="button">
-                        {clear ? t('web.removeKeyArmed', { name: provider.label }) : t('web.removeKey', { name: provider.label })}
-                      </button>
-                    )}
-                    {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
-                    <footer>
-                      <span />
-                      <button className="save-model" disabled={saving} type="submit">{saving ? t('settings.saving') : t('settings.save')}</button>
-                    </footer>
+                    <SecretField
+                      cleared={clear}
+                      configured={isConfigured}
+                      label={t('models.apiKey')}
+                      onChange={setKey}
+                      onToggleClear={() => setClear(value => !value)}
+                      placeholderEmpty={t('web.keyEmpty')}
+                      placeholderSaved={t('web.keySaved')}
+                      removeArmedLabel={t('web.removeKeyArmed', { name: provider.label })}
+                      removeLabel={t('web.removeKey', { name: provider.label })}
+                      value={key}
+                    />
+                    <SettingsMessage failed={form.failed} message={form.message} />
+                    <SaveFooter saving={form.pending === 'save'} />
                   </form>
                 )}
               </div>
@@ -2927,191 +2935,6 @@ function WebSearchSettings({
           </div>
         )
       })}
-    </div>
-  )
-}
-
-function PhoneBridgeSettings({
-  initial,
-  initialStatus,
-  onRefresh,
-  onSave,
-  onToggle
-}: {
-  initial: FeishuSettings
-  initialStatus: BridgeStatus
-  onRefresh: () => Promise<BridgeStatus>
-  onSave: (value: Record<string, unknown>) => Promise<FeishuSettings>
-  onToggle: (running: boolean) => Promise<BridgeStatus>
-}) {
-  const [saved, setSaved] = useState(initial)
-  const [status, setStatus] = useState(initialStatus)
-  const [appId, setAppId] = useState(initial.app_id)
-  const [appSecret, setAppSecret] = useState('')
-  const [clearSecret, setClearSecret] = useState(false)
-  const [users, setUsers] = useState(initial.allowed_users.join('\n'))
-  const [allowGroup, setAllowGroup] = useState(initial.allow_group)
-  const [saving, setSaving] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
-  const [message, setMessage] = useState('')
-
-  // A bridge can die on its own, for example when Feishu rejects the credentials,
-  // so the switch is driven by the process state rather than by what was clicked.
-  useEffect(() => {
-    if (!status.running) return
-    const timer = setInterval(() => {
-      void onRefresh().then(setStatus).catch(() => undefined)
-    }, 4000)
-    return () => clearInterval(timer)
-  }, [status.running, onRefresh])
-
-  const ready = Boolean(saved.app_id) && saved.app_secret_configured
-
-  const save = (event: FormEvent) => {
-    event.preventDefault()
-    setSaving(true)
-    setFailed(false)
-    setMessage('')
-    void onSave({
-      allow_group: allowGroup,
-      allowed_users: users,
-      app_id: appId,
-      app_secret: appSecret || undefined,
-      clear_app_secret: clearSecret
-    })
-      .then(value => {
-        setSaved(value)
-        setAppId(value.app_id)
-        setUsers(value.allowed_users.join('\n'))
-        setAllowGroup(value.allow_group)
-        setAppSecret('')
-        setClearSecret(false)
-        setMessage(t('phone.saved'))
-      })
-      .catch(value => { setFailed(true); setMessage(String(value)) })
-      .finally(() => setSaving(false))
-  }
-
-  const toggle = () => {
-    setBusy(true)
-    setFailed(false)
-    setMessage('')
-    void onToggle(!status.running)
-      .then(value => {
-        setStatus(value)
-        if (!value.running && value.log.length) {
-          setFailed(true)
-          setMessage(value.log[value.log.length - 1])
-        }
-      })
-      .catch(value => { setFailed(true); setMessage(String(value)) })
-      .finally(() => setBusy(false))
-  }
-
-  return (
-    <div className="settings-form-stack">
-      <div className={`phone-switch ${status.running ? 'on' : ''}`}>
-        <div className="phone-switch-copy">
-          <strong>{status.running ? t('phone.on') : t('phone.off')}</strong>
-          <small>{status.running ? t('phone.onHint') : ready ? t('phone.offHint') : t('phone.needsSetup')}</small>
-        </div>
-        <button
-          aria-pressed={status.running}
-          className="phone-action"
-          disabled={busy || (!ready && !status.running)}
-          onClick={toggle}
-          type="button"
-        >
-          {busy ? t('settings.saving') : status.running ? t('phone.stop') : t('phone.start')}
-        </button>
-      </div>
-
-      {saved.allowed_users.length === 0 && (
-        <div className="settings-message">{t('phone.pairing')}</div>
-      )}
-
-      <form className="settings-form" onSubmit={save}>
-        <label className="line-field">
-          <span>{t('phone.appId')}</span>
-          <span className="field-line">
-            <input
-              autoComplete="off"
-              onChange={event => setAppId(event.target.value)}
-              placeholder="cli_..."
-              value={appId}
-            />
-          </span>
-        </label>
-        <label className="line-field">
-          <span>{t('phone.appSecret')}</span>
-          <span className="field-line">
-            <input
-              autoComplete="off"
-              disabled={clearSecret}
-              onChange={event => {
-                setAppSecret(event.target.value)
-                if (event.target.value) setClearSecret(false)
-              }}
-              placeholder={saved.app_secret_configured ? t('web.keySaved') : t('web.keyEmpty')}
-              type="password"
-              value={appSecret}
-            />
-            {saved.app_secret_configured && (
-              <span aria-label={t('badge.configured')} className="field-flag" title={t('badge.configured')}>
-                <svg aria-hidden="true" fill="none" viewBox="0 0 10 10"><path d="M1.6 5.4 4 7.8 8.4 2.6" /></svg>
-              </span>
-            )}
-          </span>
-        </label>
-        {saved.app_secret_configured && (
-          <button
-            aria-pressed={clearSecret}
-            className={`quiet-toggle ${clearSecret ? 'on' : ''}`}
-            onClick={() => setClearSecret(value => !value)}
-            type="button"
-          >
-            {clearSecret ? t('phone.removeSecretArmed') : t('phone.removeSecret')}
-          </button>
-        )}
-        <label className="line-field area">
-          <span>{t('phone.allowedUsers')}</span>
-          <span className="field-line">
-            <textarea
-              onChange={event => setUsers(event.target.value)}
-              placeholder={'ou_...'}
-              rows={3}
-              value={users}
-            />
-          </span>
-        </label>
-        <small className="settings-hint">{t('phone.allowedUsersHint')}</small>
-        <button
-          aria-pressed={allowGroup}
-          className={`phone-flag ${allowGroup ? 'on' : ''}`}
-          onClick={() => setAllowGroup(value => !value)}
-          type="button"
-        >
-          <svg aria-hidden="true" fill="none" viewBox="0 0 10 10">
-            {allowGroup ? <path d="M1.6 5.4 4 7.8 8.4 2.6" /> : <circle cx="5" cy="5" r="3.4" />}
-          </svg>
-          {allowGroup ? t('phone.groupOn') : t('phone.groupOff')}
-        </button>
-        {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
-        <footer>
-          <span />
-          <button className="save-model" disabled={saving} type="submit">
-            {saving ? t('settings.saving') : t('settings.save')}
-          </button>
-        </footer>
-      </form>
-
-      {status.log.length > 0 && (
-        <details className="phone-log">
-          <summary>{t('phone.log')}</summary>
-          <pre>{status.log.join('\n')}</pre>
-        </details>
-      )}
     </div>
   )
 }
@@ -3125,19 +2948,14 @@ function UserProfileSettingsForm({
 }) {
   const [name, setName] = useState(initial.preferred_name)
   const [preferredLanguage, setPreferredLanguage] = useState(initial.preferred_language)
-  const [saving, setSaving] = useState(false)
-  const [failed, setFailed] = useState(false)
-  const [message, setMessage] = useState('')
+  const form = useSettingsSave()
 
   const save = (event: FormEvent) => {
     event.preventDefault()
-    setSaving(true)
-    setFailed(false)
-    setMessage('')
-    void onSave({ preferred_language: preferredLanguage, preferred_name: name })
-      .then(() => setMessage(t('memory.saved')))
-      .catch(value => { setFailed(true); setMessage(String(value)) })
-      .finally(() => setSaving(false))
+    form.submit(
+      onSave({ preferred_language: preferredLanguage, preferred_name: name }),
+      () => t('memory.saved')
+    )
   }
 
   return (
@@ -3150,8 +2968,8 @@ function UserProfileSettingsForm({
         <span>{t('general.responseLanguage')}</span>
         <span className="field-line"><input maxLength={100} onChange={event => setPreferredLanguage(event.target.value)} placeholder={t('general.responseLanguagePlaceholder')} value={preferredLanguage} /></span>
       </label>
-      {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
-      <footer><span /><button className="save-model" disabled={saving} type="submit">{saving ? t('settings.saving') : t('settings.save')}</button></footer>
+      <SettingsMessage failed={form.failed} message={form.message} />
+      <SaveFooter saving={form.pending === 'save'} />
     </form>
   )
 }
@@ -3200,7 +3018,7 @@ function SkillBrowser({
         <p>{t('skills.tagline')}</p>
       </header>
       <label className="skill-search">
-        <span aria-hidden="true">{'\u2315'}</span>
+        <SearchIcon />
         <input
           aria-label={t('skills.search')}
           onChange={event => onQueryChange(event.target.value)}
@@ -3216,12 +3034,12 @@ function SkillBrowser({
       <div className="skills-grid">
         {filtered.map(skill => (
           <button className="skill-card" key={`${skill.scope}-${skill.path}`} onClick={() => onOpen(skill)} type="button">
-            <span aria-hidden="true" className="skill-card-icon">{'\u25c7'}</span>
+            <span aria-hidden="true" className="skill-card-icon"><DiamondIcon /></span>
             <span className="skill-card-copy">
               <strong>{skill.name}</strong>
               <small>{skill.description}</small>
             </span>
-            <span aria-hidden="true" className="skill-card-check">{'\u2713'}</span>
+            <CheckIcon className="skill-card-check" />
           </button>
         ))}
       </div>
@@ -3235,9 +3053,9 @@ function SkillBrowser({
             role="dialog"
           >
             <header>
-              <span aria-hidden="true" className="skill-card-icon">{'\u25c7'}</span>
+              <span aria-hidden="true" className="skill-card-icon"><DiamondIcon /></span>
               <button aria-label="Close skill details" onClick={onClose} title="Close" type="button">
-                {'\u00d7'}
+                <CloseIcon />
               </button>
             </header>
             <h2>{detail.skill.name} <span>Skill</span></h2>
@@ -3585,7 +3403,7 @@ function TimelineRow({
                 title="Restore to before this turn"
                 type="button"
               >
-                <span aria-hidden="true" className="restore-icon">{'\u21b6'}</span>
+                <UndoIcon className="restore-icon" />
               </button>
             )}
             {item.kind === 'assistant' && item.forkIndex != null && (
