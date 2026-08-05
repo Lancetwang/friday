@@ -609,13 +609,10 @@ input[type="checkbox"] {
 .section-body-content {
   min-height: 0;
   overflow: hidden;
-}
-
-/* Everything under a heading is one level deeper than it. */
-.section-body-content > .project-group,
-.section-body-content > .session-entry,
-.section-body-content > .empty-sessions {
-  margin-left: 14px;
+  /* Indent the entries under a heading here instead of on the children:
+     full-width rows (session-entry) would otherwise overflow the clip edge
+     and lose their hover highlight and action buttons. */
+  padding-left: 14px;
 }
 
 .section-heading button {
