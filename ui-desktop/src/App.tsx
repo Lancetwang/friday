@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { open as openUrl } from '@tauri-apps/plugin-shell'
-import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
+import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
@@ -176,7 +176,24 @@ type MemoryFileDetail = MemoryFileInfo & {
 
 type MemoryFileScope = 'global' | 'user'
 
+type FeishuSettings = {
+  allow_group: boolean
+  allowed_users: string[]
+  app_id: string
+  app_secret_configured: boolean
+}
+
+type BridgeStatus = {
+  exit_code: number | null
+  log: string[]
+  pid: number | null
+  running: boolean
+  workspace: string
+}
+
 type AppSettings = {
+  bridge: BridgeStatus
+  feishu: FeishuSettings
   memory_files: Record<MemoryFileScope, MemoryFileInfo>
   user_profile: UserProfileSettings
   web_search: WebSearchSettings
@@ -413,6 +430,35 @@ function loadTheme(): Theme {
 function clampSidebarWidth(width: number) {
   const available = Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 420)
   return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH, available)
+}
+
+// macOS buttons do not take focus on click, so a blur-based dismiss closes the
+// menu before the click lands. Dismiss on outside pointerdown instead.
+function MenuDetails({ children, className }: { children: ReactNode; className: string }) {
+  const ref = useRef<HTMLDetailsElement>(null)
+
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (element.open && !element.contains(event.target as Node)) element.removeAttribute('open')
+    }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && element.open) element.removeAttribute('open')
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
+
+  return (
+    <details className={className} ref={ref}>
+      {children}
+    </details>
+  )
 }
 
 function App() {
@@ -1031,6 +1077,15 @@ function App() {
     sendGateway<WebSearchSettings>(settingsWorkspace, 'settings.web.save', value)
   const saveUserProfile = (profile: Partial<UserProfileSettings>) =>
     sendGateway<UserProfileSettings>(settingsWorkspace, 'settings.user.save', { profile })
+  const saveFeishuSettings = (value: Record<string, unknown>) =>
+    sendGateway<{ bridge: BridgeStatus; feishu: FeishuSettings }>(
+      settingsWorkspace,
+      'settings.feishu.save',
+      value
+    )
+  const setBridgeRunning = (running: boolean) =>
+    sendGateway<BridgeStatus>(settingsWorkspace, running ? 'bridge.start' : 'bridge.stop')
+  const readBridgeStatus = () => sendGateway<BridgeStatus>(settingsWorkspace, 'bridge.status')
   const readMemoryFile = (file: MemoryFileScope) =>
     sendGateway<MemoryFileDetail>(settingsWorkspace, 'settings.memory.read', { file })
   const saveMemoryFileContent = (file: MemoryFileScope, content: string) =>
@@ -1665,7 +1720,10 @@ function App() {
             onLanguageChange={changeLanguage}
             onLoad={loadSettings}
             onReadMemory={readMemoryFile}
+            onBridgeStatus={readBridgeStatus}
+            onBridgeToggle={setBridgeRunning}
             onSave={saveModel}
+            onSaveFeishu={saveFeishuSettings}
             onSaveMemory={saveMemoryFileContent}
             onSaveProfile={saveUserProfile}
             onSaveWeb={saveWebSettings}
@@ -1784,12 +1842,9 @@ function App() {
             value={draft}
           />
           <div className="composer-footer">
-            <details
+            <MenuDetails
               className={`permission-picker ${busy ? 'disabled' : ''}`}
               key={`${activeProject}-permissions`}
-              onBlur={event => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute('open')
-              }}
             >
               <summary
                 aria-disabled={busy}
@@ -1823,14 +1878,11 @@ function App() {
                   </button>
                 ))}
               </div>
-            </details>
+            </MenuDetails>
             <div className="composer-actions">
-              <details
+              <MenuDetails
                 className={`model-picker ${busy ? 'disabled' : ''}`}
                 key={`${activeProject}-${info.model_profile}`}
-                onBlur={event => {
-                  if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute('open')
-                }}
               >
                 <summary aria-disabled={busy} onClick={event => busy && event.preventDefault()}>
                   <ProviderIcon label={selectedModel?.name || info.model_name || info.model} provider={selectedModel?.provider || ''} />
@@ -1871,14 +1923,11 @@ function App() {
                     {t('composer.configureModels')}
                   </button>
                 </div>
-              </details>
+              </MenuDetails>
               {info.thinking_supported && (
-                <details
+                <MenuDetails
                   className={`permission-picker ${busy ? 'disabled' : ''}`}
                   key={`${activeProject}-thinking`}
-                  onBlur={event => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute('open')
-                  }}
                 >
                   <summary
                     aria-disabled={busy}
@@ -1911,7 +1960,7 @@ function App() {
                       </button>
                     ))}
                   </div>
-                </details>
+                </MenuDetails>
               )}
               <button
                 aria-label={busy ? t('composer.stop') : t('composer.send')}
@@ -2282,12 +2331,13 @@ function MoonIcon() {
   )
 }
 
-type SettingsSection = 'docs' | 'general' | 'models' | 'web' | 'memory'
+type SettingsSection = 'docs' | 'general' | 'models' | 'web' | 'memory' | 'phone'
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ hintKey: string; id: SettingsSection; labelKey: string }> = [
   { hintKey: 'settings.general.hint', id: 'general', labelKey: 'settings.general' },
   { hintKey: 'settings.models.hint', id: 'models', labelKey: 'settings.models' },
   { hintKey: 'settings.web.hint', id: 'web', labelKey: 'settings.web' },
+  { hintKey: 'settings.phone.hint', id: 'phone', labelKey: 'settings.phone' },
   { hintKey: 'settings.memory.hint', id: 'memory', labelKey: 'settings.memory' },
   { hintKey: 'settings.docs.hint', id: 'docs', labelKey: 'settings.docs' }
 ]
@@ -2307,11 +2357,14 @@ function SettingsPage({
   catalog,
   initialSection,
   language,
+  onBridgeStatus,
+  onBridgeToggle,
   onClose,
   onLanguageChange,
   onLoad,
   onReadMemory,
   onSave,
+  onSaveFeishu,
   onSaveMemory,
   onSaveProfile,
   onSaveWeb
@@ -2319,11 +2372,14 @@ function SettingsPage({
   catalog: ModelCatalog
   initialSection: SettingsSection
   language: Language
+  onBridgeStatus: () => Promise<BridgeStatus>
+  onBridgeToggle: (running: boolean) => Promise<BridgeStatus>
   onClose: () => void
   onLanguageChange: (language: Language) => void
   onLoad: () => Promise<AppSettings>
   onReadMemory: (file: MemoryFileScope) => Promise<MemoryFileDetail>
   onSave: (profile: ModelDraft, apiKey: string, clearApiKey: boolean) => Promise<ModelCatalog>
+  onSaveFeishu: (value: Record<string, unknown>) => Promise<{ bridge: BridgeStatus; feishu: FeishuSettings }>
   onSaveMemory: (file: MemoryFileScope, content: string) => Promise<MemoryFileInfo>
   onSaveProfile: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
   onSaveWeb: (value: Record<string, unknown>) => Promise<WebSearchSettings>
@@ -2400,6 +2456,11 @@ function SettingsPage({
   const persistProfile = (profile: Partial<UserProfileSettings>) => onSaveProfile(profile).then(userProfile => {
     setSettings(current => current ? { ...current, user_profile: userProfile } : current)
     return userProfile
+  })
+
+  const persistFeishu = (value: Record<string, unknown>) => onSaveFeishu(value).then(result => {
+    setSettings(current => current ? { ...current, bridge: result.bridge, feishu: result.feishu } : current)
+    return result.feishu
   })
 
   return (
@@ -2569,6 +2630,23 @@ function SettingsPage({
               </header>
               {settings
                 ? <WebSearchSettings initial={settings.web_search} onSave={persistWeb} />
+                : <SettingsLoading error={settingsError} />}
+            </div>
+          )}
+          {section === 'phone' && (
+            <div className="settings-section-wrap">
+              <header className="settings-head">
+                <h2>{t('phone.title')}</h2>
+                <p>{t('phone.desc')}</p>
+              </header>
+              {settings
+                ? <PhoneBridgeSettings
+                    initial={settings.feishu}
+                    initialStatus={settings.bridge}
+                    onRefresh={onBridgeStatus}
+                    onSave={persistFeishu}
+                    onToggle={onBridgeToggle}
+                  />
                 : <SettingsLoading error={settingsError} />}
             </div>
           )}
@@ -2849,6 +2927,191 @@ function WebSearchSettings({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function PhoneBridgeSettings({
+  initial,
+  initialStatus,
+  onRefresh,
+  onSave,
+  onToggle
+}: {
+  initial: FeishuSettings
+  initialStatus: BridgeStatus
+  onRefresh: () => Promise<BridgeStatus>
+  onSave: (value: Record<string, unknown>) => Promise<FeishuSettings>
+  onToggle: (running: boolean) => Promise<BridgeStatus>
+}) {
+  const [saved, setSaved] = useState(initial)
+  const [status, setStatus] = useState(initialStatus)
+  const [appId, setAppId] = useState(initial.app_id)
+  const [appSecret, setAppSecret] = useState('')
+  const [clearSecret, setClearSecret] = useState(false)
+  const [users, setUsers] = useState(initial.allowed_users.join('\n'))
+  const [allowGroup, setAllowGroup] = useState(initial.allow_group)
+  const [saving, setSaving] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [message, setMessage] = useState('')
+
+  // A bridge can die on its own, for example when Feishu rejects the credentials,
+  // so the switch is driven by the process state rather than by what was clicked.
+  useEffect(() => {
+    if (!status.running) return
+    const timer = setInterval(() => {
+      void onRefresh().then(setStatus).catch(() => undefined)
+    }, 4000)
+    return () => clearInterval(timer)
+  }, [status.running, onRefresh])
+
+  const ready = Boolean(saved.app_id) && saved.app_secret_configured
+
+  const save = (event: FormEvent) => {
+    event.preventDefault()
+    setSaving(true)
+    setFailed(false)
+    setMessage('')
+    void onSave({
+      allow_group: allowGroup,
+      allowed_users: users,
+      app_id: appId,
+      app_secret: appSecret || undefined,
+      clear_app_secret: clearSecret
+    })
+      .then(value => {
+        setSaved(value)
+        setAppId(value.app_id)
+        setUsers(value.allowed_users.join('\n'))
+        setAllowGroup(value.allow_group)
+        setAppSecret('')
+        setClearSecret(false)
+        setMessage(t('phone.saved'))
+      })
+      .catch(value => { setFailed(true); setMessage(String(value)) })
+      .finally(() => setSaving(false))
+  }
+
+  const toggle = () => {
+    setBusy(true)
+    setFailed(false)
+    setMessage('')
+    void onToggle(!status.running)
+      .then(value => {
+        setStatus(value)
+        if (!value.running && value.log.length) {
+          setFailed(true)
+          setMessage(value.log[value.log.length - 1])
+        }
+      })
+      .catch(value => { setFailed(true); setMessage(String(value)) })
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div className="settings-form-stack">
+      <div className={`phone-switch ${status.running ? 'on' : ''}`}>
+        <div className="phone-switch-copy">
+          <strong>{status.running ? t('phone.on') : t('phone.off')}</strong>
+          <small>{status.running ? t('phone.onHint') : ready ? t('phone.offHint') : t('phone.needsSetup')}</small>
+        </div>
+        <button
+          aria-pressed={status.running}
+          className="phone-action"
+          disabled={busy || (!ready && !status.running)}
+          onClick={toggle}
+          type="button"
+        >
+          {busy ? t('settings.saving') : status.running ? t('phone.stop') : t('phone.start')}
+        </button>
+      </div>
+
+      {saved.allowed_users.length === 0 && (
+        <div className="settings-message">{t('phone.pairing')}</div>
+      )}
+
+      <form className="settings-form" onSubmit={save}>
+        <label className="line-field">
+          <span>{t('phone.appId')}</span>
+          <span className="field-line">
+            <input
+              autoComplete="off"
+              onChange={event => setAppId(event.target.value)}
+              placeholder="cli_..."
+              value={appId}
+            />
+          </span>
+        </label>
+        <label className="line-field">
+          <span>{t('phone.appSecret')}</span>
+          <span className="field-line">
+            <input
+              autoComplete="off"
+              disabled={clearSecret}
+              onChange={event => {
+                setAppSecret(event.target.value)
+                if (event.target.value) setClearSecret(false)
+              }}
+              placeholder={saved.app_secret_configured ? t('web.keySaved') : t('web.keyEmpty')}
+              type="password"
+              value={appSecret}
+            />
+            {saved.app_secret_configured && (
+              <span aria-label={t('badge.configured')} className="field-flag" title={t('badge.configured')}>
+                <svg aria-hidden="true" fill="none" viewBox="0 0 10 10"><path d="M1.6 5.4 4 7.8 8.4 2.6" /></svg>
+              </span>
+            )}
+          </span>
+        </label>
+        {saved.app_secret_configured && (
+          <button
+            aria-pressed={clearSecret}
+            className={`quiet-toggle ${clearSecret ? 'on' : ''}`}
+            onClick={() => setClearSecret(value => !value)}
+            type="button"
+          >
+            {clearSecret ? t('phone.removeSecretArmed') : t('phone.removeSecret')}
+          </button>
+        )}
+        <label className="line-field area">
+          <span>{t('phone.allowedUsers')}</span>
+          <span className="field-line">
+            <textarea
+              onChange={event => setUsers(event.target.value)}
+              placeholder={'ou_...'}
+              rows={3}
+              value={users}
+            />
+          </span>
+        </label>
+        <small className="settings-hint">{t('phone.allowedUsersHint')}</small>
+        <button
+          aria-pressed={allowGroup}
+          className={`phone-flag ${allowGroup ? 'on' : ''}`}
+          onClick={() => setAllowGroup(value => !value)}
+          type="button"
+        >
+          <svg aria-hidden="true" fill="none" viewBox="0 0 10 10">
+            {allowGroup ? <path d="M1.6 5.4 4 7.8 8.4 2.6" /> : <circle cx="5" cy="5" r="3.4" />}
+          </svg>
+          {allowGroup ? t('phone.groupOn') : t('phone.groupOff')}
+        </button>
+        {message && <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>}
+        <footer>
+          <span />
+          <button className="save-model" disabled={saving} type="submit">
+            {saving ? t('settings.saving') : t('settings.save')}
+          </button>
+        </footer>
+      </form>
+
+      {status.log.length > 0 && (
+        <details className="phone-log">
+          <summary>{t('phone.log')}</summary>
+          <pre>{status.log.join('\n')}</pre>
+        </details>
+      )}
     </div>
   )
 }

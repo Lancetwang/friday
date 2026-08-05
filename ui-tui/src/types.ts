@@ -41,6 +41,14 @@ export interface ProgressState {
   updated?: string
 }
 
+export interface BridgeStatus {
+  exit_code: number | null
+  log: string[]
+  pid: number | null
+  running: boolean
+  workspace: string
+}
+
 export interface Message {
   metrics?: MessageMetrics
   role: 'assistant' | 'system' | 'tool' | 'user'

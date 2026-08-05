@@ -3730,6 +3730,197 @@ input[type="checkbox"] {
   font-size: var(--text-caption);
 }
 
+/* Phone bridge — one switch line, then the credentials it needs */
+
+.settings-form-stack {
+  display: grid;
+  align-content: start;
+  gap: 20px;
+}
+
+.phone-switch {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.phone-switch-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.phone-switch-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+}
+
+.phone-switch-copy strong::before {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--faint);
+  content: "";
+  transition: background-color var(--dur-1) ease-out;
+}
+
+.phone-switch.on .phone-switch-copy strong {
+  color: var(--ink);
+}
+
+.phone-switch.on .phone-switch-copy strong::before {
+  background: var(--success);
+}
+
+.phone-switch-copy small {
+  color: var(--faint);
+  font-size: var(--text-caption);
+}
+
+.phone-action {
+  position: relative;
+  padding: 2px 1px 5px;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  transition: color var(--dur-1) ease-out;
+}
+
+.phone-action::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: var(--ink);
+  content: "";
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.phone-action:hover:not(:disabled)::after {
+  transform: scaleX(1);
+}
+
+.phone-action:disabled {
+  cursor: default;
+  color: var(--faint);
+}
+
+.phone-flag {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  padding: 2px 1px 5px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: var(--text-caption);
+  transition: color var(--dur-1) ease-out;
+}
+
+.phone-flag::after {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  left: 0;
+  height: 1px;
+  background: var(--ink);
+  content: "";
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.phone-flag:hover {
+  color: var(--ink);
+}
+
+.phone-flag:hover::after {
+  transform: scaleX(1);
+}
+
+.phone-flag svg {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  color: var(--faint);
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  transition: color var(--dur-1) ease-out;
+}
+
+.phone-flag.on {
+  color: var(--ink);
+}
+
+.phone-flag.on svg {
+  color: var(--success);
+}
+
+.settings-hint {
+  color: var(--faint);
+  font-size: var(--text-caption);
+}
+
+.line-field.area {
+  align-items: start;
+}
+
+.line-field.area > span:first-child {
+  padding-top: 8px;
+}
+
+.field-line textarea {
+  min-width: 0;
+  flex: 1;
+  padding: 4px 2px 6px;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-body);
+  resize: none;
+}
+
+.phone-log summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-caption);
+  transition: color var(--dur-1) ease-out;
+}
+
+.phone-log summary:hover {
+  color: var(--ink);
+}
+
+.phone-log pre {
+  margin: 8px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  white-space: pre-wrap;
+}
+
 .settings-form > footer {
   display: flex;
   align-items: center;

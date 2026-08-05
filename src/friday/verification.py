@@ -157,9 +157,9 @@ def verification_prompt(goal: str, events: list[dict[str, Any]], user_history: l
         )
     parts.extend(
         [
-            "Independently verify the delivered workspace state. Use the delivery hints only to locate artifacts; they are not proof.",
+            "Independently verify the delivered workspace state by trying to break it. Use the delivery hints only to locate artifacts; they are not proof.",
             "Delivery hints:\n" + json.dumps(summarize_events(events), ensure_ascii=False, indent=2),
-            'Return only JSON: {"verdict": "pass|repair|blocked|inconclusive", "evidence": ["criterion -> proof"], "feedback": "", "next_check": ""}',
+            'Return only JSON: {"verdict": "pass|repair|blocked|inconclusive", "evidence": ["criterion -> challenge -> outcome"], "feedback": "", "next_check": ""}',
         ]
     )
     return "\n\n".join(parts)

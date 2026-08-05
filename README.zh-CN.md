@@ -85,6 +85,7 @@ flowchart TD
 - [工具](docs/tools.md)
 - [记忆](docs/memory.md)
 - [Skills](docs/skills.md)
+- [手机接入（飞书）](docs/im-feishu.md)
 - [可观测性](docs/observability.md)
 - [检查点与撤回](docs/checkpoints.md)
 

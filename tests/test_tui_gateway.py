@@ -13,10 +13,33 @@ from unittest.mock import patch
 from agent_core import AgentEvent, RunContext
 
 from friday.session import FridaySession
-from friday.app_server import Gateway, _install_cli_shim, _request_lines, artifact_detail, fork_points, session_history, verification_status
+from friday.app_server import (
+    Gateway,
+    _install_cli_shim,
+    _request_lines,
+    artifact_detail,
+    fork_points,
+    session_history,
+    verification_status,
+)
+from friday.app_server import main as app_server_main
+from friday.im.supervisor import BridgeSupervisor
 from friday.state import delete_session_tree, fork_session, read_session, resume_choices, save_turn, session_path, session_tree
 from friday.turn import TurnResult
 from friday.turn import TurnCancelled
+
+
+class _StdoutWithBuffer:
+    """`main` writes bytes through `sys.stdout.buffer`, which StringIO lacks."""
+
+    def __init__(self) -> None:
+        self.buffer = io.BytesIO()
+
+    def write(self, _text: str) -> int:
+        return 0
+
+    def flush(self) -> None:
+        return None
 
 
 def _turn_result(answer: str, verifications: list[dict] | None = None) -> TurnResult:
@@ -114,12 +137,73 @@ class TuiGatewayTests(unittest.TestCase):
         with patch("friday.app_server.load_web_search_settings", return_value={"tavily_configured": True}), patch(
             "friday.app_server.load_user_profile_settings",
             return_value={"preferred_name": "Kai", "preferred_language": "Chinese", "habits": ""},
+        ), patch(
+            "friday.app_server.load_feishu_settings",
+            return_value={
+                "app_id": "cli_x",
+                "app_secret_configured": True,
+                "allowed_users": ["ou_a"],
+                "allow_group": False,
+            },
         ), patch.object(gateway, "ok") as ok:
             gateway.handle({"id": "1", "method": "settings.get"})
 
         result = ok.call_args.args[1]
         self.assertEqual(result["web_search"], {"tavily_configured": True})
+        self.assertTrue(result["feishu"]["app_secret_configured"])
+        self.assertFalse(result["bridge"]["running"])
         self.assertNotIn("api_key", json.dumps(result))
+        self.assertNotIn("app_secret\"", json.dumps(result))
+
+    def test_gateway_saves_feishu_settings_and_reports_the_bridge(self) -> None:
+        gateway = Gateway()
+        view = {"app_id": "cli_x", "app_secret_configured": True, "allowed_users": [], "allow_group": False}
+
+        with patch("friday.app_server.save_feishu_settings", return_value=view) as save:
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle(
+                    {
+                        "id": "1",
+                        "method": "settings.feishu.save",
+                        "params": {"app_id": "cli_x", "app_secret": "s3cret", "allowed_users": "ou_a\nou_b"},
+                    }
+                )
+
+        self.assertEqual(save.call_args.kwargs["app_id"], "cli_x")
+        self.assertEqual(save.call_args.kwargs["app_secret"], "s3cret")
+        self.assertEqual(save.call_args.kwargs["allowed_users"], "ou_a\nou_b")
+        self.assertIsNone(save.call_args.kwargs["allow_group"])
+        self.assertEqual(ok.call_args.args[1]["feishu"], view)
+        self.assertFalse(ok.call_args.args[1]["bridge"]["running"])
+
+    def test_gateway_switches_the_bridge_on_and_off(self) -> None:
+        gateway = Gateway()
+        running = {"running": True, "pid": 7, "workspace": str(Path.cwd()), "exit_code": None, "log": []}
+
+        with patch.object(gateway.bridge, "start", return_value=running) as start:
+            with patch.object(gateway.bridge, "stop", return_value={**running, "running": False, "pid": None}) as stop:
+                with patch.object(gateway, "ok") as ok:
+                    gateway.handle({"id": "1", "method": "bridge.start"})
+                    self.assertTrue(ok.call_args.args[1]["running"])
+                    gateway.handle({"id": "2", "method": "bridge.stop"})
+
+        start.assert_called_once_with(Path.cwd().resolve())
+        stop.assert_called_once_with()
+        self.assertFalse(ok.call_args.args[1]["running"])
+
+    def test_a_closing_gateway_takes_the_bridge_offline(self) -> None:
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        try:
+            with patch("friday.app_server._install_cli_shim"), patch("sys.stdin") as stdin:
+                stdin.fileno.return_value = read_fd
+                with patch.object(BridgeSupervisor, "stop", return_value={}) as stop:
+                    with patch("sys.stdout", new=_StdoutWithBuffer()):
+                        app_server_main()
+        finally:
+            os.close(read_fd)
+
+        stop.assert_called_once_with()
 
     def test_verification_status_omits_trace_details(self) -> None:
         result = verification_status(

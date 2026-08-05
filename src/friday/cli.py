@@ -87,6 +87,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("chat", help="Start an interactive chat.")
     sub.add_parser("tui", help="Start a simple terminal UI.")
     sub.add_parser("app-server", help="Run the JSONL app server for rich clients.")
+    feishu = sub.add_parser("feishu", help="Drive this workspace from Feishu over a long connection.")
+    feishu.add_argument("--console", action="store_true", help="Exercise the bridge from this terminal without Feishu.")
     memory = sub.add_parser("memory", help="Inspect and manage Friday memory.", description="Inspect and manage Friday memory.")
     memory_sub = memory.add_subparsers(dest="memory_command")
     memory_status_parser = memory_sub.add_parser("status", help="Show memory counts, sizes, and paths.")
@@ -292,6 +294,17 @@ def main(argv: list[str] | None = None) -> None:
         from friday.app_server import main as run_app_server
 
         run_app_server()
+        return
+
+    if command == "feishu":
+        if args.console:
+            from friday.im.console import run_console_bridge
+
+            run_console_bridge(Path.cwd().resolve())
+        else:
+            from friday.im.feishu import run_feishu_bridge
+
+            run_feishu_bridge(Path.cwd().resolve())
         return
 
     session = _session(stream)

@@ -29,6 +29,8 @@ friday ask "..."
 friday goal "..."
 friday chat
 friday tui
+friday feishu
+friday feishu --console
 friday compact
 friday resume
 friday resume --list
@@ -45,6 +47,14 @@ friday reset
 `friday doctor` performs read-only local checks for the Friday version, pinned
 agent runtime, model credentials, writable data paths, and source TUI assets.
 It does not call the model or consume tokens.
+
+`friday feishu` serves the current directory to Feishu over a long connection so
+a phone can drive this machine. It needs the `feishu` extra and an `open_id`
+allowlist, and reads the credentials saved in Settings. The desktop switch and
+`/phone` start the same bridge, so a terminal is only needed for a headless
+machine. `friday feishu --console` exercises the bridge without Feishu, which is
+the fastest way to tell a Friday problem from a Feishu one. See
+[Phone Bridge](im-feishu.md).
 
 Top-level `friday reset` requires confirmation and clears global Friday state.
 Interactive `/reset` clears only the current project's sessions, checkpoints,
@@ -63,6 +73,7 @@ Slash commands in chat/TUI:
 /context
 /progress
 /trace
+/phone [on|off]
 /compact
 /goal <task>
 /resume

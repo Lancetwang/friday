@@ -12,6 +12,9 @@ dependencies = [
     "rich>=13.7.0",
 ]
 
+[project.optional-dependencies]
+feishu = ["lark-oapi>=1.4.0"]
+
 [project.scripts]
 friday = "friday.cli:entrypoint"
 

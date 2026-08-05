@@ -2,7 +2,7 @@
 
 Friday keeps verification independent from the main agent. The verifier receives the original goal, workspace, and changed-path hints, but not the main agent's natural-language claims. It inspects the deliverable itself.
 
-The verifier scales its work to the explicit acceptance criteria. A simple text deliverable may need one read. Executable or multi-file work may need targeted commands. Optional improvements, stylistic preferences, and invented requirements cannot trigger repair.
+The verifier works as a challenger rather than a confirmer. It first derives acceptance criteria from the original goal alone, then tries to falsify each one, choosing the check most likely to expose a failure over the check most likely to confirm success. A criterion passes only after surviving that attempt. The goal is constant across attempts, so the derived criteria stay constant too. Optional improvements, stylistic preferences, and invented requirements can neither fail the deliverable nor trigger repair, which is what keeps challenge strength from becoming scope creep.
 
 ## Verdicts
 
@@ -21,7 +21,7 @@ Friday fingerprints normalized tool calls and results without volatile call IDs.
 
 The main agent, verifier, and repairs share `run_token_budget`. Once exact provider usage reaches 85% of that budget, the active Agent gets one final answer without tools and Friday does not start another repair. The current answer, verification evidence, and stop reason remain in the trace.
 
-Normal turns verify only after delivery-changing tools. A concrete repair can repeat without a fixed attempt cap; pass, blockage, insufficient evidence, approval, repeated no-progress, or the shared Token Budget ends the loop. Goal mode always visits the Verify node, keeps the original objective in every repair prompt, and requires verifier pass before reporting completion. A simple goal can still pass after one minimal verifier run.
+Normal turns verify only after delivery-changing tools. A concrete repair can repeat without a fixed attempt cap; pass, blockage, insufficient evidence, approval, repeated no-progress, or the shared Token Budget ends the loop. Goal mode always visits the Verify node, keeps the original objective in every repair prompt, and requires verifier pass before reporting completion. A simple goal yields few derived criteria, so it can still pass after one short verifier run.
 
 The verifier retains Bash because executable checks, builds, tests, and runtime behavior cannot be established by reading alone. Its independence is epistemic: it receives the original request and delivery hints rather than the main agent's claims, and its prompt forbids modifying the deliverable. Friday does not claim that removing Write/Edit would create a read-only boundary because shell commands can also write.
 

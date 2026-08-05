@@ -15,9 +15,11 @@ from friday.app import ensure_user_home, resume_choices
 from friday.checkpoint import ARTIFACT_TYPES, checkpoint_choices
 from friday.config import (
     delete_model_profile,
+    load_feishu_settings,
     load_model_catalog,
     load_model_config,
     load_web_search_settings,
+    save_feishu_settings,
     save_model_profile,
     save_web_search_settings,
     select_model_profile,
@@ -33,6 +35,7 @@ from friday.memory import (
 )
 from friday.model_options import supports_thinking
 from friday.session import FridaySession
+from friday.im.supervisor import BridgeSupervisor
 from friday.skills import discover_skills, skill_body
 from friday.state import (
     USER_MESSAGE_TIMES_KEY,
@@ -80,19 +83,23 @@ def main() -> None:
     sys.stdout = sys.stderr
     gateway = Gateway(output=output, background=True)
     gateway.event("gateway.ready", {"cwd": str(Path.cwd().resolve())})
-    for line in _request_lines(sys.stdin.fileno()):
-        # Tolerate a UTF-8 BOM from Windows shells piping into the gateway.
-        line = line.lstrip("\ufeff")
-        if line.strip():
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError as exc:
-                gateway.err(None, f"invalid JSON-RPC request: {exc}")
-                continue
-            if not isinstance(message, dict):
-                gateway.err(None, "invalid JSON-RPC request: expected an object")
-                continue
-            gateway.handle(message)
+    try:
+        for line in _request_lines(sys.stdin.fileno()):
+            # Tolerate a UTF-8 BOM from Windows shells piping into the gateway.
+            line = line.lstrip("\ufeff")
+            if line.strip():
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    gateway.err(None, f"invalid JSON-RPC request: {exc}")
+                    continue
+                if not isinstance(message, dict):
+                    gateway.err(None, "invalid JSON-RPC request: expected an object")
+                    continue
+                gateway.handle(message)
+    finally:
+        # Closing the desktop is what makes the phone unreachable again.
+        gateway.bridge.stop()
 
 
 def _install_cli_shim() -> Path:
@@ -174,6 +181,9 @@ class Gateway:
         # Worker threads and their event callbacks touch the maps above while the
         # RPC thread reads them; every access goes through this lock.
         self._state = threading.RLock()
+        # The phone bridge belongs to this gateway, not to a session: one switch
+        # covers the whole workspace, and closing Friday takes the phone offline.
+        self.bridge = BridgeSupervisor()
         self.session = self._new_session()
         self._track(self.session)
 
@@ -331,6 +341,8 @@ class Gateway:
                         },
                         "web_search": load_web_search_settings(Path.cwd().resolve()),
                         "user_profile": load_user_profile_settings(),
+                        "feishu": load_feishu_settings(Path.cwd().resolve()),
+                        "bridge": self.bridge.status(),
                     },
                 )
             elif method == "settings.memory.read":
@@ -359,6 +371,32 @@ class Gateway:
                         clear_anysearch=bool(params.get("clear_anysearch")),
                     ),
                 )
+            elif method == "settings.feishu.save":
+                users = params.get("allowed_users")
+                self.ok(
+                    rid,
+                    {
+                        "feishu": save_feishu_settings(
+                            Path.cwd().resolve(),
+                            app_id=params.get("app_id") if isinstance(params.get("app_id"), str) else None,
+                            app_secret=(
+                                params.get("app_secret") if isinstance(params.get("app_secret"), str) else None
+                            ),
+                            allowed_users=users if isinstance(users, (list, str)) else None,
+                            allow_group=(
+                                bool(params.get("allow_group")) if params.get("allow_group") is not None else None
+                            ),
+                            clear_app_secret=bool(params.get("clear_app_secret")),
+                        ),
+                        "bridge": self.bridge.status(),
+                    },
+                )
+            elif method == "bridge.status":
+                self.ok(rid, self.bridge.status())
+            elif method == "bridge.start":
+                self.ok(rid, self.bridge.start(Path.cwd().resolve()))
+            elif method == "bridge.stop":
+                self.ok(rid, self.bridge.stop())
             elif method == "settings.user.save":
                 profile = params.get("profile")
                 if not isinstance(profile, dict):

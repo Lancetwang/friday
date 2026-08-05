@@ -4,7 +4,7 @@ import TextInput from 'ink-text-input'
 
 import type { GatewayClient } from './gatewayClient.js'
 import { Markdown, type Theme } from './markdown.js'
-import type { GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
+import type { BridgeStatus, GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
 
 const theme: Theme = {
   accent: '#4F6CD8',
@@ -51,6 +51,7 @@ const HELP_TEXT = `# Friday commands
 | \`/context\` | Print current context usage. |
 | \`/progress\` | Show the current objective and plan. |
 | \`/trace\` | Open the local Trace Workbench. |
+| \`/phone [on|off]\` | Show or switch whether Feishu can reach this workspace. |
 | \`/compact\` | Summarize the live conversation into a fresh context. |
 | \`/goal <text>\` | Loop until the verifier passes, blocks, needs approval, or is cancelled. |
 | \`/resume\` | Resume recent Friday session context. |
@@ -401,6 +402,16 @@ function runCommand(
     void gateway.request<{ url: string }>('trace.serve').then(result =>
       setMessages(items => [...items, { role: 'system', text: `Trace Workbench: ${result.url}` }])
     )
+  } else if (command === '/phone') {
+    const argument = text.slice('/phone'.length).trim().toLowerCase()
+    const method = argument === '' ? 'bridge.status' : argument === 'on' ? 'bridge.start' : argument === 'off' ? 'bridge.stop' : ''
+    if (!method) {
+      setMessages(items => [...items, { role: 'system', text: 'Usage: /phone [on|off]' }])
+    } else {
+      void gateway.request<BridgeStatus>(method).then(status =>
+        setMessages(items => [...items, { role: 'system', text: formatBridge(status) }])
+      )
+    }
   } else if (command.startsWith('/compact')) {
     void gateway.request<{ text: string }>('session.compact').then(result =>
       setMessages(items => [...items, { role: 'system', text: `Compacted conversation:\n\n${result.text}` }])
@@ -906,6 +917,14 @@ function formatSeconds(seconds: number) {
 
 function approvalIndex(decision: ApprovalDecision) {
   return APPROVAL_OPTIONS.findIndex(option => option.id === decision)
+}
+
+function formatBridge(status: BridgeStatus) {
+  if (status.running) {
+    return `Feishu can reach this workspace (pid ${status.pid}). It goes offline when Friday closes.`
+  }
+  const tail = status.log.length ? `\n${status.log[status.log.length - 1]}` : ''
+  return `Feishu cannot reach this workspace. Turn it on with /phone on.${tail}`
 }
 
 function formatProgress(progress: ProgressState) {

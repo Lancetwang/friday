@@ -39,6 +39,7 @@ CONFIG_FIELDS = {
 PROFILES_FILE = "models.json"
 CREDENTIALS_FILE = "model-credentials.json"
 WEB_CREDENTIALS_FILE = "web-credentials.json"
+FEISHU_FILE = "im-feishu.json"
 WEB_SEARCH_KEYS = {"tavily": "TAVILY_API_KEY", "anysearch": "ANYSEARCH_API_KEY"}
 # Secrets Friday itself put into this process. Tool subprocesses must not inherit
 # them: the user never opted their shell into Friday's credential stores.
@@ -281,6 +282,72 @@ def save_web_search_settings(
     return load_web_search_settings(workspace, home=home)
 
 
+def load_feishu_settings(workspace: Path, *, home: Path | None = None) -> dict[str, Any]:
+    """What the settings UI may see. The app secret is reported, never returned."""
+    saved = _read_json_object(friday_home(home) / FEISHU_FILE)
+    stored_secret = str(saved.get("app_secret") or "").strip()
+    return {
+        "app_id": str(saved.get("app_id") or os.getenv("FRIDAY_FEISHU_APP_ID") or "").strip(),
+        "app_secret_configured": bool(
+            stored_secret
+            or os.getenv("FRIDAY_FEISHU_APP_SECRET")
+            or _env_files_have_names(workspace, {"FRIDAY_FEISHU_APP_SECRET"}, home)
+        ),
+        "allowed_users": _feishu_users(saved.get("allowed_users")),
+        "allow_group": bool(saved.get("allow_group")),
+    }
+
+
+def feishu_credentials(*, home: Path | None = None) -> dict[str, Any]:
+    """Everything the bridge itself needs, secret included."""
+    saved = _read_json_object(friday_home(home) / FEISHU_FILE)
+    return {
+        "app_id": str(saved.get("app_id") or "").strip(),
+        "app_secret": str(saved.get("app_secret") or "").strip(),
+        "allowed_users": _feishu_users(saved.get("allowed_users")),
+        "allow_group": bool(saved.get("allow_group")),
+    }
+
+
+def save_feishu_settings(
+    workspace: Path,
+    *,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+    allowed_users: list[str] | str | None = None,
+    allow_group: bool | None = None,
+    clear_app_secret: bool = False,
+    home: Path | None = None,
+) -> dict[str, Any]:
+    saved = _read_json_object(friday_home(home) / FEISHU_FILE)
+    if app_id is not None:
+        saved["app_id"] = app_id.strip()
+    if clear_app_secret:
+        saved.pop("app_secret", None)
+    elif app_secret is not None and app_secret.strip():
+        secret = app_secret.strip()
+        if len(secret) > 4096 or "\n" in secret or "\r" in secret:
+            raise ValueError("Invalid Feishu app secret.")
+        saved["app_secret"] = secret
+    if allowed_users is not None:
+        saved["allowed_users"] = _feishu_users(allowed_users)
+    if allow_group is not None:
+        saved["allow_group"] = bool(allow_group)
+    _write_json(friday_home(home) / FEISHU_FILE, saved, private=True)
+    return load_feishu_settings(workspace, home=home)
+
+
+def _feishu_users(value: Any) -> list[str]:
+    """Accept a list or a comma separated string, and keep the order stable."""
+    if isinstance(value, str):
+        items = value.replace("\n", ",").split(",")
+    elif isinstance(value, (list, tuple)):
+        items = [str(item) for item in value]
+    else:
+        return []
+    return list(dict.fromkeys(item.strip() for item in items if str(item).strip()))
+
+
 def output_token_limit(config: ModelConfig, value: int) -> dict[str, int]:
     key = "max_completion_tokens" if config.provider in {"mimo", "openai"} else "max_tokens"
     return {key: min(value, config.max_output_tokens)}
@@ -313,11 +380,20 @@ def build_model(config: ModelConfig) -> ChatModel:
     )
 
 
+IM_BRIDGE_ENV_NAMES = (
+    "FRIDAY_FEISHU_ALLOW_GROUP",
+    "FRIDAY_FEISHU_ALLOWED_USERS",
+    "FRIDAY_FEISHU_APP_ID",
+    "FRIDAY_FEISHU_APP_SECRET",
+)
+
+
 def load_model_environment(workspace: Path, *, home: Path | None = None) -> None:
     allowed = {
         "ANYSEARCH_API_KEY",
         "JINA_API_KEY",
         "TAVILY_API_KEY",
+        *IM_BRIDGE_ENV_NAMES,
         *(name for provider in PROVIDERS for name in _provider_env_names(str(provider["id"])) if name),
     }
     for path in (workspace.resolve() / ".env", friday_home(home) / ".env"):

@@ -87,6 +87,7 @@ flowchart TD
 - [Tools](docs/tools.md)
 - [Memory](docs/memory.md)
 - [Skills](docs/skills.md)
+- [Phone Bridge](docs/im-feishu.md)
 - [Observability](docs/observability.md)
 - [Checkpoints](docs/checkpoints.md)
 
