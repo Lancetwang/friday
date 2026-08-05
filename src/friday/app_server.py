@@ -50,7 +50,7 @@ from friday.state import (
     session_subtree_ids,
     session_tree,
 )
-from friday.storage import friday_home
+from friday.storage import forget_project, friday_home, list_projects, record_project
 from friday.text import preview
 from friday.tools import build_tools, pending_approval
 from friday.trace_web import start_trace_server
@@ -81,6 +81,9 @@ def main() -> None:
         cli_main(sys.argv[2:])
         return
     _install_cli_shim()
+    # Keep the desktop sidebar able to restore its project list: every
+    # workspace this gateway serves is one the user opened, so register it.
+    record_project(Path.cwd().resolve())
     output = _Utf8Output(sys.stdout.buffer)
     sys.stdout = sys.stderr
     gateway = Gateway(output=output, background=True)
@@ -261,6 +264,13 @@ class Gateway:
         try:
             if method == "session.info":
                 self.ok(rid, self.session_info())
+            elif method == "projects.list":
+                self.ok(rid, {"projects": list_projects()})
+            elif method == "projects.forget":
+                workspace = str(params.get("workspace") or "").strip()
+                if workspace:
+                    forget_project(Path(workspace))
+                self.ok(rid, {"forgotten": bool(workspace)})
             elif method == "chat.send":
                 images = _image_urls(params.get("images"))
                 self.run_chat(rid, str(params.get("text") or ""), images=images)

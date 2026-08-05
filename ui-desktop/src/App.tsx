@@ -902,6 +902,19 @@ function App() {
       if (trackedStartup) rememberProject(workspace)
       else setDefaultWorkspace(workspace)
       await hydrateProject(workspace)
+      // The project list used to live only in this window's local storage, so
+      // a fresh profile (first launch of an installed build, cleared site
+      // data) hid every previously tracked project. The gateway keeps a
+      // registry; merge it in so tracked projects always show up.
+      void sendGateway<{ projects: Array<{ workspace: string; updated?: string }> }>(workspace, 'projects.list')
+        .then(result => {
+          for (const item of result.projects) {
+            // An untracked default workspace already lives under Recent.
+            if (!trackedStartup && samePath(item.workspace, workspace)) continue
+            rememberProject(item.workspace)
+          }
+        })
+        .catch(() => undefined)
     })().catch(error => {
       const workspace = activeProjectRef.current
       if (workspace) {
@@ -1268,6 +1281,8 @@ function App() {
   const closeProject = async (event: MouseEvent, workspace: string) => {
     event.stopPropagation()
     try {
+      // Untrack it in the gateway registry too, or the next launch re-adds it.
+      await sendGateway(workspace, 'projects.forget', { workspace }).catch(() => undefined)
       await invoke('gateway_stop', { workspace })
     } catch (error) {
       updateView(workspace, current => ({

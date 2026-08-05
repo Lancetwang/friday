@@ -83,6 +83,39 @@ def record_project(workspace: Path, home: Path | None = None) -> Path:
     return path
 
 
+def list_projects(home: Path | None = None) -> list[dict[str, str]]:
+    """Workspaces Friday knows about, most recently used first.
+
+    Reads the registry `record_project` maintains, so the desktop sidebar can
+    restore its project list even after the window's own storage is cleared.
+    """
+    root = friday_home(home) / "projects"
+    projects: list[dict[str, str]] = []
+    if root.is_dir():
+        for path in root.glob("*/project.json"):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            workspace = str(value.get("workspace") or "").strip()
+            if not workspace:
+                continue
+            projects.append(
+                {"workspace": workspace, "updated": str(value.get("updated") or "")}
+            )
+    projects.sort(key=lambda item: item["updated"], reverse=True)
+    return projects
+
+
+def forget_project(workspace: Path, home: Path | None = None) -> None:
+    """Untrack a workspace without touching its state.
+
+    Only the registry entry goes away; the sessions and checkpoints stay on
+    disk and the project re-enters the registry the next time it is opened.
+    """
+    project_state_dir(workspace, home).joinpath("project.json").unlink(missing_ok=True)
+
+
 def checkpoint_dir(workspace: Path, home: Path | None = None) -> Path:
     root = workspace.resolve()
     override = os.getenv("FRIDAY_CHECKPOINT_DIR")
