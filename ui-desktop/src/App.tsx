@@ -122,6 +122,7 @@ type Approval = {
 type VerificationStatus = {
   approval_required?: boolean
   error?: boolean
+  feedback?: string
   passed?: boolean
   verdict?: string
 }
@@ -3133,11 +3134,19 @@ function WindowTitlebar() {
 }
 
 function verificationLabel(verification: VerificationStatus) {
-  if (verification.passed || verification.verdict === 'pass') return t('verification.pass')
-  if (verification.error) return t('verification.error')
-  if (verification.verdict === 'blocked') return t('verification.blocked')
-  if (verification.verdict === 'inconclusive') return t('verification.inconclusive')
-  return t('verification.failed')
+  const label = verification.passed || verification.verdict === 'pass'
+    ? t('verification.pass')
+    : verification.error
+      ? t('verification.error')
+      : verification.verdict === 'blocked'
+        ? t('verification.blocked')
+        : verification.verdict === 'inconclusive'
+          ? t('verification.inconclusive')
+          : t('verification.failed')
+  const feedback = verification.feedback?.trim()
+  if (!feedback) return label
+  const separator = getLanguage() === 'zh' ? '：' : ': '
+  return `${label}${separator}${feedback.slice(0, 200)}`
 }
 
 function groupActivityItems(items: TimelineItem[]) {

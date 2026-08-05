@@ -157,11 +157,17 @@ def _request_lines(fd: int):
 
 
 def verification_status(result: dict[str, Any]) -> dict[str, Any]:
-    return {
+    status = {
         key: result[key]
         for key in ("approval_required", "error", "passed", "verdict")
         if key in result
     }
+    # The UI only shows a label for the four keys above; carry the verifier's
+    # feedback along (truncated) so failures are not a silent "error".
+    feedback = result.get("feedback")
+    if isinstance(feedback, str) and feedback.strip():
+        status["feedback"] = feedback.strip()[:400]
+    return status
 
 
 class Gateway:

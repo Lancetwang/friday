@@ -42,7 +42,10 @@ def build_verifier(
             tools,
             chat_kwargs={
                 "stream": False,
-                **output_token_limit(config, 900),
+                # Thinking models burn output tokens on reasoning before writing
+                # the verdict JSON. A tight cap like 900 can leave zero content
+                # tokens, which fails parsing and blocks the whole turn.
+                **output_token_limit(config, 4000),
                 **thinking_request_kwargs(config.provider, thinking_effort),
                 "tool_choice": "auto",
             },
