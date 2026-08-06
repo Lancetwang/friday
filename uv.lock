@@ -1,4 +1,4 @@
-version = 1
+﻿version = 1
 revision = 3
 requires-python = ">=3.12"
 
@@ -168,7 +168,7 @@ wheels = [
 
 [[package]]
 name = "friday-agent"
-version = "0.1.3"
+version = "0.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },

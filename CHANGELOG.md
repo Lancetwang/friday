@@ -2,6 +2,13 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.4 - A verifier that never asks, and a welcome that knows the time (2026-08-06)
+
+- Fixed the desktop reporting "Verifier returned invalid JSON" whenever the verifier's own command needed approval. The verifier runs as an extension of the main session, so an approval it triggers now lands on that session's pending slot where the turn, the UI, and the post-run check can all see it; an empty verifier answer is also reported as "no output" instead of being blamed on the JSON.
+- The verifier no longer asks for permission at all. Its job is to break the deliverable, which means running builds, tests, and probes without pausing the turn; commands that are unsafe for every agent (disk format, credential exfiltration, encoded shell) stay blocked.
+- The verifier now runs on the model's full 1M-token window when the model is DeepSeek, instead of budgeting against the working session's configured window: every verification is a fresh one-shot check, so it never needs to conserve context.
+- A new empty conversation now greets you with a typewritten, time-aware hint (good morning / afternoon / evening / late night) picked at random from a fixed pool. It shows on first launch and whenever you start a new conversation, retypes a fresh line each time, and fades in gently.
+
 ## v0.1.3 - Runs that do not stop, and a context window that explains itself (2026-08-06)
 
 - A turn no longer ends because it took too many steps or spent too much. The context window is the only bound left, and compaction is what keeps a run inside it, so a long task now runs until the work is done. `run_token_budget` is still accepted in existing configuration files and no longer enforces anything.
