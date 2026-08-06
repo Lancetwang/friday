@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -15,8 +16,8 @@ from agent_core import Agent, RunContext, reset_current_context, set_current_con
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _pinned_core_version, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
 from friday.compaction import COMPACT_TARGET_RATIO, LAST_COMPACTION, announce_compaction, clean_summary, compact_in_place, compaction_record, fit_recent_steps, fit_recent_turns, split_memory_section, summary_is_usable, transcript
-from friday.config import DEFAULT_MODEL_CONFIG, build_model, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, save_model_profile, save_web_search_settings
-from friday.context import TOOL_COMPACT_AT, _context_text, compact_tool_results, context_ratio, context_report, should_compact_conversation, should_compact_tools, tool_compaction_gain
+from friday.config import DEFAULT_MODEL_CONFIG, ModelConfig, build_model, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, save_model_profile, save_web_search_settings
+from friday.context import TOOL_COMPACT_AT, _context_text, compact_tool_results, context_ratio, context_report, context_window, should_compact_conversation, should_compact_tools, tool_compaction_gain
 from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
 from friday.model_options import supports_thinking, thinking_request_kwargs
@@ -25,8 +26,8 @@ from friday.progress import append_progress_checkpoint, begin_progress, current_
 from friday.skills import discover_skills, skill_routing
 from friday.state import archived_messages, conversation_body, delete_session, hydrate, read_session, rename_session, session_path, state_from_snapshot, transcript_messages
 from friday.storage import project_state_dir, workspace_key
-from friday.tools import APPROVAL_FILE, MAX_TOOL_OUTPUT_CHARS, PERMISSIONS_FILE, _dangerous_shell, _hard_denied_shell, _permission_decision, _read_response, allow_permissions_for_session, approve_pending, build_tools, pending_approval
-from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt, verify_friday
+from friday.tools import APPROVAL_FILE, MAX_TOOL_OUTPUT_CHARS, PERMISSIONS_FILE, SESSION_PERMISSIONS_ALLOWED, _dangerous_shell, _hard_denied_shell, _permission_decision, _read_response, allow_permissions_for_session, approve_pending, build_tools, pending_approval
+from friday.verification import VERIFIER_MAX_STEPS, build_verifier, needs_verification, parse_verification, verification_prompt, verify_friday
 
 
 class ToolTests(unittest.TestCase):
@@ -2188,7 +2189,7 @@ class VerificationTests(unittest.TestCase):
         self.assertTrue(needs_verification(bash_redirect_events))
 
     def test_verifier_reports_approval_created_during_its_run(self) -> None:
-        context = RunContext(metadata={"workspace": str(Path.cwd())})
+        context = RunContext(metadata={"session_id": "session-abc123", "workspace": str(Path.cwd())})
         verifier = Mock()
         verifier.chat.return_value = ""
         verifier_context = RunContext(metadata={"workspace": str(Path.cwd())})
@@ -2203,6 +2204,88 @@ class VerificationTests(unittest.TestCase):
 
         self.assertTrue(result["approval_required"])
         self.assertNotIn("error", result)
+        # The verifier inherits the main session's id so an approval it
+        # triggers lands on this session's pending slot, where the post-run
+        # check and the UI can see it instead of misreporting invalid JSON.
+        self.assertEqual(verifier_context.metadata["session_id"], "session-abc123")
+
+    def test_verifier_is_exempt_from_permission_approval(self) -> None:
+        agent = Mock()
+        verifier_context = RunContext()
+        agent.new_context.return_value = verifier_context
+        config = ModelConfig(provider="deepseek", model="deepseek-v4-flash", context_window=353000)
+
+        with (
+            patch("friday.verification.Agent", return_value=agent),
+            patch("friday.verification.build_model"),
+            patch("friday.verification.build_guarded_flow", return_value=Mock()),
+            patch("friday.verification.build_tools"),
+        ):
+            _agent, context = build_verifier(Path.cwd(), config)
+
+        self.assertTrue(context.metadata.get(SESSION_PERMISSIONS_ALLOWED))
+        # Hard-denied commands stay blocked for every agent, verifier included.
+        self.assertEqual(_permission_decision(Path.cwd(), "format C:"), ("deny", "drive formatting is blocked"))
+
+    def test_verifier_uses_full_deepseek_context_window(self) -> None:
+        agent = Mock()
+        verifier_context = RunContext()
+        agent.new_context.return_value = verifier_context
+        config = ModelConfig(provider="deepseek", model="deepseek-v4-flash", context_window=353000)
+
+        with (
+            patch("friday.verification.Agent", return_value=agent),
+            patch("friday.verification.build_model"),
+            patch("friday.verification.build_guarded_flow", return_value=Mock()),
+            patch("friday.verification.build_tools"),
+        ):
+            _agent, context = build_verifier(Path.cwd(), config)
+
+        self.assertEqual(context.metadata["friday.model_config"]["context_window"], 1_000_000)
+
+    def test_verifier_deepseek_window_survives_the_real_run_path(self) -> None:
+        # inherit_guarded_run copies the work agent's model_config onto the
+        # verifier context after build_verifier; the verifier's 1M window must
+        # survive that copy on the real verify_friday path, not just in
+        # build_verifier isolation.
+        agent = Mock()
+        agent.chat.return_value = '{"verdict": "pass", "evidence": []}'
+        verifier_context = RunContext()
+        agent.new_context.return_value = verifier_context
+        main_context = RunContext(metadata={
+            "session_id": "session-abc123",
+            "workspace": str(Path.cwd()),
+            "friday.model_config": asdict(ModelConfig(provider="deepseek", model="deepseek-v4-flash", context_window=353000)),
+            "friday.thinking_effort": "high",
+        })
+
+        with (
+            patch("friday.verification.Agent", return_value=agent),
+            patch("friday.verification.build_model"),
+            patch("friday.verification.build_guarded_flow", return_value=Mock()),
+            patch("friday.verification.build_tools"),
+            patch("friday.verification.pending_approval", return_value={"pending": False}),
+        ):
+            result = verify_friday("verify delivery", main_context, 0, force=True)
+
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(context_window(verifier_context), 1_000_000)
+
+    def test_verifier_keeps_non_deepseek_context_window(self) -> None:
+        agent = Mock()
+        verifier_context = RunContext()
+        agent.new_context.return_value = verifier_context
+        config = ModelConfig(provider="openai", model="gpt-5.2", context_window=200000)
+
+        with (
+            patch("friday.verification.Agent", return_value=agent),
+            patch("friday.verification.build_model"),
+            patch("friday.verification.build_guarded_flow", return_value=Mock()),
+            patch("friday.verification.build_tools"),
+        ):
+            _agent, context = build_verifier(Path.cwd(), config)
+
+        self.assertEqual(context.metadata["friday.model_config"]["context_window"], 200000)
 
     def test_verifier_prompt_excludes_main_answer(self) -> None:
         prompt = verification_prompt(
@@ -2460,6 +2543,14 @@ class VerificationTests(unittest.TestCase):
 
         self.assertEqual(len(agent.prompts), 1)
         self.assertTrue(verifications[0]["approval_required"])
+
+    def test_parse_verification_empty_output_names_no_output(self) -> None:
+        parsed = parse_verification("")
+
+        self.assertTrue(parsed["error"])
+        self.assertEqual(parsed["verdict"], "inconclusive")
+        self.assertEqual(parsed["feedback"], "Verifier returned no output.")
+        self.assertNotIn("invalid JSON", parsed["feedback"])
 
     def test_parse_verification_accepts_blocked(self) -> None:
         parsed = parse_verification('{"passed": false, "blocked": true, "evidence": ["x"], "feedback": "cannot"}')

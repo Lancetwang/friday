@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import platform
 import re
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,9 +19,25 @@ from friday.config import (
 from friday.model_options import DEFAULT_THINKING_EFFORT, thinking_request_kwargs
 from friday.prompts import SECURITY_NOTES, VERIFIER_NOTES
 from friday.storage import project_state_dir
-from friday.tools import _shell_surface, build_tools, pending_approval
+from friday.tools import _shell_surface, allow_permissions_for_session, build_tools, pending_approval
 
 VERIFIER_MAX_STEPS = 10000
+# DeepSeek serves a 1M-token window on the v4 models. The verifier is a fresh
+# one-shot check on every turn, so cap it at the model's real ceiling instead
+# of the working session's configured window: the check never needs to budget.
+VERIFIER_CONTEXT_WINDOW = 1_000_000
+
+
+def _verifier_config(config: ModelConfig) -> ModelConfig:
+    """The verifier's independent model configuration.
+
+    The verifier keeps the session's provider/model but gets the full
+    deepseek window: it is a one-shot check, not a long-running conversation,
+    so it should never budget against the work agent's window.
+    """
+    if config.provider == "deepseek" and config.context_window < VERIFIER_CONTEXT_WINDOW:
+        return replace(config, context_window=VERIFIER_CONTEXT_WINDOW)
+    return config
 
 
 def build_verifier(
@@ -32,7 +48,7 @@ def build_verifier(
 ) -> tuple[Agent, RunContext]:
     root = workspace.resolve()
     friday_dir = project_state_dir(root)
-    config = config or load_model_config(root)
+    config = _verifier_config(config or load_model_config(root))
     system = platform.system()
     shell = "PowerShell" if system == "Windows" else "bash"
     tools = build_tools(root, friday_dir)
@@ -56,6 +72,12 @@ def build_verifier(
     context.metadata["workspace"] = str(root)
     context.metadata["friday.model_config"] = asdict(config)
     context.metadata["friday.thinking_effort"] = thinking_effort
+    # The verifier's job is to break the deliverable, which means running
+    # builds, tests, and probes in manual mode without pausing the turn for
+    # approval. Its commands are part of verification, not user work: exempt
+    # it from permission prompts outright. Hard-denied commands (disk format,
+    # credential exfiltration, encoded shell) stay blocked for every agent.
+    allow_permissions_for_session(context)
     return agent, context
 
 
@@ -81,6 +103,21 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
 
         verifier_context.on_observation = observe
     inherit_guarded_run(verifier_context, context)
+    # The verifier is an extension of the main session: an approval it triggers
+    # must land on this session's pending slot. Without the session id the
+    # approval file is written to the shared slot, the post-run check below
+    # misses it, and the suspended flow's empty answer is misreported as
+    # broken verifier JSON. (Verification commands themselves no longer ask
+    # for approval -- build_verifier grants them full access -- but keeping
+    # the id makes any future approval path findable.)
+    verifier_context.metadata["session_id"] = session_id
+    # inherit_guarded_run copies the work agent's model_config onto the
+    # verifier context, which would shrink the verifier back to the session's
+    # configured window. Re-apply the verifier's own window override so the
+    # one-shot check still budgets against the model's full ceiling.
+    config_data = verifier_context.metadata.get("friday.model_config")
+    if isinstance(config_data, dict):
+        verifier_context.metadata["friday.model_config"] = asdict(_verifier_config(ModelConfig(**config_data)))
     try:
         history = [
             str(message.get("content") or "")[:1500]
@@ -190,6 +227,20 @@ def summarize_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def parse_verification(raw: str) -> dict[str, Any]:
     text = raw.strip()
+    if not text:
+        # An empty answer is not a malformed verdict: the verifier flow ended
+        # without producing text (for example it suspended on a pending
+        # approval it triggered). Name the real symptom instead of blaming the
+        # JSON so the UI surfaces the actual blocker.
+        return {
+            "verdict": "inconclusive",
+            "blocked": False,
+            "error": True,
+            "passed": False,
+            "evidence": [],
+            "feedback": "Verifier returned no output.",
+            "next_check": "",
+        }
     if text.startswith("```"):
         text = text.strip("`")
         text = text[text.find("{") :]
