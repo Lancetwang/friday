@@ -1,0 +1,49 @@
+name: Publish Windows desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui-desktop/package-lock.json
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.16"
+      - run: npm ci --prefix ui-desktop
+      - run: npm run sidecar --prefix ui-desktop
+      - name: Smoke test sidecar
+        shell: bash
+        run: |
+          binary="ui-desktop/src-tauri/binaries/friday-app-server-$(rustc --print host-tuple).exe"
+          test -f "$binary"
+          cd "$(mktemp -d)"
+          python "$GITHUB_WORKSPACE/ui-desktop/scripts/smoke-sidecar.py" "$GITHUB_WORKSPACE/$binary"
+      - run: npm run tauri --prefix ui-desktop -- build --bundles nsis
+      - name: Upload installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          source="$(find ui-desktop/src-tauri/target/release/bundle/nsis -name '*.exe' -type f -print -quit)"
+          test -n "$source"
+          version="$(node -p "require('./ui-desktop/package.json').version")"
+          target="$(dirname "$source")/Friday_${version}_x64-setup.exe"
+          mv "$source" "$target"
+          gh release upload "$RELEASE_TAG" "$target" --clobber

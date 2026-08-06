@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import platform
 import re
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,24 +22,6 @@ from friday.storage import project_state_dir
 from friday.tools import _shell_surface, allow_permissions_for_session, build_tools, pending_approval
 
 VERIFIER_MAX_STEPS = 10000
-# The verifier is a fresh one-shot check on every turn, so give it the full
-# 1M-token window regardless of provider: the check never needs to budget
-# against a long-running conversation.
-VERIFIER_CONTEXT_WINDOW = 1_000_000
-
-
-def _verifier_config(config: ModelConfig) -> ModelConfig:
-    """The verifier's independent model configuration.
-
-    The verifier keeps the session's provider/model but gets the full 1M
-    window: it is a one-shot check, not a long-running conversation, so it
-    should never budget against the work agent's window.
-    """
-    if config.context_window < VERIFIER_CONTEXT_WINDOW:
-        return replace(config, context_window=VERIFIER_CONTEXT_WINDOW)
-    return config
-
-
 def build_verifier(
     workspace: Path,
     config: ModelConfig | None = None,
@@ -48,7 +30,10 @@ def build_verifier(
 ) -> tuple[Agent, RunContext]:
     root = workspace.resolve()
     friday_dir = project_state_dir(root)
-    config = _verifier_config(config or load_model_config(root))
+    # One model, three roles: the verifier and the trace analyst reuse the
+    # workspace's own model config, so a provider whose real ceiling is not
+    # 1M never gets a window it cannot serve.
+    config = config or load_model_config(root)
     system = platform.system()
     shell = "PowerShell" if system == "Windows" else "bash"
     tools = build_tools(root, friday_dir)
@@ -111,13 +96,6 @@ def verify_friday(goal: str, context: RunContext, start_event: int, *, force: bo
     # for approval -- build_verifier grants them full access -- but keeping
     # the id makes any future approval path findable.)
     verifier_context.metadata["session_id"] = session_id
-    # inherit_guarded_run copies the work agent's model_config onto the
-    # verifier context, which would shrink the verifier back to the session's
-    # configured window. Re-apply the verifier's own window override so the
-    # one-shot check still budgets against the model's full ceiling.
-    config_data = verifier_context.metadata.get("friday.model_config")
-    if isinstance(config_data, dict):
-        verifier_context.metadata["friday.model_config"] = asdict(_verifier_config(ModelConfig(**config_data)))
     try:
         history = [
             str(message.get("content") or "")[:1500]

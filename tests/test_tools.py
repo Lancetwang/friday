@@ -2227,7 +2227,7 @@ class VerificationTests(unittest.TestCase):
         # Hard-denied commands stay blocked for every agent, verifier included.
         self.assertEqual(_permission_decision(Path.cwd(), "format C:"), ("deny", "drive formatting is blocked"))
 
-    def test_verifier_uses_full_deepseek_context_window(self) -> None:
+    def test_verifier_uses_the_workspace_context_window(self) -> None:
         agent = Mock()
         verifier_context = RunContext()
         agent.new_context.return_value = verifier_context
@@ -2241,13 +2241,12 @@ class VerificationTests(unittest.TestCase):
         ):
             _agent, context = build_verifier(Path.cwd(), config)
 
-        self.assertEqual(context.metadata["friday.model_config"]["context_window"], 1_000_000)
+        self.assertEqual(context.metadata["friday.model_config"]["context_window"], 353000)
 
-    def test_verifier_deepseek_window_survives_the_real_run_path(self) -> None:
+    def test_verifier_keeps_the_workspace_window_on_the_real_run_path(self) -> None:
         # inherit_guarded_run copies the work agent's model_config onto the
-        # verifier context after build_verifier; the verifier's 1M window must
-        # survive that copy on the real verify_friday path, not just in
-        # build_verifier isolation.
+        # verifier context; the verifier must keep the workspace's own window
+        # on the real verify_friday path, not just in build_verifier isolation.
         agent = Mock()
         agent.chat.return_value = '{"verdict": "pass", "evidence": []}'
         verifier_context = RunContext()
@@ -2269,9 +2268,9 @@ class VerificationTests(unittest.TestCase):
             result = verify_friday("verify delivery", main_context, 0, force=True)
 
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(context_window(verifier_context), 1_000_000)
+        self.assertEqual(context_window(verifier_context), 353000)
 
-    def test_verifier_lifts_every_provider_to_the_full_window(self) -> None:
+    def test_verifier_reuses_the_workspace_model_config(self) -> None:
         agent = Mock()
         verifier_context = RunContext()
         agent.new_context.return_value = verifier_context
@@ -2285,7 +2284,9 @@ class VerificationTests(unittest.TestCase):
         ):
             _agent, context = build_verifier(Path.cwd(), config)
 
-        self.assertEqual(context.metadata["friday.model_config"]["context_window"], 1_000_000)
+        # One model, three roles: a provider whose real ceiling is below 1M
+        # keeps its own window.
+        self.assertEqual(context.metadata["friday.model_config"]["context_window"], 200000)
 
     def test_verifier_prompt_excludes_main_answer(self) -> None:
         prompt = verification_prompt(
