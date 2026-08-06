@@ -23,7 +23,7 @@ import {
   SearchIcon,
   UndoIcon
 } from './Icons'
-import { normalizeMarkdownMath } from './markdown'
+import { normalizeMarkdown } from './markdown'
 import { MenuDetails } from './MenuDetails'
 import { PhoneBridgeSettings, type BridgeStatus, type FeishuSettings } from './PhoneBridgeSettings'
 import { SaveFooter, SecretField, SettingsMessage, useSettingsSave } from './SettingsForm'
@@ -81,10 +81,17 @@ function markdownComponents(onOpenLink: (url: string) => void): Components {
 }
 
 type Metrics = {
+  cached_tokens?: number | null
   elapsed_ms?: number
   estimated_tokens?: boolean
+  /** Cumulative over the turn's requests: what it cost, not how full the window is. */
   input_tokens?: number | null
   output_tokens?: number | null
+  /** Model calls the turn made. The token totals are sums over these. */
+  requests?: number | null
+  window?: number | null
+  /** How full the context is once the turn ends. */
+  window_tokens?: number | null
 }
 
 type PermissionMode = 'auto' | 'bypass' | 'manual'
@@ -127,6 +134,19 @@ type VerificationStatus = {
   verdict?: string
 }
 
+/** Friday rewrote the conversation to keep it inside the model's context window. */
+type ContextCompaction = {
+  after_tokens?: number
+  before_tokens?: number
+  fallback?: boolean
+  kept_turns?: number
+  kind?: 'conversation' | 'tool_results'
+  notice?: string
+  ok?: boolean
+  reason?: string
+  tool_results?: number
+}
+
 type SessionInfo = {
   approval?: Approval
   cwd: string
@@ -152,7 +172,6 @@ type ModelProfile = {
   model: string
   name: string
   provider: string
-  run_token_budget: number
   vision: boolean
 }
 
@@ -255,6 +274,7 @@ type HistoryItem = {
   images?: string[]
   kind: TimelineItem['kind']
   message_index?: number
+  metrics?: Metrics
   name?: string
   status?: TimelineItem['status']
   text: string
@@ -332,6 +352,12 @@ type PendingRequest = {
   workspace: string
 }
 
+// How long a project may sit untouched before its backend is stopped, and how
+// often that is checked. Five minutes is long enough that switching away to read
+// something does not cost a restart, short enough that a forgotten project is not
+// holding a backend for a whole session.
+const BACKEND_IDLE_MS = 5 * 60 * 1000
+const BACKEND_SWEEP_MS = 60 * 1000
 const PROJECTS_KEY = 'friday.desktop.projects'
 const ACTIVE_PROJECT_KEY = 'friday.desktop.activeProject'
 const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
@@ -348,6 +374,36 @@ const emptyModelCatalog: ModelCatalog = { active: '', profiles: [], providers: [
 
 function nextId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+/** A turn a guard ended reads as a normal answer, so name the reason. */
+function stopReasonText(status: unknown) {
+  if (status === 'no_progress') return t('stop.noProgress')
+  if (status === 'context_window') return t('stop.contextWindow')
+  return ''
+}
+
+function compactionText(payload: ContextCompaction) {
+  if (payload.ok === false) {
+    return t('context.compactFailed', { reason: payload.reason || '—' })
+  }
+  if (payload.kind === 'tool_results') {
+    return t('context.trimmed', { count: payload.tool_results ?? 0 })
+  }
+  const measured = Boolean(payload.before_tokens && payload.after_tokens && payload.kept_turns)
+  const main = measured
+    ? t('context.compacted', {
+        after: shortTokens(payload.after_tokens!),
+        before: shortTokens(payload.before_tokens!),
+        turns: payload.kept_turns!
+      })
+    : t('context.compactedPlain')
+  return payload.fallback ? `${main} ${t('context.compactedLocal')}` : main
+}
+
+function shortTokens(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  return value >= 1000 ? `${Math.round(value / 1000)}k` : String(value)
 }
 
 function emptyView(path = ''): ProjectView {
@@ -392,20 +448,40 @@ function loadProjects() {
     const value = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]')
     if (!Array.isArray(value)) return []
     const seen = new Set<string>()
-    return value.filter(item => {
-      if (typeof item !== 'string') return false
-      const key = pathKey(item)
-      if (!key || seen.has(key)) return false
+    const projects: string[] = []
+    for (const item of value) {
+      if (typeof item !== 'string') continue
+      // Stored before the gateway normalised what it returns, so rewrite rather
+      // than only dedupe: the path is shown in the sidebar and sent to Friday.
+      const path = plainPath(item)
+      const key = pathKey(path)
+      if (!key || seen.has(key)) continue
       seen.add(key)
-      return true
-    })
+      projects.push(path)
+    }
+    return projects
   } catch {
     return []
   }
 }
 
+/**
+ * Windows' extended-length spelling of a directory reduced to the plain one.
+ *
+ * `canonicalize` produces `\\?\E:\work` for a directory the registry already
+ * knows as `E:\work`. Both name the same folder, so treating them as different
+ * projects listed one workspace twice and let a close land on the copy the
+ * sidebar was not showing.
+ */
+function plainPath(path: string) {
+  const trimmed = path.trim()
+  if (trimmed.startsWith('\\\\?\\UNC\\')) return `\\\\${trimmed.slice('\\\\?\\UNC\\'.length)}`
+  if (trimmed.startsWith('\\\\?\\')) return trimmed.slice('\\\\?\\'.length)
+  return trimmed
+}
+
 function pathKey(path: string) {
-  return path.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLocaleLowerCase()
+  return plainPath(path).replace(/[\\/]+$/, '').replace(/\//g, '\\').toLocaleLowerCase()
 }
 
 function samePath(left: string, right: string) {
@@ -414,6 +490,27 @@ function samePath(left: string, right: string) {
 
 function sessionEventKey(workspace: string, sessionId: string) {
   return `${pathKey(workspace)}::${sessionId}`
+}
+
+/** Whether the folder is still there. Resolving is what opening it would do first. */
+async function directoryExists(path: string) {
+  if (!path.trim()) return false
+  return invoke<string>('resolve_directory', { path }).then(() => true).catch(() => false)
+}
+
+/**
+ * The tracked projects whose folders still exist.
+ *
+ * A project the user deleted on disk stays in this window's list forever
+ * otherwise, because the list is only ever merged into from the registry and
+ * never pruned by it -- so the entry keeps showing up and opening it fails with
+ * an OS path error. The registry keeps its own record, so a workspace that is
+ * merely unmounted is not forgotten: it returns to the sidebar on the launch
+ * after its path resolves again.
+ */
+async function presentProjects(paths: string[]) {
+  const checked = await Promise.all(paths.map(async path => (await directoryExists(path) ? path : '')))
+  return checked.filter(Boolean)
 }
 
 function loadSidebarWidth() {
@@ -466,9 +563,22 @@ function App() {
   const pendingRequests = useRef(new Map<string, PendingRequest>())
   const requestId = useRef(0)
   const sidebarDrag = useRef<{ startWidth: number; startX: number } | null>(null)
-  const startedProjects = useRef(new Set<string>())
+  // Keyed by pathKey; the value is the path itself, which the idle sweep needs to
+  // name a backend it wants stopped.
+  const startedProjects = useRef(new Map<string, string>())
   const openProjects = useRef(new Set(initialProjects.current.map(pathKey)))
+  // Dropping a project can land on another one that is also gone, and the nested
+  // drop would read the list from a closure React has not re-rendered yet -- so
+  // it would put the project the outer drop just removed back in the sidebar.
+  const projectsRef = useRef(initialProjects.current)
   const selectProjectRef = useRef<(workspace: string) => Promise<string | undefined>>(async () => undefined)
+  const lastUsed = useRef(new Map<string, number>())
+  // Backends this window stopped on purpose, so their exit is not reported as a
+  // crash, and the conversation each one was on, so reselecting it comes back to
+  // the same place instead of a fresh session.
+  const reapedProjects = useRef(new Set<string>())
+  const reapedSessions = useRef(new Map<string, string>())
+  const viewsRef = useRef<Record<string, ProjectView>>({})
 
   const view = views[activeProject] || emptyView(activeProject)
   const { activeSession, attachment, busy, cancelling, checkpoints, draft, forkTree, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
@@ -494,6 +604,13 @@ function App() {
     })
   }
 
+  const markStarted = (workspace: string) => {
+    const key = pathKey(workspace)
+    startedProjects.current.set(key, workspace)
+    lastUsed.current.set(key, Date.now())
+    reapedProjects.current.delete(key)
+  }
+
   const sendGateway = <T,>(workspace: string, method: string, params: Record<string, unknown> = {}) => {
     const id = `desktop-${++requestId.current}`
     return new Promise<T>((resolve, reject) => {
@@ -503,7 +620,7 @@ function App() {
       void write().catch(async error => {
         if (!String(error).includes('gateway is not running')) throw error
         const resolved = await invoke<string>('gateway_start', { workspace })
-        startedProjects.current.add(pathKey(resolved))
+        markStarted(resolved)
         await write()
       }).catch(error => {
           pendingRequests.current.delete(id)
@@ -546,9 +663,14 @@ function App() {
       updateView(workspace, current => ({ ...current, models: result }))
     })
 
-  const hydrateProject = (workspace: string) =>
+  // `resumeId` restores a specific conversation rather than whatever a freshly
+  // started backend defaults to, which is a new empty one. The idle sweep needs
+  // this: stopping a backend must be invisible apart from the wait to restart it.
+  const hydrateProject = (workspace: string, resumeId?: string) =>
     Promise.all([
-      sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.current'),
+      resumeId
+        ? sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.resume', { id: resumeId })
+        : sendGateway<{ history: HistoryItem[]; info: SessionInfo }>(workspace, 'session.current'),
       sendGateway<{ choices: ResumeChoice[] }>(workspace, 'session.resume_choices'),
       sendGateway<{ checkpoints: CheckpointChoice[] }>(workspace, 'checkpoint.list'),
       sendGateway<{ skills: SkillInfo[] }>(workspace, 'skill.list'),
@@ -571,6 +693,45 @@ function App() {
     })
 
   useEffect(() => {
+    viewsRef.current = views
+  }, [views])
+
+  // One Python backend runs per open project and idles around 70 MB, so a project
+  // the user walked away from costs as much as the one they are working in. Its
+  // state is on disk, so stopping it is recoverable; reselecting it restarts the
+  // backend and resumes the same conversation. Only the idle timeout reclaims:
+  // capping the number of live backends would restart them while the user is
+  // switching between projects, which is when they are least willing to wait.
+  useEffect(() => {
+    const sweep = () => {
+      const active = pathKey(activeProjectRef.current)
+      const now = Date.now()
+      for (const [key, workspace] of [...startedProjects.current]) {
+        // Matched with pathKey rather than read by key: views are stored under the
+        // path the caller used, and a miss here would read as "not busy" and stop a
+        // backend in the middle of a turn.
+        const entry = Object.entries(viewsRef.current).find(([path]) => pathKey(path) === key)
+        const view = entry?.[1]
+        const waiting = [...pendingRequests.current.values()].some(item => samePath(item.workspace, workspace))
+        const idleFor = now - (lastUsed.current.get(key) ?? now)
+        if (key === active || waiting || view?.busy || view?.pendingApproval || idleFor < BACKEND_IDLE_MS) continue
+
+        reapedProjects.current.add(key)
+        const session = view?.activeSession || activeSessions.current.get(key) || ''
+        if (session) reapedSessions.current.set(key, session)
+        startedProjects.current.delete(key)
+        void invoke('gateway_stop', { workspace }).catch(() => {
+          reapedProjects.current.delete(key)
+          startedProjects.current.set(key, workspace)
+        })
+      }
+    }
+    const timer = window.setInterval(sweep, BACKEND_SWEEP_MS)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    projectsRef.current = projects
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects))
   }, [projects])
 
@@ -630,6 +791,9 @@ function App() {
       } catch {
         return
       }
+      // Anything a backend says counts as activity, which is what keeps a project
+      // running a long turn in the background out of the idle sweep's way.
+      lastUsed.current.set(pathKey(workspace), Date.now())
 
       if (message.id) {
         const pending = pendingRequests.current.get(message.id)
@@ -737,6 +901,7 @@ function App() {
           ? payload.fork_points as Array<{ kind: string; message_index: number }>
           : []
         const verification = payload.verification as VerificationStatus | undefined
+        const cutShort = stopReasonText(payload.status)
         const id = activeAssistants.current.get(eventKey)
         activeAssistants.current.delete(eventKey)
         updateView(workspace, current => {
@@ -746,6 +911,9 @@ function App() {
           items = verification
             ? items.map(item => item.id === 'verification-status' ? { ...item, text: verificationLabel(verification) } : item)
             : items.filter(item => item.id !== 'verification-status')
+          if (cutShort) {
+            items = [...items, { id: nextId('stop'), kind: 'system', text: cutShort }]
+          }
           const pendingForks = items.filter(item => item.kind === 'assistant' && item.forkIndex == null).length
           const forkOffset = Math.max(0, forkPoints.length - pendingForks)
           let assignedForks = 0
@@ -849,6 +1017,14 @@ function App() {
                 ? { ...item, text: payload.passed ? t('verification.pass') : t('verification.continuing') }
                 : item)
         }))
+      } else if (type === 'context.compacted') {
+        // Compaction rewrites history the user can still scroll back to, so it
+        // gets its own line rather than being left to be inferred.
+        const text = compactionText(payload as ContextCompaction)
+        updateView(workspace, current => ({
+          ...current,
+          items: [...current.items, { id: nextId('context'), kind: 'system', text }]
+        }))
       }
     }
 
@@ -859,6 +1035,13 @@ function App() {
         const key = pathKey(workspace)
         startedProjects.current.delete(key)
         if (!openProjects.current.has(key)) return
+        if (reapedProjects.current.delete(key)) {
+          // This window asked for the stop. Reclaiming an idle backend is
+          // housekeeping, so it is not reported as the crash the branch below
+          // describes; the project simply reads as not running.
+          updateView(workspace, current => ({ ...current, busy: false, status: 'idle' }))
+          return
+        }
         const reason = detail.trim() ? `\n${detail.trim().slice(-2000)}` : ''
         for (const [id, pending] of pendingRequests.current) {
           if (samePath(pending.workspace, workspace)) {
@@ -883,6 +1066,14 @@ function App() {
         }))
       })
       if (disposed) return
+      const present = await presentProjects(initialProjects.current)
+      if (disposed) return
+      if (present.length !== initialProjects.current.length) {
+        initialProjects.current = present
+        projectsRef.current = present
+        openProjects.current = new Set(present.map(pathKey))
+        setProjects(present)
+      }
       const saved = localStorage.getItem(ACTIVE_PROJECT_KEY) || ''
       const requested = initialProjects.current.find(path => samePath(path, saved)) || initialProjects.current[0]
       let trackedStartup = Boolean(requested)
@@ -894,7 +1085,7 @@ function App() {
         trackedStartup = false
         workspace = await invoke<string>('gateway_start', { workspace: null })
       }
-      startedProjects.current.add(pathKey(workspace))
+      markStarted(workspace)
       openProjects.current.add(pathKey(workspace))
       setExpandedProjects(current => new Set(current).add(pathKey(workspace)))
       activeProjectRef.current = workspace
@@ -1205,16 +1396,25 @@ function App() {
     }
     try {
       const resolved = await invoke<string>('gateway_start', { workspace: workspace || null })
-      startedProjects.current.add(pathKey(resolved))
+      const resumeId = reapedSessions.current.get(pathKey(resolved))
+      reapedSessions.current.delete(pathKey(resolved))
+      markStarted(resolved)
       openProjects.current.add(pathKey(resolved))
       if (tracked) rememberProject(resolved)
       else setDefaultWorkspace(resolved)
       if (expand) setExpandedProjects(current => new Set(current).add(pathKey(resolved)))
       activeProjectRef.current = resolved
       setActiveProject(resolved)
-      if (!wasStarted || !views[resolved]) await hydrateProject(resolved)
+      if (!wasStarted || !views[resolved]) await hydrateProject(resolved, resumeId)
       return resolved
     } catch (error) {
+      // A deleted folder fails here as a bare OS path error, which tells the user
+      // nothing they can act on. Check the folder itself: if it is gone the
+      // project cannot be opened again, so take it out rather than reporting it.
+      if (known && !(await directoryExists(known))) {
+        await dropMissingProject(known)
+        return undefined
+      }
       if (known) {
         updateView(known, current => ({
           ...current,
@@ -1278,25 +1478,20 @@ function App() {
     await selectProject(selected)
   }
 
-  const closeProject = async (event: MouseEvent, workspace: string) => {
-    event.stopPropagation()
-    try {
-      // Untrack it in the gateway registry too, or the next launch re-adds it.
-      await sendGateway(workspace, 'projects.forget', { workspace }).catch(() => undefined)
-      await invoke('gateway_stop', { workspace })
-    } catch (error) {
-      updateView(workspace, current => ({
-        ...current,
-        items: [...current.items, { id: nextId('close-project'), kind: 'system', text: String(error) }]
-      }))
-      return
-    }
-
+  /** Take a project out of this window, and say where the user ended up. */
+  const dropProject = async (workspace: string, reason = 'Project closed.') => {
     const key = pathKey(workspace)
     openProjects.current.delete(key)
     startedProjects.current.delete(key)
     activeSessions.current.delete(key)
-    activeAssistants.current.delete(key)
+    // Keyed per session, not per project, so a plain delete of the project key
+    // matched nothing and left an entry behind for every turn a close interrupted.
+    for (const entry of [...activeAssistants.current.keys()]) {
+      if (entry.startsWith(`${key}::`)) activeAssistants.current.delete(entry)
+    }
+    lastUsed.current.delete(key)
+    reapedProjects.current.delete(key)
+    reapedSessions.current.delete(key)
     setExpandedProjects(current => {
       const next = new Set(current)
       next.delete(key)
@@ -1304,11 +1499,12 @@ function App() {
     })
     for (const [id, pending] of pendingRequests.current) {
       if (samePath(pending.workspace, workspace)) {
-        pending.reject(new Error('Project closed.'))
+        pending.reject(new Error(reason))
         pendingRequests.current.delete(id)
       }
     }
-    const remaining = projects.filter(path => !samePath(path, workspace))
+    const remaining = projectsRef.current.filter(path => !samePath(path, workspace))
+    projectsRef.current = remaining
     setProjects(remaining)
     setViews(current => {
       const next = { ...current }
@@ -1318,11 +1514,42 @@ function App() {
       return next
     })
 
-    if (samePath(activeProject, workspace)) {
-      const next = remaining[0]
-      if (next) await selectProject(next)
-      else await selectWorkspace()
+    // The ref, not the state: a drop that lands on another missing project drops
+    // that one too, and the closure's copy still names the project already gone.
+    if (!samePath(activeProjectRef.current, workspace)) return activeProjectRef.current
+    return remaining[0] ? await selectProject(remaining[0]) : await selectWorkspace()
+  }
+
+  /** A project whose folder is gone cannot be opened, so stop carrying it. */
+  const dropMissingProject = async (workspace: string) => {
+    const landed = (await dropProject(workspace, 'Project folder is gone.')) || activeProjectRef.current
+    if (landed) {
+      updateView(landed, current => ({
+        ...current,
+        items: [...current.items, { id: nextId('missing-project'), kind: 'system', text: t('project.missing', { name: projectLabel(workspace) }) }]
+      }))
     }
+  }
+
+  const closeProject = async (event: MouseEvent, workspace: string) => {
+    event.stopPropagation()
+    try {
+      // Record the close in the shared registry, or the next launch shows the
+      // project again. Route it through a gateway that is already running:
+      // sendGateway starts one on demand, and starting a gateway for the
+      // project being closed would boot a whole backend to mark it closed --
+      // and mark it open on the way in.
+      const host = startedProjects.current.has(pathKey(workspace)) ? workspace : activeProject || workspace
+      await sendGateway(host, 'projects.close', { workspace }).catch(() => undefined)
+      await invoke('gateway_stop', { workspace })
+    } catch (error) {
+      updateView(workspace, current => ({
+        ...current,
+        items: [...current.items, { id: nextId('close-project'), kind: 'system', text: String(error) }]
+      }))
+      return
+    }
+    await dropProject(workspace)
   }
 
   const beginRenameConversation = (event: MouseEvent, workspace: string, session: ResumeChoice) => {
@@ -2063,7 +2290,7 @@ function App() {
                     rehypePlugins={markdownRehypePlugins}
                     remarkPlugins={markdownRemarkPlugins}
                   >
-                    {normalizeMarkdownMath(artifactPreview.content || '')}
+                    {normalizeMarkdown(artifactPreview.content || '')}
                   </ReactMarkdown>
                 ) : artifactPreview.kind === 'text' ? (
                   <pre>{artifactPreview.content}</pre>
@@ -2993,13 +3220,12 @@ function UserProfileSettingsForm({
 function modelDraft(profile?: ModelProfile, provider?: ModelProvider): ModelDraft {
   return {
     base_url: profile?.base_url || provider?.base_url || '',
-    context_window: profile?.context_window || 353000,
+    context_window: profile?.context_window || 300000,
     id: profile?.id || '',
     max_output_tokens: profile?.max_output_tokens || 65536,
     model: profile?.model || provider?.models[0]?.id || '',
     name: profile?.name || '',
-    provider: profile?.provider || provider?.id || '',
-    run_token_budget: profile?.run_token_budget || 2824000
+    provider: profile?.provider || provider?.id || ''
   }
 }
 
@@ -3083,7 +3309,7 @@ function SkillBrowser({
                 rehypePlugins={markdownRehypePlugins}
                 remarkPlugins={markdownRemarkPlugins}
               >
-                {normalizeMarkdownMath(detail.content)}
+                {normalizeMarkdown(detail.content)}
               </ReactMarkdown>
             </div>
           </article>
@@ -3203,6 +3429,9 @@ function timelineFromHistory(history: HistoryItem[]) {
     forkIndex: item.kind === 'assistant' ? item.message_index : undefined,
     images: item.images,
     kind: item.kind,
+    // Saved with the reply, so reopening a conversation keeps the figures that
+    // were shown when it was answered.
+    metrics: item.metrics,
     name: item.name,
     status: item.status,
     text: item.text,
@@ -3339,7 +3568,7 @@ function TimelineRow({
             rehypePlugins={markdownRehypePlugins}
             remarkPlugins={markdownRemarkPlugins}
           >
-            {normalizeMarkdownMath(item.text)}
+            {normalizeMarkdown(item.text)}
           </ReactMarkdown>
         </div>
         {item.images?.length ? (
@@ -3480,7 +3709,7 @@ function ThinkingRow({ item, onOpenLink }: { item: TimelineItem; onOpenLink: (ur
           rehypePlugins={markdownRehypePlugins}
           remarkPlugins={markdownRemarkPlugins}
         >
-          {normalizeMarkdownMath(item.text || '…')}
+          {normalizeMarkdown(item.text || '…')}
         </ReactMarkdown>
       </div>
     </details>
@@ -3633,12 +3862,42 @@ function toolGroupLabel(items: TimelineItem[], status: NonNullable<TimelineItem[
   return joinActivity(keys.map(key => t(`tool.${key}.did`)))
 }
 
+/**
+ * One level and several running totals, which is why the line needs care.
+ *
+ * The window figure is how full the conversation is right now. The token counts
+ * are sums over every request the turn made, and a turn that used ten tools made
+ * ten requests, each re-sending the whole conversation -- so the input total runs
+ * far ahead of the window and reads like a contradiction unless the request count
+ * is there to explain it. Cache is quoted inside the input it is part of, for the
+ * same reason: beside it, it looked like a second, larger context.
+ */
 function MetricsLine({ metrics }: { metrics: Metrics }) {
   const mark = metrics.estimated_tokens ? '~' : ''
-  const input = metrics.input_tokens == null ? 'n/a' : `${mark}${metrics.input_tokens}`
-  const output = metrics.output_tokens == null ? 'n/a' : `${mark}${metrics.output_tokens}`
-  const seconds = metrics.elapsed_ms == null ? 'n/a' : `${(metrics.elapsed_ms / 1000).toFixed(1)}s`
-  return <div className="metrics">in {input} · out {output} · {seconds}</div>
+  const parts: string[] = []
+  if (metrics.window_tokens != null && metrics.window) {
+    parts.push(
+      t('metrics.window', {
+        percent: `${Math.round((metrics.window_tokens / metrics.window) * 100)}%`,
+        total: shortTokens(metrics.window),
+        // Occupancy is always Friday's own estimate, never a provider count.
+        used: `~${shortTokens(metrics.window_tokens)}`
+      })
+    )
+  }
+  if (metrics.requests) {
+    parts.push(t(metrics.requests === 1 ? 'metrics.request' : 'metrics.requests', { count: String(metrics.requests) }))
+  }
+  parts.push(
+    t('metrics.cost', {
+      // Zero included: an absent figure reads the same as a cache that never hit.
+      cached: metrics.cached_tokens == null ? 'n/a' : shortTokens(metrics.cached_tokens),
+      input: metrics.input_tokens == null ? 'n/a' : `${mark}${shortTokens(metrics.input_tokens)}`,
+      output: metrics.output_tokens == null ? 'n/a' : `${mark}${shortTokens(metrics.output_tokens)}`
+    })
+  )
+  parts.push(metrics.elapsed_ms == null ? 'n/a' : `${(metrics.elapsed_ms / 1000).toFixed(1)}s`)
+  return <div className="metrics" title={t('metrics.explain')}>{parts.join(' · ')}</div>
 }
 
 function sessionLabel(session: ResumeChoice) {

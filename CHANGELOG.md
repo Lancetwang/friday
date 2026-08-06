@@ -2,6 +2,22 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.3 - Runs that do not stop, and a context window that explains itself (2026-08-06)
+
+- A turn no longer ends because it took too many steps or spent too much. The context window is the only bound left, and compaction is what keeps a run inside it, so a long task now runs until the work is done. `run_token_budget` is still accepted in existing configuration files and no longer enforces anything.
+- Compaction now happens mid-run instead of only between turns, and in two stages: tool results are reclaimed first when that frees at least a quarter of the window, because their full output stays on disk and nothing the user wrote is touched; only when that is not enough is the conversation itself summarised. A run continues through both.
+- Compaction rewrites what the model is sent, not what you read. Messages it takes out of the prompt are kept with the session, so the conversation on screen only ever grows, and forking still points at the message you picked.
+- Fixed compaction failing outright and printing raw XML into the conversation. It no longer runs as a tool-using agent inside a step-limited flow, strips markup from what the model returns, and falls back to a locally written summary when the model cannot produce one. Both the desktop and the TUI say when it happened and what it did.
+- A turn that a guard ends early now says so in both the desktop and the TUI, instead of arriving looking exactly like a finished answer.
+- Each reply now keeps the figures it was answered with. They were held only in the live event that delivered them, so switching conversations or reopening one left every earlier reply blank.
+- The metrics line now reads as what it is: the context figure is how full the conversation is, and the token counts are totals over every request the turn made. The request count is shown, because it is what explains an input total far larger than the context, and cache is quoted inside the input it is part of rather than beside it, where it looked like a second, larger context.
+- A conversation now appears in the sidebar the moment you send the first message, rather than when the reply arrives, so there is no longer a stretch where a new conversation shows no sign of existing.
+- Tool output is capped before it reaches the model, so a single command cannot fill the window in one step.
+- The default context window is now 300K.
+- Projects you closed stay closed, and a project whose folder you deleted is dropped from the sidebar instead of failing to open with a raw operating-system path error. On Windows the same workspace could be registered twice under two spellings of its path, which is why closing a project did not always stick and why the sidebar could list one project as two.
+- Fixed bold text printing its asterisks in Chinese output. `**注意：**内容` is ordinary Chinese and CommonMark refuses to close emphasis there; the punctuation now moves just outside the marker so it renders. Code spans and code blocks are left exactly as written.
+- The desktop starts lighter and reclaims what it is not using: the model SDK is loaded on first use rather than at startup, and a project left idle has its backend stopped and restarted when you return to it.
+
 ## v0.1.2 - Verification feedback and sidebar polish (2026-08-05)
 
 - A failed verification now carries the verifier's reason in the desktop UI instead of stopping at a bare error label, and the verifier gets enough output tokens for thinking models to finish writing their verdict instead of being cut off before the JSON arrives.

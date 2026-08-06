@@ -57,6 +57,44 @@ class TurnTests(unittest.TestCase):
         self.assertEqual(save_turn.call_args.kwargs["user_message_times"][0]["text"], "hello")
         self.assertEqual(result.context.events, [])
 
+    def test_metrics_separate_window_occupancy_from_what_the_turn_cost(self) -> None:
+        """Occupancy is a level; cost is a total. They must not be read as one number.
+
+        Because an append-only conversation is re-sent on every step, cumulative
+        usage runs far ahead of how full the window actually is. Reporting only
+        the total is what makes a mostly-empty window look full.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            context = RunContext(
+                metadata={"workspace": tmp, "session_id": "s1", "friday.model_config": {"context_window": 300000}}
+            )
+            agent = type("Agent", (), {"instructions": "test"})()
+
+            def chat(*args, **kwargs):
+                context.add_message("assistant", "x" * 4000)
+                for _ in range(3):
+                    context.record_model_usage({"prompt_tokens": 300000, "completion_tokens": 100})
+                    context.observe(
+                        "model.response.payload",
+                        category="model",
+                        data={"message": {"usage": {"prompt_cache_hit_tokens": 250000}}},
+                    )
+                return LoopResult(answer="done")
+
+            with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
+                with patch("friday.turn.build_tools", return_value=[]):
+                    with patch("friday.turn.run_loop", side_effect=chat):
+                        with patch("friday.turn.write_trace"):
+                            with patch("friday.turn.save_turn"):
+                                result = run_turn(agent, context, "hello", stream=False)
+
+        metrics = result.metrics
+        self.assertEqual(metrics["input_tokens"], 900000)
+        self.assertEqual(metrics["cached_tokens"], 750000)
+        self.assertEqual(metrics["window"], 300000)
+        self.assertLess(metrics["window_tokens"], 2000)
+        self.assertLess(metrics["window_tokens"], metrics["input_tokens"])
+
     def test_rejection_guidance_is_a_user_message_not_tool_data(self) -> None:
         context = RunContext()
         context.add_message(

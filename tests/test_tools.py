@@ -14,17 +14,18 @@ from agent_core import Agent, RunContext, reset_current_context, set_current_con
 
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _pinned_core_version, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
+from friday.compaction import COMPACT_TARGET_RATIO, LAST_COMPACTION, announce_compaction, clean_summary, compact_in_place, compaction_record, fit_recent_steps, fit_recent_turns, split_memory_section, summary_is_usable, transcript
 from friday.config import DEFAULT_MODEL_CONFIG, build_model, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, save_model_profile, save_web_search_settings
-from friday.context import _context_text, compact_tool_results, context_report
+from friday.context import TOOL_COMPACT_AT, _context_text, compact_tool_results, context_ratio, context_report, should_compact_conversation, should_compact_tools, tool_compaction_gain
 from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
 from friday.model_options import supports_thinking, thinking_request_kwargs
 from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.skills import discover_skills, skill_routing
-from friday.state import delete_session, rename_session
+from friday.state import archived_messages, conversation_body, delete_session, hydrate, read_session, rename_session, session_path, state_from_snapshot, transcript_messages
 from friday.storage import project_state_dir, workspace_key
-from friday.tools import APPROVAL_FILE, PERMISSIONS_FILE, _dangerous_shell, _hard_denied_shell, _permission_decision, _read_response, allow_permissions_for_session, approve_pending, build_tools, pending_approval
+from friday.tools import APPROVAL_FILE, MAX_TOOL_OUTPUT_CHARS, PERMISSIONS_FILE, _dangerous_shell, _hard_denied_shell, _permission_decision, _read_response, allow_permissions_for_session, approve_pending, build_tools, pending_approval
 from friday.verification import VERIFIER_MAX_STEPS, needs_verification, parse_verification, verification_prompt, verify_friday
 
 
@@ -163,6 +164,38 @@ class ToolTests(unittest.TestCase):
             self.assertIn("1: line-0", artifact.read_text(encoding="utf-8"))
             self.assertIn("20: line-19", artifact.read_text(encoding="utf-8"))
             self.assertIn(result["full_output_path"], result["content"])
+
+    def test_a_tool_cannot_be_asked_for_more_output_than_the_ceiling(self) -> None:
+        """Size arguments are model-chosen, and the window is re-sent every step.
+
+        A single unbounded result would both crowd out the conversation and
+        multiply the cost of every step after it, so the request is capped and
+        the rest stays on disk behind a pointer.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            tools["Write"]("huge.txt", "\n".join(f"line-{index}-" + "x" * 200 for index in range(2000)))
+
+            read = tools["Read"]("huge.txt", line_count=2000, max_chars=10_000_000)
+
+            self.assertLessEqual(len(read["content"]), MAX_TOOL_OUTPUT_CHARS)
+            self.assertTrue(read["output_truncated"])
+            self.assertIn(read["full_output_path"], read["content"])
+
+    def test_match_listing_tools_cap_the_requested_result_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
+            for index in range(30):
+                tools["Write"](f"file{index}.txt", "needle\n" * 3)
+
+            with patch("friday.tools.MAX_TOOL_MATCHES", 5):
+                glob = tools["Glob"]("*.txt", max_results=10_000)
+                grep = tools["Grep"]("needle", path_glob="*.txt", max_results=10_000)
+
+            self.assertEqual(glob["count"], 5)
+            self.assertEqual(grep["count"], 5)
 
     def test_read_can_open_central_tool_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
@@ -918,10 +951,23 @@ class ResetTests(unittest.TestCase):
             self.assertEqual(config.context_window, 200000)
             self.assertEqual(config.max_output_tokens, 4096)
 
-    def test_default_model_budget_is_353k_with_64k_output(self) -> None:
-        self.assertEqual(DEFAULT_MODEL_CONFIG.context_window, 353000)
+    def test_default_model_budget_is_300k_with_64k_output(self) -> None:
+        self.assertEqual(DEFAULT_MODEL_CONFIG.context_window, 300000)
         self.assertEqual(DEFAULT_MODEL_CONFIG.max_output_tokens, 65536)
-        self.assertEqual(DEFAULT_MODEL_CONFIG.run_token_budget, 2824000)
+        self.assertEqual(DEFAULT_MODEL_CONFIG.run_token_budget, 40000000)
+
+    def test_no_guard_reads_the_run_token_budget(self) -> None:
+        """The field survives for old config files; nothing may enforce it.
+
+        It once acted as a step limit by accident: every step re-sends the
+        conversation, so cumulative usage grows with the square of the step count
+        and crossed the ceiling while the window was still mostly empty.
+        """
+        sources = "\n".join(
+            (Path(__file__).resolve().parents[1] / "src" / "friday" / name).read_text(encoding="utf-8")
+            for name in ("agent_flow.py", "loop.py", "turn.py")
+        )
+        self.assertNotIn("run_token_budget", sources)
 
     def test_deepseek_thinking_effort_maps_to_off_low_high_and_max(self) -> None:
         self.assertEqual(
@@ -1027,8 +1073,8 @@ class ResetTests(unittest.TestCase):
                 {"thinking": {"type": "enabled"}},
             )
             self.assertIn("flow", agent_class.call_args.kwargs)
-            self.assertEqual(context.metadata["friday.model_config"]["context_window"], 353000)
-            self.assertEqual(context.metadata["friday.model_config"]["run_token_budget"], 2824000)
+            self.assertEqual(context.metadata["friday.model_config"]["context_window"], 300000)
+            self.assertEqual(context.metadata["friday.model_config"]["run_token_budget"], 40000000)
 
 
 @patch.dict(os.environ, {"LLM_API_KEY": "test", "LLM_MODEL": "test"})
@@ -1388,8 +1434,13 @@ class CompactTests(unittest.TestCase):
             context = RunContext()
             context.add_message("system", "## Runtime\nrules\n\n## Skills\nfriday skill list --json")
             context.add_message("user", "hello")
-            context.metadata["friday.last_usage"] = {"input_tokens": 123, "output_tokens": 7}
-            context.metadata["friday.model_config"] = {"context_window": 353000}
+            context.metadata["friday.last_usage"] = {
+                "cached_tokens": 96,
+                "input_tokens": 123,
+                "output_tokens": 7,
+                "requests": 4,
+            }
+            context.metadata["friday.model_config"] = {"context_window": 300000}
             tools = build_tools(root, root / ".friday")
 
             report = context_report(context, tools)
@@ -1398,9 +1449,11 @@ class CompactTests(unittest.TestCase):
             self.assertIn("skill routing", report)
             self.assertIn("tool schemas", report)
             self.assertIn("messages", report)
-            self.assertIn("input 123 / output 7 / total 130", report)
-            self.assertIn("last turn usage (provider)", report)
-            self.assertIn("window: 353000 tokens", report)
+            self.assertIn("input 123 / output 7 / cached 96 / total 130", report)
+            self.assertIn("last turn cost (provider, summed over 4 requests)", report)
+            self.assertIn("window: 300000 tokens", report)
+            self.assertIn("in the window now:", report)
+            self.assertIn("compaction starts at: 255000 tokens (85%)", report)
             self.assertIn("Local est. tokens", report)
 
     def test_tool_result_compaction_simplifies_without_dropping_fields(self) -> None:
@@ -1493,46 +1546,43 @@ class CompactTests(unittest.TestCase):
             self.assertIsNot(agent, fake_agent)
             self.assertIn("conversation compacted", notice)
 
-    def test_compact_saves_memory_and_summarizes_in_one_pass(self) -> None:
-        class FakeAgent:
-            def __init__(self) -> None:
-                self.prompts = []
+    def _compaction_context(self, root: Path) -> RunContext:
+        context = RunContext(metadata={"workspace": str(root), "session_id": "session-1"})
+        for index in range(12):
+            context.add_message("user", f"user-{index}")
+            context.add_message("assistant", f"assistant-{index}")
+        context.messages[-1]["tool_calls"] = [
+            {"id": "call-1", "type": "function", "function": {"name": "Read", "arguments": '{"path":"x"}'}}
+        ]
+        context.add_message("tool", "full tool result", tool_call_id="call-1")
+        context.add_message("assistant", "final assistant-11")
+        return context
 
-            def chat(self, prompt, *args, **kwargs) -> str:
-                self.prompts.append(prompt)
-                return "Continue with the memory harness work."
+    def test_compact_summarizes_without_tools_and_keeps_recent_turns(self) -> None:
+        summary = "## Current Goal\nShip the memory harness.\n\n## Next Steps\nRun the suite.\n\n## Memory\n- The user works in UTC+8."
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             friday_dir = root / ".friday"
             friday_dir.mkdir()
             (friday_dir / "MEMORY.md").write_text("# Project Memory\n", encoding="utf-8")
-            old_context = (friday_dir / "MEMORY.md").read_text(encoding="utf-8")
+            project_memory = (friday_dir / "MEMORY.md").read_text(encoding="utf-8")
+            context = self._compaction_context(root)
 
-            context = RunContext(metadata={"workspace": str(root), "session_id": "session-1"})
-            for index in range(12):
-                context.add_message("user", f"user-{index}")
-                context.add_message("assistant", f"assistant-{index}")
-            context.messages[-1]["tool_calls"] = [
-                {"id": "call-1", "type": "function", "function": {"name": "Read", "arguments": '{"path":"x"}'}}
-            ]
-            context.add_message("tool", "full tool result", tool_call_id="call-1")
-            context.add_message("assistant", "final assistant-11")
-            fake_agent = FakeAgent()
-
-            def fake_build(workspace, *, stream=True):
-                return object(), RunContext()
-
-            with patch("friday.app.build_friday", side_effect=fake_build):
+            with patch("friday.app.build_friday", side_effect=lambda workspace, **kwargs: (object(), RunContext())):
                 with patch("friday.app.save_session_state") as save_state:
-                    agent, new_context, summary = compact_friday(fake_agent, context, stream=False)
+                    with patch("friday.compaction.summarize_conversation", return_value=summary) as summarize:
+                        with patch("friday.app.add_memory") as add:
+                            _agent, new_context, returned = compact_friday(object(), context, stream=False)
 
-            # Single in-band pass: one chat carrying both the memory step and the schema.
-            self.assertEqual(len(fake_agent.prompts), 1)
-            self.assertIn("friday memory add --scope episode", fake_agent.prompts[0])
-            self.assertIn("## Current Goal", fake_agent.prompts[0])
-            self.assertNotIn("## Recent Conversations", fake_agent.prompts[0])
-            self.assertEqual(summary, "Continue with the memory harness work.")
+            # One tool-free model call, so the tool loop's step budget and the
+            # loop guard cannot abort compaction half way through.
+            summarize.assert_called_once()
+            self.assertEqual(add.call_args.args[1:], ("episode", "The user works in UTC+8."))
+            # Memory leaves the session; it must not come back in the next prompt.
+            self.assertNotIn("## Memory", returned)
+            self.assertIn("Ship the memory harness.", returned)
+
             self.assertEqual(new_context.metadata["session_id"], "session-1")
             self.assertIn("## Session Summary", new_context.messages[0]["content"])
             self.assertEqual(new_context.messages[1]["content"], "user-2")
@@ -1543,8 +1593,89 @@ class CompactTests(unittest.TestCase):
             self.assertEqual(new_context.messages[-2]["content"], "full tool result")
             self.assertEqual(new_context.messages[-1]["content"], "final assistant-11")
             self.assertEqual(new_context.messages[-3]["tool_calls"][0]["id"], "call-1")
-            self.assertFalse((root / ".friday" / "STATE.md").exists())
-            self.assertEqual(old_context, (friday_dir / "MEMORY.md").read_text(encoding="utf-8"))
+            self.assertEqual(project_memory, (friday_dir / "MEMORY.md").read_text(encoding="utf-8"))
+
+            record = new_context.metadata[LAST_COMPACTION]
+            self.assertTrue(record["ok"])
+            self.assertFalse(record["fallback"])
+            self.assertEqual(record["memories"], ["The user works in UTC+8."])
+
+    def test_compact_falls_back_to_a_local_summary_when_the_model_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = self._compaction_context(root)
+            restore_progress(context, {"objective": "Ship the harness", "next_action": "Run the suite"})
+
+            with patch("friday.app.build_friday", side_effect=lambda workspace, **kwargs: (object(), RunContext())):
+                with patch("friday.app.save_session_state"):
+                    with patch("friday.compaction.summarize_conversation", side_effect=RuntimeError("provider down")):
+                        _agent, new_context, summary = compact_friday(object(), context, stream=False)
+
+            # A provider outage must not end the session: Friday writes the
+            # summary itself from progress it already owns.
+            self.assertIn("Ship the harness", summary)
+            self.assertIn("Run the suite", summary)
+            record = new_context.metadata[LAST_COMPACTION]
+            self.assertTrue(record["ok"])
+            self.assertTrue(record["fallback"])
+            self.assertIn("provider down", record["reason"])
+
+    def test_compact_rejects_a_reply_that_is_a_tool_call_written_as_text(self) -> None:
+        leaked = '<tool_calls>\n<invoke name="Bash">\n<parameter name="command">friday memory add</parameter>\n</invoke>\n</tool_calls>'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = self._compaction_context(root)
+
+            with patch("friday.app.build_friday", side_effect=lambda workspace, **kwargs: (object(), RunContext())):
+                with patch("friday.app.save_session_state"):
+                    with patch("friday.compaction.summarize_conversation", return_value=leaked):
+                        _agent, new_context, summary = compact_friday(object(), context, stream=False)
+
+            self.assertNotIn("<invoke", summary)
+            self.assertNotIn("tool_calls", summary)
+            self.assertIn("## Current Goal", summary)
+            self.assertTrue(new_context.metadata[LAST_COMPACTION]["fallback"])
+
+    def test_compact_returns_the_original_pair_when_the_rebuild_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = self._compaction_context(root)
+            agent = object()
+
+            with patch("friday.app.build_friday", side_effect=RuntimeError("no api key")):
+                with patch("friday.compaction.summarize_conversation", return_value="## Current Goal\nx" * 40):
+                    same_agent, same_context, summary = compact_friday(agent, context, stream=False)
+
+            # The turn continues on the untouched pair rather than dying inside
+            # the machinery that was supposed to keep it alive.
+            self.assertIs(same_agent, agent)
+            self.assertIs(same_context, context)
+            self.assertEqual(summary, "")
+            record = context.metadata[LAST_COMPACTION]
+            self.assertFalse(record["ok"])
+            self.assertIn("no api key", record["reason"])
+
+    def test_compact_drops_recent_turns_until_the_rebuild_fits_the_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = RunContext(metadata={"workspace": str(root), "session_id": "session-1"})
+            for index in range(12):
+                context.add_message("user", f"user-{index} " + "x" * 4000)
+                context.add_message("assistant", f"assistant-{index} " + "y" * 4000)
+
+            with patch("friday.app.build_friday", side_effect=lambda workspace, **kwargs: (object(), RunContext())):
+                with patch("friday.app.save_session_state"):
+                    with patch("friday.compaction.summarize_conversation", return_value="## Current Goal\nkeep going"):
+                        with patch.dict("os.environ", {"FRIDAY_CONTEXT_WINDOW": "20000"}):
+                            _agent, new_context, _summary = compact_friday(object(), context, stream=False)
+
+            # Keeping all ten turns would leave the rebuilt context above the
+            # compaction threshold, so the next turn would compact again forever.
+            record = new_context.metadata[LAST_COMPACTION]
+            self.assertLess(record["kept_turns"], 10)
+            self.assertLess(record["after_tokens"], record["before_tokens"])
+            self.assertLess(record["after_tokens"], int(20000 * COMPACT_TARGET_RATIO))
 
     def test_session_state_update_does_not_add_a_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1556,6 +1687,236 @@ class CompactTests(unittest.TestCase):
                 saved = json.loads((project_state_dir(root) / "sessions" / "session-1.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved["turns"], 1)
                 self.assertEqual(saved["messages"][0]["content"], "summary")
+
+
+class CompactionKernelTests(unittest.TestCase):
+    def test_clean_summary_strips_tool_call_markup_from_prose(self) -> None:
+        raw = (
+            "## Current Goal\nShip it.\n"
+            '<tool_calls>\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>\n</tool_calls>\n'
+            "## Next Steps\nRun tests."
+        )
+
+        cleaned = clean_summary(raw)
+
+        self.assertNotIn("<", cleaned)
+        self.assertIn("## Current Goal", cleaned)
+        self.assertIn("## Next Steps", cleaned)
+
+    def test_summary_is_usable_rejects_junk_and_accepts_session_state(self) -> None:
+        self.assertFalse(summary_is_usable(""))
+        self.assertFalse(summary_is_usable("Sure, I will compact the conversation for you now."))
+        self.assertFalse(summary_is_usable('## Current Goal\n<invoke name="Bash">' + "x" * 60))
+        self.assertTrue(summary_is_usable("## Current Goal\n" + "Finish the migration. " * 5))
+
+    def test_split_memory_section_separates_durable_facts(self) -> None:
+        summary = "## Current Goal\nShip it.\n\n## Memory\n- The user prefers Chinese.\n- none\n\n## Next Steps\nRun tests."
+
+        remainder, facts = split_memory_section(summary)
+
+        self.assertEqual(facts, ["The user prefers Chinese."])
+        self.assertNotIn("## Memory", remainder)
+        self.assertIn("## Next Steps", remainder)
+
+    def test_transcript_keeps_both_ends_and_reports_what_it_dropped(self) -> None:
+        messages = [
+            {"role": "system", "content": "rules"},
+            {"role": "user", "content": "first request"},
+            {"role": "assistant", "content": "opening reply"},
+            *({"role": "user", "content": f"middle {index} " + "x" * 500} for index in range(40)),
+            {"role": "assistant", "content": "latest reply"},
+        ]
+
+        rendered = transcript(messages, 4000)
+
+        self.assertNotIn("rules", rendered)
+        self.assertIn("first request", rendered)
+        self.assertIn("latest reply", rendered)
+        self.assertIn("earlier messages omitted", rendered)
+        self.assertLess(len(rendered), 8000)
+
+    def test_fit_recent_turns_never_starts_the_body_with_an_orphan_tool_result(self) -> None:
+        messages = [
+            {"role": "user", "content": "do it"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "Read"}}]},
+            {"role": "tool", "content": "result", "tool_call_id": "c1"},
+            {"role": "assistant", "content": "done"},
+        ]
+
+        body, kept = fit_recent_turns(messages, budget_tokens=10_000)
+
+        self.assertEqual(kept, 10)
+        self.assertEqual(body[0]["role"], "user")
+        self.assertNotEqual(body[0]["role"], "tool")
+
+    def test_fit_recent_turns_shrinks_the_tail_to_meet_a_small_budget(self) -> None:
+        messages = []
+        for index in range(10):
+            messages.append({"role": "user", "content": f"turn {index} " + "x" * 4000})
+            messages.append({"role": "assistant", "content": "y" * 4000})
+
+        body, kept = fit_recent_turns(messages, budget_tokens=1200)
+
+        self.assertLess(kept, 10)
+        self.assertLess(sum(len(str(message["content"])) for message in body), 20000)
+
+    def test_fit_recent_steps_shrinks_a_single_turn_that_turns_cannot(self) -> None:
+        """One request is one turn, so only the tool cycle can be the unit.
+
+        A long agentic run has a single user message. Cutting on turns leaves its
+        whole history in place, which is why a run used to hit the window and stop
+        no matter how much compaction it was offered.
+        """
+        messages: list[dict[str, Any]] = [{"role": "user", "content": "do the whole job"}]
+        for index in range(8):
+            messages.append({"role": "assistant", "content": "", "tool_calls": [{"id": f"c{index}", "function": {"name": "Read"}}]})
+            messages.append({"role": "tool", "content": "z" * 4000, "tool_call_id": f"c{index}"})
+
+        whole_turn, turns_kept = fit_recent_turns(messages, budget_tokens=1200)
+        tail, cycles = fit_recent_steps(messages, budget_tokens=1200)
+
+        self.assertEqual(len(whole_turn), len(messages), "turn-based selection cannot shrink one turn")
+        self.assertEqual(turns_kept, 1)
+        self.assertLess(len(tail), len(messages))
+        self.assertEqual(cycles, 1)
+        self.assertEqual([message["role"] for message in tail], ["assistant", "tool"])
+
+    def test_fit_recent_steps_keeps_the_newest_cycle_even_with_no_budget(self) -> None:
+        """Some live context always beats none, and a cycle is never split."""
+        messages = [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "Read"}}]},
+            {"role": "tool", "content": "x" * 90_000, "tool_call_id": "c1"},
+        ]
+
+        tail, cycles = fit_recent_steps(messages, budget_tokens=0)
+
+        self.assertEqual(cycles, 1)
+        self.assertEqual([message["role"] for message in tail], ["assistant", "tool"])
+        self.assertEqual(fit_recent_steps([{"role": "user", "content": "go"}], budget_tokens=0), ([], 0))
+
+    def _summarizing_context(self, cycles: int = 6) -> tuple[RunContext, list[str]]:
+        context = RunContext(metadata={"friday.model_config": {"context_window": 2000}, "session_id": "s1"})
+        context.add_message("system", "You are Friday.")
+        context.add_message("user", "do the whole job")
+        spoken = ["do the whole job"]
+        for index in range(cycles):
+            reply, result = f"working on part {index}", f"edited {index} " + "z" * 1500
+            context.add_message("assistant", reply, tool_calls=[{"id": f"c{index}", "type": "function", "function": {"name": "Edit", "arguments": "{}"}}])
+            context.add_message("tool", result, tool_call_id=f"c{index}")
+            spoken.extend([reply, result])
+        return context, spoken
+
+    @staticmethod
+    def _summarizer() -> Mock:
+        summarizer = Mock()
+        summarizer.chat_message.return_value = {
+            "role": "assistant",
+            "content": "## Current Goal\nkeep going\n\n## Next Steps\nmore",
+        }
+        return summarizer
+
+    def test_compaction_shrinks_the_prompt_without_shrinking_the_transcript(self) -> None:
+        """Compaction is about what the model is sent, not what the session has.
+
+        The window is the model's constraint, not the user's: work they can still
+        scroll back to must survive being dropped from the prompt, and Friday's own
+        scaffolding for the model must not appear in its place.
+        """
+        context, spoken = self._summarizing_context()
+
+        with patch("friday.compaction.build_model", return_value=self._summarizer()):
+            compact_in_place(context)
+
+        prompt = conversation_body(context.get_messages())
+        transcript = transcript_messages(context)
+
+        self.assertLess(len(prompt), len(transcript))
+        self.assertEqual([str(message.get("content") or "") for message in transcript], spoken)
+        self.assertNotIn("Session Summary", "".join(str(message.get("content") or "") for message in transcript))
+
+    def test_repeated_compaction_neither_duplicates_nor_loses_the_transcript(self) -> None:
+        """The archive accumulates across passes, and the tail it replays is not counted twice."""
+        context, spoken = self._summarizing_context(cycles=4)
+        summarizer = self._summarizer()
+
+        for round_number in range(3):
+            with patch("friday.compaction.build_model", return_value=summarizer):
+                compact_in_place(context)
+            self.assertEqual(
+                [str(message.get("content") or "") for message in transcript_messages(context)],
+                spoken,
+                f"transcript drifted after compaction {round_number + 1}",
+            )
+            for index in range(4, 8):
+                reply, result = f"later work {round_number}-{index}", f"result {round_number}-{index} " + "z" * 1500
+                context.add_message("assistant", reply, tool_calls=[{"id": f"r{round_number}{index}", "type": "function", "function": {"name": "Edit", "arguments": "{}"}}])
+                context.add_message("tool", result, tool_call_id=f"r{round_number}{index}")
+                spoken.extend([reply, result])
+
+    def test_a_reloaded_session_still_has_what_compaction_dropped(self) -> None:
+        """Saving the compacted prompt must not be what the user gets back."""
+        context, spoken = self._summarizing_context()
+        with patch("friday.compaction.build_model", return_value=self._summarizer()):
+            compact_in_place(context)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            with patch("friday.storage.Path.home", return_value=Path(tmp) / "home"):
+                save_turn(root, "do the whole job", "done", "s1", context.get_messages(), {}, archived=archived_messages(context))
+                snapshot = read_session(session_path(root, "s1"))
+
+            state = state_from_snapshot(snapshot)
+            fresh = RunContext(metadata={"friday.model_config": {"context_window": 2000}})
+            fresh.add_message("system", "A fresh prefix.")
+            hydrate(fresh, state)
+
+            self.assertLess(len(snapshot["messages"]), len(spoken))
+            self.assertEqual([str(message.get("content") or "") for message in transcript_messages(fresh)], spoken)
+
+    def test_tool_results_are_compacted_only_when_that_frees_enough_to_matter(self) -> None:
+        """Losing tool detail has to buy something; a few percent is not worth it.
+
+        A result whose full output is on disk can be reclaimed without losing
+        anything, so it is tried first -- but only when the probe says it moves the
+        window. Otherwise the conversation is summarized instead.
+        """
+        reclaimable = json.dumps({"output": "x" * 14000, "full_output_path": ".friday/tool-results/a.txt"})
+
+        worth_it = RunContext(metadata={"friday.model_config": {"context_window": 3000}})
+        worth_it.add_message("user", "go")
+        worth_it.add_message("assistant", "", tool_calls=[{"id": "a", "type": "function", "function": {"name": "Read", "arguments": "{}"}}])
+        worth_it.add_message("tool", reclaimable, tool_call_id="a")
+
+        not_worth_it = RunContext(metadata={"friday.model_config": {"context_window": 3000}})
+        not_worth_it.add_message("user", "go")
+        not_worth_it.add_message("assistant", "prose that the probe cannot reclaim " + "y" * 40000)
+        not_worth_it.add_message("assistant", "", tool_calls=[{"id": "b", "type": "function", "function": {"name": "Read", "arguments": "{}"}}])
+        not_worth_it.add_message("tool", json.dumps({"output": "x" * 60, "full_output_path": ".friday/tool-results/b.txt"}), tool_call_id="b")
+
+        self.assertTrue(should_compact_tools(worth_it))
+        self.assertGreaterEqual(tool_compaction_gain(worth_it), 0.25)
+        self.assertFalse(should_compact_tools(not_worth_it))
+        self.assertLess(tool_compaction_gain(not_worth_it), 0.25)
+        self.assertTrue(should_compact_conversation(not_worth_it))
+
+    def test_turn_start_compaction_is_announced_once_with_measurements(self) -> None:
+        events: list[Any] = []
+        notices: list[dict[str, Any]] = []
+        context = RunContext(metadata={"workspace": ".", LAST_COMPACTION: {
+            "kind": "conversation",
+            "ok": True,
+            "before_tokens": 90000,
+            "after_tokens": 30000,
+        }})
+        context.on_event = events.append
+
+        announce_compaction(context, compaction_record(context.metadata[LAST_COMPACTION]), notices.append)
+
+        self.assertEqual([event.type for event in events], ["context.compacted"])
+        self.assertEqual(notices[0]["notice"], "conversation compacted: 90000 -> 30000 tokens")
+        self.assertEqual(notices[0]["kind"], "conversation")
 
 
 class VerificationTests(unittest.TestCase):
@@ -1678,37 +2039,138 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(sum(message.get("role") == "user" for message in context.get_messages()), 1)
         self.assertEqual(sum(message.get("role") == "user" for message in model.messages), 1)
 
-    def test_inner_loop_token_budget_reserves_a_final_answer(self) -> None:
-        class BudgetModel:
+    def test_a_run_is_not_stopped_by_what_it_has_already_cost(self) -> None:
+        """Cumulative usage reports the bill; it may never end a run.
+
+        The model here reports a per-request prompt far larger than the whole
+        window, which is what an append-only conversation looks like once it has
+        been re-sent a few dozen times. The run has to reach its own answer.
+        """
+
+        class ExpensiveModel:
             def __init__(self) -> None:
                 self.tool_choices = []
 
             def chat_message(self, _messages, *, tool_choice=None, **_kwargs):
                 self.tool_choices.append(tool_choice)
-                if tool_choice == "none":
-                    return {"role": "assistant", "content": "budget summary", "usage": {"input_tokens": 5, "output_tokens": 1}}
+                step = len(self.tool_choices)
+                if step > 6:
+                    return {"role": "assistant", "content": "finished the work", "usage": {"input_tokens": 900000, "output_tokens": 1}}
+                # Distinct work every step, so the no-progress guard stays quiet.
                 return {
                     "role": "assistant",
                     "content": "",
-                    "tool_calls": [{"id": "one", "type": "function", "function": {"name": "echo", "arguments": '{"text":"one"}'}}],
-                    "usage": {"input_tokens": 80, "output_tokens": 10},
+                    "tool_calls": [
+                        {"id": f"call{step}", "type": "function", "function": {"name": "echo", "arguments": json.dumps({"text": f"step {step}"})}}
+                    ],
+                    "usage": {"input_tokens": 900000, "output_tokens": 10},
                 }
 
         @tool(description="Echo text.")
         def echo(text: str) -> str:
             return text
 
-        model = BudgetModel()
+        model = ExpensiveModel()
         agent = Agent(flow=build_guarded_flow(model, [echo], chat_kwargs={"stream": False, "tool_choice": "auto"}))
         context = agent.new_context()
-        context.metadata["friday.model_config"] = {"run_token_budget": 100}
         begin_guarded_run(context, context.usage.snapshot())
 
-        answer = agent.chat("work", context=context, max_steps=12)
+        answer = agent.chat("work", context=context, max_steps=30)
 
-        self.assertEqual(answer, "budget summary")
-        self.assertEqual(model.tool_choices, ["auto", "none"])
-        self.assertEqual(context.metadata[GUARD_STOP_REASON], "token_budget")
+        self.assertEqual(answer, "finished the work")
+        self.assertNotIn(GUARD_STOP_REASON, context.metadata)
+        # Never forced to answer: the guard never asked for a tool-free reply.
+        self.assertNotIn("none", model.tool_choices)
+        self.assertGreater(context.usage.input_tokens, 5_000_000)
+
+    def test_a_full_window_is_compacted_mid_run_so_the_run_keeps_going(self) -> None:
+        """The window is the only bound on a run, and compaction pushes it back.
+
+        Each tool result here is a quarter of the window, so the conversation
+        outgrows it well before the work is done. Turn-based compaction cannot
+        help: a single request is one turn, so its recent tail is the whole run.
+        The conversation is rewritten in place instead and the flow carries on
+        with the same agent.
+        """
+
+        class LongRunModel:
+            def __init__(self) -> None:
+                self.tool_choices = []
+
+            def chat_message(self, _messages, *, tool_choice=None, **_kwargs):
+                self.tool_choices.append(tool_choice)
+                step = len(self.tool_choices)
+                if step > 12:
+                    return {"role": "assistant", "content": "finished the work", "usage": {"input_tokens": 10, "output_tokens": 1}}
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": f"call{step}", "type": "function", "function": {"name": "bulk", "arguments": json.dumps({"text": f"step {step}"})}}
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 10},
+                }
+
+        @tool(description="Return a large result.")
+        def bulk(text: str) -> str:
+            return f"{text} {'y' * 2000}"
+
+        summarizer = Mock()
+        summarizer.chat_message.return_value = {
+            "role": "assistant",
+            "content": "## Current Goal\nkeep going\n\n## Next Steps\ncall bulk again",
+        }
+
+        model = LongRunModel()
+        agent = Agent(flow=build_guarded_flow(model, [bulk], chat_kwargs={"stream": False, "tool_choice": "auto"}))
+        context = agent.new_context()
+        context.metadata["friday.model_config"] = {"context_window": 2000}
+        begin_guarded_run(context, context.usage.snapshot())
+
+        with patch("friday.compaction.build_model", return_value=summarizer):
+            answer = agent.chat("work", context=context, max_steps=200)
+
+        compactions = [event for event in context.events if event.type == "context.compacted"]
+        kinds = {str(event.data.get("kind")) for event in compactions}
+
+        self.assertEqual(answer, "finished the work")
+        self.assertNotIn(GUARD_STOP_REASON, context.metadata)
+        self.assertIn("conversation", kinds)
+        self.assertTrue(all(event.data["ok"] for event in compactions), [event.data for event in compactions])
+        # The window is what compaction is for, so the run has to end inside it.
+        self.assertLess(context_ratio(context), TOOL_COMPACT_AT)
+
+    def test_in_place_compaction_leaves_a_conversation_a_provider_will_accept(self) -> None:
+        """Rewriting mid-run must not strand a tool result or repeat a role.
+
+        The system prefix stays, the request is replayed so the goal survives, and
+        the tail resumes at an assistant message: no tool result loses the call
+        that produced it, and no two same-role messages end up adjacent.
+        """
+        context = RunContext(metadata={"friday.model_config": {"context_window": 2000}})
+        context.add_message("system", "You are Friday.")
+        context.add_message("user", "ship the feature")
+        for step in range(6):
+            context.add_message("assistant", "", tool_calls=[{"id": f"c{step}", "type": "function", "function": {"name": "bulk", "arguments": "{}"}}])
+            context.add_message("tool", "z" * 3000, tool_call_id=f"c{step}")
+
+        summarizer = Mock()
+        summarizer.chat_message.return_value = {
+            "role": "assistant",
+            "content": "## Current Goal\nship the feature\n\n## Next Steps\nkeep going",
+        }
+        with patch("friday.compaction.build_model", return_value=summarizer):
+            record = compact_in_place(context)
+
+        roles = [str(message["role"]) for message in context.get_messages()]
+        tool_calls = {call["id"] for message in context.get_messages() for call in message.get("tool_calls") or []}
+        results = {message.get("tool_call_id") for message in context.get_messages() if message["role"] == "tool"}
+
+        self.assertTrue(record.ok)
+        self.assertLess(record.after_tokens, record.before_tokens)
+        self.assertEqual(roles[:4], ["system", "assistant", "user", "assistant"])
+        self.assertEqual(results, tool_calls)
+        self.assertFalse([left for left, right in zip(roles, roles[1:]) if left == right == "user"])
 
     def test_verification_is_required_only_for_delivery_changes(self) -> None:
         read_events = [{"type": "tool.call", "data": {"name": "Read", "arguments": {"path": "x.py"}}}]
@@ -1827,7 +2289,13 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(verifications[-1]["stop_reason"], "no_progress")
         self.assertEqual(context.metadata["friday.loop_status"], "no_progress")
 
-    def test_token_budget_stops_before_another_repair(self) -> None:
+    def test_repairs_are_measured_for_cost_but_stopped_only_by_progress(self) -> None:
+        """Spend is reported, never enforced; a repeated repair is what stops it.
+
+        Each repair re-sends the conversation, so the running total climbs fast.
+        Reading it as a ceiling used to abandon a goal that was still advancing.
+        """
+
         class UsageAgent:
             def chat(self, _prompt, *, context, **_kwargs) -> str:
                 context.record_model_usage({"input_tokens": 80, "output_tokens": 10})
@@ -1841,9 +2309,10 @@ class VerificationTests(unittest.TestCase):
         with patch("friday.loop.verify_friday", return_value=repair):
             _answer, verifications = goal_chat(UsageAgent(), context, "finish it")
 
-        self.assertEqual(verifications[-1]["stop_reason"], "token_budget")
-        self.assertEqual(verifications[-1]["tokens_used"], 90)
-        self.assertEqual(context.metadata["friday.loop_status"], "token_budget")
+        self.assertEqual(verifications[-1]["stop_reason"], "no_progress")
+        self.assertEqual(context.metadata["friday.loop_status"], "no_progress")
+        self.assertGreater(verifications[-1]["tokens_used"], 100)
+        self.assertNotIn("token_budget", verifications[-1])
 
     def test_verified_chat_repairs_until_a_semantic_stop(self) -> None:
         class FakeAgent:

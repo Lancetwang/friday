@@ -21,10 +21,26 @@ from friday.config import (
     load_model_environment,
     output_token_limit,
 )
-from friday.context import compact_tool_results, should_compact_conversation, should_compact_tools
+from friday.compaction import (
+    COMPACT_TARGET_RATIO,
+    LAST_COMPACTION,
+    CompactionRecord,
+    compaction_record,
+    fit_recent_turns,
+    split_memory_section,
+    summary_or_fallback,
+)
+from friday.context import (
+    compact_tool_results,
+    context_window,
+    estimate_tokens,
+    should_compact_conversation,
+    should_compact_tools,
+    token_estimate,
+)
+from friday.memory import add_memory
 from friday.model_options import DEFAULT_THINKING_EFFORT, normalize_thinking_effort, thinking_request_kwargs
 from friday.prompts import (
-    COMPACT_PROMPT,
     default_project_instructions,
     environment,
     prompt_template,
@@ -34,13 +50,15 @@ from friday.skills import ensure_default_skill, skill_routing
 from friday.storage import friday_home, migrate_legacy_runtime, project_state_dir, record_project
 from friday.text import read_limited
 from friday.state import (
+    ARCHIVED_MESSAGES,
+    COMPACTION_ARTIFACT,
     SessionState,
     USER_MESSAGE_TIMES_KEY,
+    archive_compacted,
     conversation_body,
     hydrate,
     load_session,
     new_session_id,
-    recent_turns,
     resume_choices,
     save_session_state,
     save_turn,
@@ -185,43 +203,87 @@ def build_instructions(workspace: Path, friday_dir: Path | None = None, config: 
 
 
 def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on_delta: Any = None) -> tuple[Agent, RunContext, str]:
-    # One in-band pass: inserted into the current conversation so it reuses the cached
-    # prefix. Within this single turn the agent saves memory candidates through Friday's
-    # CLI (so compaction never forgets them), then returns the structured summary.
-    recent_messages = recent_turns(context.get_messages())
+    """Replace the conversation with a summary plus the most recent turns verbatim.
+
+    Never raises. Compaction runs when the window is already nearly full, so a
+    failure here would end the session at the point it is most expensive to
+    lose; the caller gets the untouched pair back and a record saying why.
+    ``friday.last_compaction`` on the returned context describes the outcome.
+    """
+    del on_delta  # The summary never streams; see friday.compaction.
+    try:
+        return _compact_conversation(agent, context, stream=stream)
+    except Exception as exc:
+        context.metadata[LAST_COMPACTION] = CompactionRecord(
+            ok=False,
+            reason=f"{type(exc).__name__}: {exc}",
+            before_tokens=_safe_tokens(context),
+            after_tokens=_safe_tokens(context),
+            window=context_window(context),
+        ).to_dict()
+        return agent, context, ""
+
+
+def _compact_conversation(agent: Agent, context: RunContext, *, stream: bool) -> tuple[Agent, RunContext, str]:
+    del agent  # Compaction always rebuilds; the old pair is not reused.
+    workspace = Path(context.metadata["workspace"])
     session_id = str(context.metadata.get("session_id") or "")
+    stored_config = context.metadata.get("friday.model_config")
+    profile_id = str(stored_config.get("profile_id") or "") if isinstance(stored_config, dict) else ""
+    config = ModelConfig(**stored_config) if isinstance(stored_config, dict) else load_model_config(workspace)
+    thinking_effort = context.metadata.get("friday.thinking_effort")
+    tools = build_tools(workspace)
+    window = context_window(context)
+    before_tokens = token_estimate(context, tools)
+
+    # Reclaim tool output losslessly first: full results stay on disk, and the
+    # transcript the summarizer reads gets smaller for free.
+    reclaimed = compact_tool_results(context, tools)
+    summary, fallback, reason = summary_or_fallback(context, config)
+    summary, facts = split_memory_section(summary)
+    memories = _save_memories(workspace, facts, session_id=session_id)
+
     progress = current_progress(context)
     user_message_times = context.metadata.get(USER_MESSAGE_TIMES_KEY, [])
-    summary = agent.chat(
-        COMPACT_PROMPT,
-        context=context,
-        max_steps=8,
-        stream=False,
-        on_delta=on_delta,
-    )
-    workspace = Path(context.metadata["workspace"])
-    config = context.metadata.get("friday.model_config")
-    profile_id = str(config.get("profile_id") or "") if isinstance(config, dict) else None
-    thinking_effort = context.metadata.get("friday.thinking_effort")
-    build_kwargs = {
-        "stream": stream,
+    new_agent, new_context = build_friday(
+        workspace,
+        stream=stream,
         **({"thinking_effort": str(thinking_effort)} if thinking_effort else {}),
         **({"profile_id": profile_id} if profile_id else {}),
-    }
-    new_agent, new_context = build_friday(workspace, **build_kwargs)
-    if "friday.cancel_event" in context.metadata:
-        new_context.metadata["friday.cancel_event"] = context.metadata["friday.cancel_event"]
+    )
+    for key in ("friday.cancel_event", "friday.user_request"):
+        if key in context.metadata:
+            new_context.metadata[key] = context.metadata[key]
     if hasattr(context, "usage") and hasattr(new_context, "usage"):
         # Deliberate aliasing: the rebuilt context accumulates into the same RunUsage
         # so run-level budget accounting survives compaction.
         new_context.usage = context.usage
+
+    # The fresh context holds only the system prefix, so measuring it now gives
+    # the exact overhead the replayed body has to fit around. Sizing the body
+    # against a guess is how compaction ends up not shrinking anything.
+    overhead = token_estimate(new_context, tools)
+    budget = int(window * COMPACT_TARGET_RATIO) - overhead - estimate_tokens(summary)
+    recent, kept = fit_recent_turns(context.get_messages(), budget_tokens=max(budget, 0))
+
+    # The rebuild starts from an empty archive, so the old one has to come across
+    # before this pass adds to it, or the session forgets everything it dropped.
+    old_body = conversation_body(context.get_messages())
+    new_context.metadata[ARCHIVED_MESSAGES] = list(context.metadata.get(ARCHIVED_MESSAGES) or [])
+    archive_compacted(new_context, old_body[: max(len(old_body) - len(recent), 0)])
+    archived = list(new_context.metadata.get(ARCHIVED_MESSAGES) or [])
+
     # C1 is the structured state summary. C2 keeps the latest complete turns verbatim,
     # including assistant tool calls and their matching tool results.
     hydrate(
         new_context,
         SessionState(
             session_id=session_id,
-            body=[{"role": "assistant", "content": f"## Session Summary\n{summary.strip()}"}, *recent_messages],
+            body=[
+                {"role": "assistant", "content": f"## Session Summary\n{summary.strip()}", COMPACTION_ARTIFACT: True},
+                *recent,
+            ],
+            archived=archived,
             progress=progress,
             user_message_times=[dict(item) for item in user_message_times if isinstance(item, dict)]
             if isinstance(user_message_times, list)
@@ -236,20 +298,63 @@ def compact_friday(agent: Agent, context: RunContext, *, stream: bool = True, on
             new_context.get_messages(),
             current_progress(new_context),
             thinking_effort=str(new_context.metadata.get("friday.thinking_effort") or DEFAULT_THINKING_EFFORT),
+            archived=archived,
         )
+    new_context.metadata[LAST_COMPACTION] = CompactionRecord(
+        fallback=fallback,
+        reason=reason,
+        before_tokens=before_tokens,
+        after_tokens=token_estimate(new_context, tools),
+        window=window,
+        kept_turns=kept,
+        tool_results=reclaimed,
+        memories=memories,
+    ).to_dict()
     return new_agent, new_context, summary
+
+
+def _save_memories(workspace: Path, facts: list[str], *, session_id: str) -> list[str]:
+    """Persist the summary's memory candidates; a rejected fact is not fatal."""
+    saved = []
+    for fact in facts:
+        try:
+            add_memory(workspace, "episode", fact, source="compaction", session_id=session_id)
+        except (OSError, ValueError):
+            continue
+        saved.append(fact)
+    return saved
+
+
+def _safe_tokens(context: RunContext) -> int:
+    try:
+        return token_estimate(context, build_tools(Path(context.metadata["workspace"])))
+    except (KeyError, OSError, TypeError, ValueError):
+        return 0
 
 
 def prepare_context_for_chat(agent: Agent, context: RunContext, *, stream: bool = True) -> tuple[Agent, RunContext, str]:
     root = Path(context.metadata["workspace"])
     tools = build_tools(root)
     if should_compact_conversation(context, tools):
-        agent, context, summary = compact_friday(agent, context, stream=stream)
-        return agent, context, f"conversation compacted: {summary}"
+        agent, context, _summary = compact_friday(agent, context, stream=stream)
+        return agent, context, _compaction_notice(context)
     if should_compact_tools(context, tools):
+        before = token_estimate(context, tools)
         count = compact_tool_results(context, tools)
+        context.metadata[LAST_COMPACTION] = CompactionRecord(
+            kind="tool_results",
+            before_tokens=before,
+            after_tokens=token_estimate(context, tools),
+            window=context_window(context),
+            tool_results=count,
+        ).to_dict()
         return agent, context, f"tool results compacted: {count}"
     return agent, context, ""
+
+
+def _compaction_notice(context: RunContext) -> str:
+    record = context.metadata.get(LAST_COMPACTION)
+    return compaction_record(record).notice() if isinstance(record, dict) else "conversation compacted"
 
 
 def resume_friday(
@@ -308,6 +413,11 @@ def undo_friday(
         SessionState(
             session_id=session_id,
             body=conversation_body(restored["messages"]),
+            archived=[
+                dict(item)
+                for item in dict(restored.get("before_session") or {}).get("archived_messages", [])
+                if isinstance(item, dict)
+            ],
             progress=before_progress if isinstance(before_progress, dict) else {},
             user_message_times=[
                 dict(item)

@@ -36,11 +36,32 @@ fn workspace_root(requested: Option<String>) -> Result<PathBuf, String> {
 }
 
 fn canonical_directory(path: PathBuf) -> Result<PathBuf, String> {
-    let resolved = path.canonicalize().map_err(|error| error.to_string())?;
+    // A bare OS error names no path, so a deleted project read as an unexplained
+    // "cannot find the path specified" once it reached the window.
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| format!("Cannot open {}: {error}", path.display()))?;
     if !resolved.is_dir() {
         return Err(format!("Workspace is not a directory: {}", resolved.display()));
     }
-    Ok(resolved)
+    Ok(plain_path(resolved))
+}
+
+/// Strip Windows' extended-length prefix, which `canonicalize` adds.
+///
+/// This value is what the window stores and what it names projects by over the
+/// gateway, so `\\?\E:\work` becomes a second identity for a directory already
+/// known as `E:\work`: the sidebar lists it twice, and closing one leaves the
+/// other open.
+fn plain_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest.to_string()),
+        None => path,
+    }
 }
 
 #[tauri::command]
@@ -221,7 +242,37 @@ fn gateway_stop(
 
 #[cfg(test)]
 mod tests {
-    use super::take_lines;
+    use super::{canonical_directory, take_lines};
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_deleted_workspace_fails_to_resolve_and_names_itself() {
+        // The desktop reads this failure as "the folder is gone" and takes the
+        // project out of the sidebar, so the error has to name the path: it is
+        // shown to the user, and a bare OS code identifies nothing.
+        let missing = std::env::temp_dir().join("friday-deleted-workspace-3f9a2c");
+        let _ = std::fs::remove_dir_all(&missing);
+
+        let error = canonical_directory(missing.clone()).unwrap_err();
+
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+    }
+
+    #[test]
+    fn a_workspace_that_exists_resolves_without_an_extended_length_prefix() {
+        // The window keys projects by this string, so the prefix canonicalize adds
+        // would be a second name for a directory the registry already knows.
+        let resolved = canonical_directory(std::env::temp_dir()).unwrap();
+
+        assert!(!resolved.to_string_lossy().starts_with(r"\\?\"), "{}", resolved.display());
+    }
+
+    #[test]
+    fn extended_length_spellings_reduce_to_the_plain_path() {
+        assert_eq!(super::plain_path(PathBuf::from(r"\\?\E:\work")), PathBuf::from(r"E:\work"));
+        assert_eq!(super::plain_path(PathBuf::from(r"\\?\UNC\host\share")), PathBuf::from(r"\\host\share"));
+        assert_eq!(super::plain_path(PathBuf::from("/home/me/work")), PathBuf::from("/home/me/work"));
+    }
 
     #[test]
     fn frames_split_utf8_json_lines_without_corruption() {

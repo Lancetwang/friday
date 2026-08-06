@@ -1,8 +1,7 @@
-The conversation is being compacted. Do two steps in order, in this one turn, then stop.
+Rewrite the conversation below as the session state that replaces it. You have no tools in this turn; produce text only.
 
-1) Memory first, so compaction never drops what matters. Review the conversation for declarative facts worth recalling across sessions. Save ordinary candidates through Bash with `friday memory add --scope episode <text>`; manual or scheduled consolidation decides whether repeated facts become permanent. Only when the user explicitly said to remember something forever, permanently, or always may you write it directly to `user`, `global`, or `project`. Run `friday memory help` if needed. Write facts, not instructions. Do not save task progress, command output, failed attempts, facts recoverable from current files or git, or anything stale within a week. If nothing qualifies, save nothing.
+Output exactly these Markdown sections, in this order, and nothing else. No preamble, no closing remark, no code fences around the whole answer. Leave a section empty rather than inventing content for it.
 
-2) Then send your final message as the short-term session state only, using this exact Markdown structure:
 ## Current Goal
 ## Completed
 ## Open Items
@@ -12,7 +11,10 @@ The conversation is being compacted. Do two steps in order, in this one turn, th
 ## Commands And Results
 ## Verification State
 ## Next Steps
+## Memory
 
-Keep only live working context: user goals, completed work, unfinished work, tried methods, decisions, files touched, commands run, test status, blockers, and next steps.
-The harness will append the latest 10 complete user turns and their assistant/tool messages verbatim after this summary. Do not reproduce that dialogue in the summary; mention recent details only when they are needed to describe the current state.
-Your final message must contain the session state only; no preamble, no memory notes, and do not restate stable system, tool, user, or project instructions.
+Sections one through nine are live working context: what the user wants, what is done, what is unfinished, approaches already tried (including the ones that failed, so they are not repeated), decisions and their reasons, files touched with their paths, commands run with their outcomes, test and verification status, blockers, and the next concrete action. Write for a successor who cannot see the original conversation.
+
+`## Memory` is different: it is the only part that leaves the session. List declarative facts worth recalling in later, unrelated sessions, one per `- ` line. Facts, not instructions. Do not list task progress, command output, failed attempts, anything recoverable from the current files or git, or anything that goes stale within a week. Write `- none` when nothing qualifies, which is the common case.
+
+The harness appends the most recent complete user turns verbatim after this summary, so do not reproduce that dialogue. Mention recent detail only where it is needed to describe the current state. Do not restate system, tool, user, or project instructions: those are reloaded from disk on every turn.

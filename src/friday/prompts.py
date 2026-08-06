@@ -17,6 +17,7 @@ def prompt_template(name: str) -> str:
 
 
 COMPACT_PROMPT = prompt_template("COMPACT.md").strip()
+COMPACT_SYSTEM_PROMPT = prompt_template("COMPACT_SYSTEM.md").strip()
 MEMORY_CONSOLIDATE_PROMPT = prompt_template("MEMORY_CONSOLIDATE.md").strip()
 SECURITY_NOTES = prompt_template("SECURITY.md").strip()
 VERIFIER_NOTES = prompt_template("VERIFIER.md").strip()
@@ -42,7 +43,6 @@ def environment(workspace: Path, config: ModelConfig) -> str:
         model=config.model,
         context_window=config.context_window,
         max_output_tokens=config.max_output_tokens,
-        run_token_budget=config.run_token_budget,
         permission_mode=mode,
     )
 

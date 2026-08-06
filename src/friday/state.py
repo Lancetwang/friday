@@ -21,6 +21,7 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +40,12 @@ from friday.trace import delete_trace
 RECENT_CONVERSATION_LIMIT = 10
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 USER_MESSAGE_TIMES_KEY = "friday.user_message_times"
+# Conversation compaction removed these from the prompt; the session still owns
+# them. Kept apart from the live messages because only the prompt is rewritten.
+ARCHIVED_MESSAGES = "friday.archived_messages"
+# Marks a message compaction wrote for the model's benefit -- the summary and the
+# replayed request -- so it never reaches the transcript or the archive.
+COMPACTION_ARTIFACT = "friday_compaction_artifact"
 
 
 def new_session_id() -> str:
@@ -51,6 +58,9 @@ class SessionState:
 
     session_id: str = ""
     body: list[dict[str, Any]] = field(default_factory=list)
+    # What compaction took out of the prompt in earlier turns. Replayed into
+    # metadata rather than into the messages, which is the point of the split.
+    archived: list[dict[str, Any]] = field(default_factory=list)
     progress: dict[str, Any] = field(default_factory=dict)
     last_usage: dict[str, Any] | None = None
     user_message_times: list[dict[str, str]] = field(default_factory=list)
@@ -63,9 +73,11 @@ def state_from_snapshot(snapshot: dict[str, Any]) -> SessionState:
     progress = snapshot.get("progress")
     last_usage = snapshot.get("last_usage")
     user_message_times = snapshot.get("user_message_times")
+    archived = snapshot.get("archived_messages")
     return SessionState(
         session_id=str(snapshot.get("session_id") or ""),
         body=conversation_body(messages if isinstance(messages, list) else []),
+        archived=[dict(item) for item in archived if isinstance(item, dict)] if isinstance(archived, list) else [],
         progress=dict(progress) if isinstance(progress, dict) else {},
         last_usage=dict(last_usage) if isinstance(last_usage, dict) else None,
         user_message_times=[dict(item) for item in user_message_times if isinstance(item, dict)]
@@ -83,6 +95,36 @@ def conversation_body(messages: list[Any]) -> list[dict[str, Any]]:
     while start < len(body) and body[start].get("role") == "system":
         start += 1
     return body[start:]
+
+
+def archive_compacted(context: RunContext, dropped: Sequence[Mapping[str, Any]]) -> None:
+    """Keep what compaction removed from the prompt, so the session still has it.
+
+    Compaction shrinks what the model is sent, not what the conversation is. The
+    frontends read the archive back, so a user can still scroll through work that
+    no longer fits the window.
+    """
+    archive = context.metadata.setdefault(ARCHIVED_MESSAGES, [])
+    if isinstance(archive, list):
+        archive.extend(dict(message) for message in dropped if not message.get(COMPACTION_ARTIFACT))
+
+
+def archived_messages(context: RunContext) -> list[dict[str, Any]]:
+    """What compaction has taken out of this context's prompt so far."""
+    archived = context.metadata.get(ARCHIVED_MESSAGES)
+    return [dict(item) for item in archived if isinstance(item, dict)] if isinstance(archived, list) else []
+
+
+def transcript_messages(context: RunContext) -> list[dict[str, Any]]:
+    """The whole conversation, including what compaction took out of the prompt.
+
+    This is the list the product is about, and the only one whose indices hold
+    still: it only ever grows, while the prompt is rewritten underneath it.
+    Compaction's own scaffolding -- the summary and the replayed request -- is
+    addressed to the model and stays out.
+    """
+    live = [message for message in conversation_body(context.get_messages()) if not message.get(COMPACTION_ARTIFACT)]
+    return [*archived_messages(context), *live]
 
 
 def recent_turns(messages: list[Any], limit: int = RECENT_CONVERSATION_LIMIT) -> list[dict[str, Any]]:
@@ -109,6 +151,7 @@ def hydrate(context: RunContext, state: SessionState) -> None:
     """
     if state.session_id:
         context.metadata["session_id"] = state.session_id
+    context.metadata[ARCHIVED_MESSAGES] = [dict(item) for item in state.archived]
     for message in state.body:
         extra = {key: value for key, value in message.items() if key not in {"role", "content", "scope"}}
         context.add_message(str(message.get("role") or "user"), message.get("content") or "", **extra)
@@ -131,6 +174,8 @@ def save_turn(
     user_message_times: list[dict[str, str]] | None = None,
     thinking_effort: str = DEFAULT_THINKING_EFFORT,
     artifacts: list[dict[str, Any]] | None = None,
+    archived: list[dict[str, Any]] | None = None,
+    metrics: dict[str, Any] | None = None,
     continuation: bool = False,
 ) -> Path:
     """Persist one snapshot per session, overwritten in place (atomic).
@@ -155,27 +200,16 @@ def save_turn(
     for index, message in enumerate(body):
         if message.get("role") == "assistant":
             assistant_indexes.setdefault(_message_fingerprint(message), []).append(index)
-    artifact_records = []
-    for record in saved_artifacts:
-        fingerprint = str(record.get("message_hash") or "")
-        matches = assistant_indexes.get(fingerprint, [])
-        old_index = record.get("message_index")
-        if old_index in matches or len(matches) == 1:
-            artifact_records.append({**record, "message_index": old_index if old_index in matches else matches[0]})
+    artifact_records = _carried_records(saved_artifacts, assistant_indexes)
     if artifacts:
-        message_index = next(
-            (index for index in range(len(body) - 1, -1, -1) if body[index].get("role") == "assistant"),
-            -1,
-        )
-        if message_index >= 0:
-            artifact_records = [item for item in artifact_records if item.get("message_index") != message_index]
-            artifact_records.append(
-                {
-                    "items": artifacts,
-                    "message_hash": _message_fingerprint(body[message_index]),
-                    "message_index": message_index,
-                }
-            )
+        artifact_records = _attached(artifact_records, body, {"items": artifacts})
+    # What a turn cost belongs to the reply it produced, not to the session: a
+    # single `last_usage` only ever describes the newest turn, so every earlier
+    # reply lost its figures the moment the next one arrived or the conversation
+    # was reopened from disk.
+    metric_records = _carried_records(existing.get("metrics"), assistant_indexes)
+    if isinstance(metrics, dict) and metrics:
+        metric_records = _attached(metric_records, body, {"values": dict(metrics)})
     snapshot = {
         **{
             key: existing[key]
@@ -190,6 +224,7 @@ def save_turn(
         "user": existing.get("user") or preview(user, 180),
         "assistant": preview(assistant, 220),
         "messages": messages or [],
+        "archived_messages": archived if isinstance(archived, list) else existing.get("archived_messages", []),
         "progress": progress if isinstance(progress, dict) else existing.get("progress", {}),
         "last_usage": last_usage if isinstance(last_usage, dict) else existing.get("last_usage", {}),
         "user_message_times": user_message_times
@@ -197,6 +232,7 @@ def save_turn(
         else existing.get("user_message_times", []),
         "thinking_effort": thinking_effort,
         "artifacts": artifact_records,
+        "metrics": metric_records,
     }
     write_session(path, snapshot)
     return path
@@ -230,6 +266,7 @@ def save_session_state(
     progress: dict[str, Any],
     *,
     thinking_effort: str = DEFAULT_THINKING_EFFORT,
+    archived: list[dict[str, Any]] | None = None,
 ) -> Path | None:
     path = project_state_dir(workspace) / "sessions" / f"{session_id}.json"
     existing = read_session(path)
@@ -241,6 +278,8 @@ def save_session_state(
         progress=progress,
         thinking_effort=thinking_effort,
     )
+    if archived is not None:
+        existing["archived_messages"] = archived
     write_session(path, existing)
     return path
 
@@ -339,11 +378,8 @@ def fork_session(
         "last_usage": {},
         "user_message_times": list(source.get("user_message_times", []))[:user_count],
         "thinking_effort": source.get("thinking_effort", DEFAULT_THINKING_EFFORT),
-        "artifacts": [
-            record
-            for record in (source.get("artifacts", []) if isinstance(source.get("artifacts"), list) else [])
-            if isinstance(record, dict) and int(record.get("message_index", -1)) <= message_index
-        ],
+        "artifacts": _copied_records(source.get("artifacts"), message_index),
+        "metrics": _copied_records(source.get("metrics"), message_index),
         "fork_parent": source_session_id,
         "fork_root": source.get("fork_root") or source_session_id,
         "fork_message_index": message_index,
@@ -428,5 +464,79 @@ def write_session(path: Path, data: dict[str, Any]) -> None:
 def _message_fingerprint(message: dict[str, Any]) -> str:
     value = json.dumps(message.get("content"), ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
+
+
+def _copied_records(records: Any, message_index: int) -> list[dict[str, Any]]:
+    """The records belonging to messages a fork took with it."""
+    saved = [item for item in records if isinstance(item, dict)] if isinstance(records, list) else []
+    return [record for record in saved if int(record.get("message_index", -1)) <= message_index]
+
+
+def _carried_records(existing: Any, indexes: dict[str, list[int]]) -> list[dict[str, Any]]:
+    """Per-message records re-pointed after the conversation was rewritten.
+
+    Compaction moves messages, so the index a record was written with is not the
+    one it belongs to on the next save. The fingerprint each record carries is,
+    and a record whose message can no longer be identified is dropped.
+    """
+    records = [item for item in existing if isinstance(item, dict)] if isinstance(existing, list) else []
+    carried: list[dict[str, Any]] = []
+    for record in records:
+        matches = indexes.get(str(record.get("message_hash") or ""), [])
+        old_index = record.get("message_index")
+        if old_index in matches or len(matches) == 1:
+            carried.append({**record, "message_index": old_index if old_index in matches else matches[0]})
+    return carried
+
+
+def _attached(
+    records: list[dict[str, Any]],
+    body: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """`payload` bound to the newest reply, replacing whatever it already carried.
+
+    A turn that resumes after an approval saves again for the same reply, and the
+    second save is the complete one.
+
+    The reply meant here is the one the user sees, so a message carrying only a
+    tool call is not it: the transcript renders the spoken answer, and a record
+    bound to anything else would be looked up against a message that is not there.
+    """
+    spoken = (i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant" and body[i].get("content"))
+    any_reply = (i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant")
+    index = next(spoken, next(any_reply, -1))
+    if index < 0:
+        return records
+    kept = [item for item in records if item.get("message_index") != index]
+    return [*kept, {**payload, "message_hash": _message_fingerprint(body[index]), "message_index": index}]
+
+
+def records_by_message(records: Any, messages: Sequence[Mapping[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Saved per-message records keyed by their index into `messages`.
+
+    Records are written against the prompt, which compaction rewrites, while the
+    transcript the user reads only ever grows -- so the two disagree about
+    indices as soon as anything is archived. Matching on the fingerprint is what
+    survives that; the index is only used to put same-content replies back in
+    the order they were saved.
+    """
+    saved = [item for item in records if isinstance(item, dict)] if isinstance(records, list) else []
+    saved.sort(key=lambda record: int(record.get("message_index", 0) or 0))
+    positions: dict[str, list[int]] = {}
+    for index, message in enumerate(messages):
+        if message.get("role") == "assistant":
+            positions.setdefault(_message_fingerprint(dict(message)), []).append(index)
+    taken: dict[str, int] = {}
+    found: dict[int, dict[str, Any]] = {}
+    for record in saved:
+        fingerprint = str(record.get("message_hash") or "")
+        matches = positions.get(fingerprint, [])
+        seen = taken.get(fingerprint, 0)
+        if seen >= len(matches):
+            continue
+        taken[fingerprint] = seen + 1
+        found[matches[seen]] = record
+    return found
 
 

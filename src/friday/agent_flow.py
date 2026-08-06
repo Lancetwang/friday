@@ -10,15 +10,20 @@ from typing import Any
 from agent_core import CallableNode, Flow, ModelNode, RunContext, Tool, ToolCallNode, ToolExecutor, ToolRouterNode, get_current_context
 from agent_core.llm import ChatModel
 
-from friday.config import DEFAULT_MODEL_CONFIG
-from friday.context import TOOL_COMPACT_AT, compact_tool_results, context_ratio
+from friday.compaction import CompactionRecord, announce_compaction, compact_in_place
+from friday.context import (
+    TOOL_COMPACT_AT,
+    compact_tool_results,
+    context_ratio,
+    context_window,
+    should_compact_tools,
+    token_estimate,
+)
 from friday.tools import IMAGE_MIME_TYPES, MAX_IMAGE_BYTES
 
 GUARD_STATE = "friday.loop_guard"
 GUARD_STOP_REASON = "friday.guard_stop_reason"
 RUN_USAGE_BASELINE = "friday.run_usage_baseline"
-TOKEN_BUDGET_SOFT_LIMIT = 0.85
-CONTEXT_WINDOW_HARD_LIMIT = 0.95
 
 
 def build_guarded_flow(
@@ -80,7 +85,10 @@ def _guard_after_tools(payload: Any):
         context.emit("approval.pending", category="tool", action="suspend", data=approval)
         return "suspend", state
 
-    reason = _no_progress(context) or _token_budget(context) or _context_window(context)
+    # A run is not bounded by how long it takes or what it costs: it ends when
+    # the work is done, when it stops making progress, or when the window can no
+    # longer be made to fit. Compaction is what keeps the last one rare.
+    reason = _no_progress(context) or _context_window(context)
     if reason:
         context.metadata[GUARD_STOP_REASON] = reason
         context.emit("loop.guard", category="flow", action="finalize", data={"reason": reason})
@@ -160,44 +168,42 @@ def _no_progress(context: RunContext) -> str | None:
     return "no_progress" if seen[signature] >= 2 else None
 
 
-def _token_budget(context: RunContext) -> str | None:
-    baseline = context.metadata.get(RUN_USAGE_BASELINE)
-    if not isinstance(baseline, dict):
-        return None
-    requests = context.usage.requests - int(baseline.get("requests", 0))
-    usage_requests = context.usage.usage_requests - int(baseline.get("usage_requests", 0))
-    if requests != usage_requests:
-        return None
-    used = (
-        context.usage.input_tokens
-        - int(baseline.get("input_tokens", 0))
-        + context.usage.output_tokens
-        - int(baseline.get("output_tokens", 0))
-    )
-    config = context.metadata.get("friday.model_config", {})
-    budget = config.get("run_token_budget") if isinstance(config, dict) else None
-    budget = budget if isinstance(budget, int) and budget > 0 else DEFAULT_MODEL_CONFIG.run_token_budget
-    return "token_budget" if used >= int(budget * TOKEN_BUDGET_SOFT_LIMIT) else None
-
-
 def _context_window(context: RunContext) -> str | None:
-    """Mid-run context pressure relief.
+    """Make room and keep running; the window is the only thing that bounds a run.
 
-    First reclaim tool results losslessly (full outputs stay on disk); only if
-    the window is still nearly full force a final answer. Conversation-level
-    compaction needs an agent rebuild and happens between attempts and turns.
+    Tool results are probed first because reclaiming them is lossless -- the full
+    output stays on disk and nothing a user wrote is touched. That pass only runs
+    when it is worth the damage, which is what ``should_compact_tools`` measures:
+    a few percent would leave the window nearly as full and the tool detail gone
+    for nothing. Otherwise the conversation itself is rewritten in place, which
+    keeps the agent the flow is executing untouched.
+
+    Stopping is the last resort, for a window that neither pass can bring back
+    under the trigger. Returning while still above it would compact again on the
+    next pass and spend a model call each time for nothing.
     """
     if context_ratio(context) < TOOL_COMPACT_AT:
         return None
-    count = compact_tool_results(context)
-    if count:
-        context.emit("context.compacted", category="context", action="tool_results", data={"count": count})
-    return "context_window" if context_ratio(context) >= CONTEXT_WINDOW_HARD_LIMIT else None
+    if should_compact_tools(context):
+        before = token_estimate(context)
+        count = compact_tool_results(context)
+        announce_compaction(
+            context,
+            CompactionRecord(
+                kind="tool_results",
+                before_tokens=before,
+                after_tokens=token_estimate(context),
+                window=context_window(context),
+                tool_results=count,
+            ),
+        )
+        if context_ratio(context) < TOOL_COMPACT_AT:
+            return None
+    announce_compaction(context, compact_in_place(context))
+    return "context_window" if context_ratio(context) >= TOOL_COMPACT_AT else None
 
 
 def _finalize_message(reason: str) -> str:
     if reason == "no_progress":
         return "Loop guard: the same tool cycle produced the same result again. Do not call more tools. Return the best supported answer, state unresolved items, and stop."
-    if reason == "context_window":
-        return "Loop guard: the context window is nearly full. Do not call more tools. Return the best supported answer, state unresolved items, and stop."
-    return "Loop guard: the run reached its Token Budget reserve. Do not call more tools. Return the best supported answer, state unresolved items, and stop."
+    return "Loop guard: the context window is full and compaction could not free enough of it. Do not call more tools. Return the best supported answer, state unresolved items, and stop."

@@ -43,6 +43,8 @@ from friday.state import (
     USER_MESSAGE_TIMES_KEY,
     conversation_body,
     delete_session_tree,
+    records_by_message,
+    transcript_messages,
     fork_session,
     read_session,
     rename_session,
@@ -50,7 +52,7 @@ from friday.state import (
     session_subtree_ids,
     session_tree,
 )
-from friday.storage import forget_project, friday_home, list_projects, record_project
+from friday.storage import close_project, friday_home, list_projects, record_project
 from friday.text import preview
 from friday.tools import build_tools, pending_approval
 from friday.trace_web import start_trace_server
@@ -81,9 +83,11 @@ def main() -> None:
         cli_main(sys.argv[2:])
         return
     _install_cli_shim()
-    # Keep the desktop sidebar able to restore its project list: every
-    # workspace this gateway serves is one the user opened, so register it.
-    record_project(Path.cwd().resolve())
+    # A gateway exists for a workspace because the user opened that project, so
+    # this is the one place that may declare it open. Everything else that
+    # records a project (any agent build, including a CLI run) leaves the flag
+    # alone, which is what keeps a closed project closed.
+    record_project(Path.cwd().resolve(), opened=True)
     output = _Utf8Output(sys.stdout.buffer)
     sys.stdout = sys.stderr
     gateway = Gateway(output=output, background=True)
@@ -220,9 +224,6 @@ class Gateway:
         session.on_verify = lambda verification: self.session_event(
             session, "verification.complete", verification_status(verification)
         )
-        session.on_context_notice = lambda notice: self.session_event(
-            session, "gateway.stderr", {"line": f"context {notice.split(':', 1)[0]}"}
-        )
         session.on_event = lambda event: self.on_agent_event(event, session)
         session.on_turn_start = lambda text: self.session_event(session, "message.start", {"text": text})
         session.on_turn_complete = lambda result: self._turn_complete(session, result)
@@ -265,12 +266,14 @@ class Gateway:
             if method == "session.info":
                 self.ok(rid, self.session_info())
             elif method == "projects.list":
-                self.ok(rid, {"projects": list_projects()})
-            elif method == "projects.forget":
+                # The sidebar restores what the user left open, not every
+                # workspace Friday has ever run in.
+                self.ok(rid, {"projects": list_projects(open_only=True)})
+            elif method == "projects.close":
                 workspace = str(params.get("workspace") or "").strip()
                 if workspace:
-                    forget_project(Path(workspace))
-                self.ok(rid, {"forgotten": bool(workspace)})
+                    close_project(Path(workspace))
+                self.ok(rid, {"closed": bool(workspace)})
             elif method == "chat.send":
                 images = _image_urls(params.get("images"))
                 self.run_chat(rid, str(params.get("text") or ""), images=images)
@@ -470,7 +473,8 @@ class Gateway:
                     Path.cwd().resolve(),
                     source_id,
                     int(params.get("message_index", -1)),
-                    messages=source.context.get_messages() if source and source.context is not None else None,
+                    # Fork points are indices into the transcript, so fork from it.
+                    messages=transcript_messages(source.context) if source and source.context is not None else None,
                 )
                 self.session = self._new_session(str(snapshot["session_id"]))
                 self.session.resume(str(snapshot["session_id"]))
@@ -621,6 +625,12 @@ class Gateway:
         thread = threading.Thread(target=work, name=f"friday-{session_id}", daemon=True)
         with self._state:
             self.runs[session_id] = thread
+        # A session reaches the sidebar by being saved, and it is only saved once
+        # a turn finishes -- so a conversation the user just started showed no
+        # trace of itself until the reply landed, with no way to tell whether it
+        # had been created at all. Announcing the run puts it in the list now:
+        # `session_choices` lists a running session whether or not it is on disk.
+        self.session_event(session, "session.updated", {"running": True})
         if self.background:
             thread.start()
         else:
@@ -635,6 +645,9 @@ class Gateway:
                 "text": result.answer,
                 "metrics": result.metrics,
                 "progress": result.progress,
+                # Why the turn ended. A guard stop reads as an ordinary answer
+                # otherwise, and the user has no way to tell it was cut short.
+                "status": str(result.context.metadata.get("friday.loop_status") or "done"),
                 "artifacts": result.artifacts,
                 "fork_points": [] if suspended else fork_points(session),
                 "verification": verification_status(result.verifications[-1]) if result.verifications else None,
@@ -708,6 +721,8 @@ class Gateway:
                 self.session_event(session, "reasoning.complete", {"id": reasoning_id})
         elif event.type == "verification.start":
             self.session_event(session, "verification.start", {})
+        elif event.type == "context.compacted":
+            self.session_event(session, "context.compacted", dict(event.data))
         elif event.type == "progress.updated":
             self.session_event(session, "progress.update", dict(event.data))
         elif event.type == "tool.call":
@@ -795,26 +810,29 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
     assistant_parts: list[str] = []
     assistant_index = -1
     snapshot = read_session(session_path(Path.cwd().resolve(), session.session_id)) or {}
-    records = snapshot.get("artifacts", []) if isinstance(snapshot.get("artifacts"), list) else []
-    artifacts = {
-        int(record["message_index"]): record["items"]
-        for record in records
-        if isinstance(record, dict)
-        and isinstance(record.get("message_index"), int)
-        and isinstance(record.get("items"), list)
-    }
+    # The transcript, not the prompt: compaction rewrites what the model is sent,
+    # and the user's scrollback must not shrink with it.
+    transcript = transcript_messages(session.context)
+    artifacts = records_by_message(snapshot.get("artifacts"), transcript)
+    # What each reply cost, restored from disk. Held only in the live event it was
+    # emitted with, it vanished the moment the conversation was reopened.
+    metrics = records_by_message(snapshot.get("metrics"), transcript)
 
     def flush_assistant() -> None:
         nonlocal assistant_index
         if assistant_parts:
             item = {"kind": "assistant", "message_index": assistant_index, "text": "\n\n".join(assistant_parts)}
-            if assistant_index in artifacts:
-                item["artifacts"] = artifacts[assistant_index]
+            items = artifacts.get(assistant_index, {}).get("items")
+            if isinstance(items, list):
+                item["artifacts"] = items
+            values = metrics.get(assistant_index, {}).get("values")
+            if isinstance(values, dict):
+                item["metrics"] = values
             history.append(item)
             assistant_parts.clear()
             assistant_index = -1
 
-    for message_index, message in enumerate(conversation_body(session.context.get_messages())):
+    for message_index, message in enumerate(transcript):
         role = message.get("role")
         content = _message_text(message.get("content"))
         if role == "user" and content and not message.get("friday_internal"):

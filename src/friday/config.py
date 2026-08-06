@@ -10,7 +10,6 @@ from typing import Any
 
 from agent_core import ChatModel, LLM
 
-from friday.providers import AnthropicModel
 from friday.storage import friday_home, project_state_dir, write_json_atomic
 
 
@@ -22,9 +21,13 @@ class ModelConfig:
     model: str = "deepseek-v4-flash"
     base_url: str = "https://api.deepseek.com"
     vision: bool = False
-    context_window: int = 353000
+    context_window: int = 300000
     max_output_tokens: int = 65536
-    run_token_budget: int = 2824000
+    # Kept so existing config files still load, and reported as the turn's cost.
+    # Nothing compares a run against it: every step re-sends the conversation, so
+    # this total grows with the square of the step count and would stop a long run
+    # whose window is still mostly empty. The window bounds a run; spend does not.
+    run_token_budget: int = 40000000
 
 
 DEFAULT_MODEL_CONFIG = ModelConfig()
@@ -372,6 +375,12 @@ def build_model(config: ModelConfig) -> ChatModel:
             "or run `friday model add --help`."
         )
     if config.provider == "anthropic":
+        # Imported here, not at module scope: the Anthropic SDK pulls in ~1400
+        # modules and ~41 MB of resident memory, and every Friday process imports
+        # this module. The desktop runs one backend per open project, so that
+        # baseline is paid per project -- by users on other providers too.
+        from friday.providers import AnthropicModel
+
         return AnthropicModel(api_key=api_key, base_url=config.base_url or None, model=config.model)
     return LLM(
         api_key=api_key,

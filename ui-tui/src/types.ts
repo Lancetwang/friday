@@ -3,7 +3,7 @@ export type GatewayEvent =
   | { type: 'session.info'; payload: SessionInfo }
   | { type: 'message.start'; payload: { text: string } }
   | { type: 'message.delta'; payload: { text: string } }
-  | { type: 'message.complete'; payload: { metrics?: MessageMetrics; progress?: ProgressState; text: string } }
+  | { type: 'message.complete'; payload: { metrics?: MessageMetrics; progress?: ProgressState; status?: string; text: string } }
   | { type: 'reasoning.delta'; payload: { id: string; text: string } }
   | { type: 'reasoning.complete'; payload: { error?: boolean; id: string } }
   | { type: 'tool.start'; payload: { tool_call_id: string; name: string; arguments?: unknown } }
@@ -13,8 +13,24 @@ export type GatewayEvent =
   | { type: 'verification.start'; payload: Record<string, never> }
   | { type: 'verification.complete'; payload: VerificationResult }
   | { type: 'progress.update'; payload: ProgressState }
+  | { type: 'context.compacted'; payload: ContextCompaction }
   | { type: 'gateway.stderr'; payload: { line: string } }
   | { type: 'gateway.protocol_error'; payload: { preview: string } }
+
+/** Friday rewrote the conversation to keep it inside the model's context window. */
+export interface ContextCompaction {
+  after_tokens?: number
+  before_tokens?: number
+  fallback?: boolean
+  kept_turns?: number
+  kind?: 'conversation' | 'tool_results'
+  memories?: string[]
+  notice?: string
+  ok?: boolean
+  reason?: string
+  tool_results?: number
+  window?: number
+}
 
 export interface SessionInfo {
   cwd: string
@@ -56,10 +72,17 @@ export interface Message {
 }
 
 export interface MessageMetrics {
+  cached_tokens?: number | null
   elapsed_ms?: number
   estimated_tokens?: boolean
+  /** Cumulative over the turn's requests: what it cost, not how full the window is. */
   input_tokens?: number | null
   output_tokens?: number | null
+  /** Model calls the turn made. The token totals are sums over these. */
+  requests?: number | null
+  window?: number | null
+  /** How full the context is once the turn ends. */
+  window_tokens?: number | null
 }
 
 export interface VerificationResult {

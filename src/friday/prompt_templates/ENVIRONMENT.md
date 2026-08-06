@@ -9,7 +9,7 @@
 - Global model config: {global_config}
 - Project model config override: {project_config}
 - Model: {provider}/{model}
-- Context window: {context_window} tokens
+- Context window: {context_window} tokens (compaction keeps the conversation inside it)
 - Maximum output: {max_output_tokens} tokens
-- Per-run Token Budget: {run_token_budget} tokens
+- Step limit: none. Keep working until the task is done; do not ration tool calls.
 - Permission mode: {permission_mode}

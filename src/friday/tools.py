@@ -15,7 +15,7 @@ import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from agent_core import RunContext, get_current_context, tool
@@ -25,6 +25,12 @@ from friday.storage import migrate_legacy_runtime, project_state_dir, write_text
 from friday.text import clip, read_limited
 
 CONTEXT_FILE_LIMIT = 8000
+# The size arguments below are model-chosen, so every one of them needs a
+# ceiling: an append-only context is re-sent on every step, and one oversized
+# result would both fill the window and inflate the cost of the whole run.
+MAX_TOOL_OUTPUT_CHARS = 50000
+MAX_TOOL_MATCHES = 1000
+MAX_TOOL_LINE_CHARS = 2000
 IMAGE_MIME_TYPES = {
     ".gif": "image/gif",
     ".jpeg": "image/jpeg",
@@ -203,13 +209,14 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
         pattern: Annotated[str, "Glob pattern such as '**/*.py'."],
         max_results: Annotated[int, "Maximum paths to return."] = 200,
     ) -> dict:
+        limit = _capped(max_results, MAX_TOOL_MATCHES)
         matches = []
         for path in sorted(workspace.glob(pattern)):
             resolved = path.resolve()
             if resolved != workspace and workspace not in resolved.parents:
                 continue
             matches.append(str(resolved.relative_to(workspace)))
-            if len(matches) >= max(1, max_results):
+            if len(matches) >= limit:
                 break
         return with_context({"pattern": pattern, "count": len(matches), "paths": matches}, [workspace / path for path in matches])
 
@@ -221,6 +228,8 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
         max_chars: Annotated[int, "Maximum characters per matched line."] = 240,
     ) -> dict:
         regex = re.compile(pattern)
+        limit = _capped(max_results, MAX_TOOL_MATCHES)
+        line_limit = _capped(max_chars, MAX_TOOL_LINE_CHARS)
         matches = []
         for path in sorted(workspace.glob(path_glob)):
             if not path.is_file():
@@ -238,10 +247,10 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
                         {
                             "path": str(resolved.relative_to(workspace)),
                             "line": number,
-                            "text": line[:max_chars],
+                            "text": line[:line_limit],
                         }
                     )
-                    if len(matches) >= max(1, max_results):
+                    if len(matches) >= limit:
                         return with_context(
                             {"pattern": pattern, "count": len(matches), "matches": matches},
                             [workspace / match["path"] for match in matches],
@@ -564,6 +573,15 @@ def _remote_url_error(url: str) -> str:
     return ""
 
 
+def _capped(value: Any, ceiling: int) -> int:
+    """Hold a model-chosen size argument between 1 and ``ceiling``."""
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        return ceiling
+    return max(1, min(ceiling, requested))
+
+
 def _bounded_tool_output(
     friday_dir: Path,
     kind: str,
@@ -571,7 +589,7 @@ def _bounded_tool_output(
     max_chars: int,
     suffix: str,
 ) -> tuple[str, dict[str, str]]:
-    limit = max(1, int(max_chars))
+    limit = _capped(max_chars, MAX_TOOL_OUTPUT_CHARS)
     if len(content) <= limit:
         return content, {}
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()

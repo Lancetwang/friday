@@ -18,10 +18,11 @@ from agent_core import Agent, AgentEvent, RunContext
 
 from friday.app import build_friday, compact_friday, reset_friday, resume_friday, undo_friday
 from friday.checkpoint import finish_pending_checkpoint
+from friday.compaction import LAST_COMPACTION, announce_compaction, compaction_record
 from friday.config import load_model_config
 from friday.model_options import DEFAULT_THINKING_EFFORT, normalize_thinking_effort, supports_thinking
 from friday.progress import current_progress, finish_progress
-from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, conversation_body, hydrate, new_session_id
+from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, archived_messages, conversation_body, hydrate, new_session_id
 from friday.tools import (
     SESSION_PERMISSION_MODE,
     allow_permissions_for_session,
@@ -42,7 +43,7 @@ class FridaySession:
         on_delta: Callable[[str], None] | None = None,
         on_verify: Callable[[dict[str, Any]], None] | None = None,
         on_progress: Callable[[dict[str, Any]], None] | None = None,
-        on_context_notice: Callable[[str], None] | None = None,
+        on_context_notice: Callable[[dict[str, Any]], None] | None = None,
         on_event: Callable[[AgentEvent], None] | None = None,
         on_turn_start: Callable[[str], None] | None = None,
         on_turn_complete: Callable[[TurnResult], None] | None = None,
@@ -100,6 +101,7 @@ class FridaySession:
         previous = SessionState(
             session_id=self.session_id,
             body=conversation_body(context.get_messages()),
+            archived=archived_messages(context),
             progress=current_progress(context),
             last_usage=dict(context.metadata.get("friday.last_usage") or {}),
             user_message_times=[
@@ -213,10 +215,13 @@ class FridaySession:
         return outcome
 
     def compact(self) -> str:
+        """Compact on demand, reported through the same channel as the automatic pass."""
         agent, context = self.ensure()
         new_agent, new_context, summary = compact_friday(agent, context, stream=self.stream)
         self._adopt(new_agent, new_context)
-        return summary
+        record = compaction_record(new_context.metadata.get(LAST_COMPACTION))
+        announce_compaction(new_context, record, self.on_context_notice)
+        return summary or record.notice()
 
     def resume(self, resume_id: str | None = None) -> int:
         agent, context, count = resume_friday(
@@ -287,6 +292,7 @@ class FridaySession:
         state = SessionState(
             session_id=str(previous.metadata.get("session_id") or ""),
             body=conversation_body(previous.get_messages()),
+            archived=archived_messages(previous),
             progress=current_progress(previous),
             last_usage=dict(previous.metadata.get("friday.last_usage") or {}),
             user_message_times=[

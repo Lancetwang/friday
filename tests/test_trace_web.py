@@ -129,7 +129,11 @@ class TraceWebTests(unittest.TestCase):
             self.assertEqual([item["role"] for item in analyses[0]["messages"]], ["user", "assistant"])
 
     def test_web_api_lists_recorded_sessions(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": tmp}):
+        # save_turn writes under FRIDAY_HOME, so this has to redirect the home as
+        # well as the trace directory or the run leaves a session in the real one.
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"FRIDAY_HOME": str(Path(tmp) / "home" / ".friday"), "FRIDAY_OBSERVABILITY_DIR": tmp}
+        ):
             workspace = Path(tmp) / "workspace"
             context = RunContext(metadata={"workspace": str(workspace), "session_id": "s2"})
             path, turn_id = begin_live_trace(workspace, context=context, mode="chat", user="hello", prompt_messages=[])

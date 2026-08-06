@@ -111,6 +111,29 @@ const en: Record<string, string> = {
   'verification.pending': 'Verifying the result…',
   'verification.continuing': 'Continuing with verification feedback…',
 
+  // Context compaction
+  'context.compacted': 'Context compacted ({before} → {after} tokens). The model now reads a summary of the earlier work plus the last {turns} steps in full. Everything above stays in this conversation.',
+  'context.compactedPlain': 'Context compacted. The model now reads a summary of the earlier work; everything above stays in this conversation.',
+  'context.compactedLocal': 'Friday wrote the summary itself because the model was unavailable.',
+  'context.trimmed': 'Context trimmed: {count} tool results shortened. Full output is still on disk.',
+  'context.compactFailed': 'Context compaction failed ({reason}). This conversation may reach the model limit.',
+
+  // A project that disappeared from disk. Removing it silently looks like a bug.
+  'project.missing': 'Removed "{name}" from the sidebar: its folder no longer exists. Add it again if it comes back.',
+
+  // Why a turn ended early. Without this a guard stop reads as a normal answer.
+  'stop.noProgress': 'Friday stopped early: the same step kept producing the same result. The answer above is what it had.',
+  'stop.contextWindow': 'Friday stopped early: the context window is full and compaction could not free enough of it.',
+
+  // Turn metrics. The window figure is how full the context is; the cost figure
+  // is the sum over every request in the turn, which runs far ahead of it.
+  'metrics.window': 'context {used}/{total} ({percent})',
+  'metrics.request': '1 request',
+  'metrics.requests': '{count} requests',
+  'metrics.cost': 'in {input} ({cached} cached) / out {output}',
+  'metrics.explain':
+    'Context is how full the conversation is now. The token counts are totals over every request this turn made, each one re-sending the conversation, so they run ahead of the context figure; the cached part was served from the provider\'s prefix cache and billed at a fraction of fresh input.',
+
   // Thinking
   'thinking.running': 'Thinking',
   'thinking.done': 'Thought for {duration}',
@@ -381,6 +404,28 @@ const zh: Record<string, string> = {
   'verification.failed': '验证未通过',
   'verification.pending': '正在验证交付结果…',
   'verification.continuing': '正在根据验证反馈继续处理…',
+
+  // Context compaction
+  'context.compacted': '上下文已压缩（{before} → {after} tokens）。模型现在读到的是较早工作的摘要，加上最近 {turns} 步的完整内容；上面的对话记录全部保留。',
+  'context.compactedPlain': '上下文已压缩，模型现在读到的是较早工作的摘要；上面的对话记录全部保留。',
+  'context.compactedLocal': '模型不可用，摘要由 Friday 本地生成。',
+  'context.trimmed': '上下文已精简：{count} 条工具结果被缩短，完整输出仍保存在磁盘上。',
+  'context.compactFailed': '上下文压缩失败（{reason}），这次对话可能会触及模型上限。',
+
+  // A project that disappeared from disk
+  'project.missing': '已从侧边栏移除“{name}”：它的目录已不存在。如果目录恢复，可以重新添加。',
+
+  // Why a turn ended early
+  'stop.noProgress': 'Friday 提前停止：同一步骤反复得到相同结果。上面的回答是它当时掌握的内容。',
+  'stop.contextWindow': 'Friday 提前停止：上下文窗口已满，压缩也无法腾出足够空间。',
+
+  // Turn metrics
+  'metrics.window': '上下文 {used}/{total}（{percent}）',
+  'metrics.request': '1 次请求',
+  'metrics.requests': '{count} 次请求',
+  'metrics.cost': '输入 {input}（其中缓存 {cached}）/ 输出 {output}',
+  'metrics.explain':
+    '“上下文”是当前对话占用了多少窗口。token 数是本轮所有请求的累计值——每次请求都会把整段对话重新发一遍，所以它会远高于上下文占用；其中“缓存”部分由模型侧的前缀缓存命中，按远低于新输入的价格计费。',
 
   // Thinking
   'thinking.running': '思考中',

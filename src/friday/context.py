@@ -29,6 +29,16 @@ def token_estimate(context: RunContext, tools: list[Any] | None = None) -> int:
     return _tokens(len(_context_text(context)) + len(_tool_schema_text(tools)))
 
 
+def estimate_tokens(text: str) -> int:
+    """The same rough char-to-token rule the budget checks use."""
+    return _tokens(len(text))
+
+
+def content_text(content: Any) -> str:
+    """Readable text for a message body, whether it is a string or content parts."""
+    return _content_text(content)
+
+
 def context_ratio(context: RunContext, tools: list[Any] | None = None) -> float:
     return token_estimate(context, tools) / context_window(context)
 
@@ -60,7 +70,8 @@ def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
     lines = [
         "# Context",
         f"- window: {window} tokens",
-        f"- current local estimate: ~{total_tokens} tokens / {total_chars} chars / {total_tokens / window:.1%}",
+        f"- in the window now: ~{total_tokens} tokens / {total_chars} chars / {total_tokens / window:.1%}",
+        f"- compaction starts at: {int(window * TOOL_COMPACT_AT)} tokens ({TOOL_COMPACT_AT:.0%})",
     ]
     usage = context.metadata.get("friday.last_usage")
     if isinstance(usage, dict):
@@ -69,10 +80,18 @@ def context_report(context: RunContext, tools: list[Any] | None = None) -> str:
         total = input_tokens + output_tokens if isinstance(input_tokens, int) and isinstance(output_tokens, int) else "n/a"
         input_value = input_tokens if isinstance(input_tokens, int) else "n/a"
         output_value = output_tokens if isinstance(output_tokens, int) else "n/a"
+        cached = usage.get("cached_tokens")
+        cached_value = cached if isinstance(cached, int) else "n/a"
+        requests = usage.get("requests")
         source = "estimated" if usage.get("estimated_tokens") else "provider"
-        lines.append(f"- last turn usage ({source}): input {input_value} / output {output_value} / total {total}")
+        # Cost, not occupancy: every step re-sends the window, so this total runs
+        # far ahead of the line above and says nothing about how full the window is.
+        lines.append(
+            f"- last turn cost ({source}, summed over {requests if isinstance(requests, int) else 'n/a'} requests):"
+            f" input {input_value} / output {output_value} / cached {cached_value} / total {total}"
+        )
     else:
-        lines.append("- last turn usage: n/a")
+        lines.append("- last turn cost: n/a")
     lines.append("")
     lines.append("| Part | Local est. tokens | Exact chars |")
     lines.append("| --- | ---: | ---: |")

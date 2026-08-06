@@ -13,11 +13,12 @@ from agent_core import Agent, RunContext
 from friday.agent_flow import begin_guarded_run
 from friday.app import prepare_context_for_chat
 from friday.checkpoint import begin_checkpoint, checkpoint_artifacts, discard_checkpoint, finish_checkpoint
-from friday.context import token_estimate
+from friday.compaction import LAST_COMPACTION, announce_compaction, compaction_record
+from friday.context import context_window, token_estimate
 from friday.loop import AGENT_MAX_STEPS, run_loop
 from friday.memory import capture_user_memory, relevant_memory
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress
-from friday.state import USER_MESSAGE_TIMES_KEY, save_turn
+from friday.state import USER_MESSAGE_TIMES_KEY, archived_messages, save_turn
 from friday.tools import build_tools, pending_approval
 from friday.trace import begin_live_trace, finish_live_trace, record_context_transition, write_live_event, write_trace
 
@@ -51,7 +52,7 @@ def run_turn(
     on_delta: Callable[[str], None] | None = None,
     on_verify: Callable[[dict[str, Any]], None] | None = None,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
-    on_context_notice: Callable[[str], None] | None = None,
+    on_context_notice: Callable[[dict[str, Any]], None] | None = None,
     approval_result: dict[str, Any] | None = None,
     user_label: str | None = None,
     continuation: bool = False,
@@ -87,11 +88,17 @@ def run_turn(
         finish_live_trace(live_path, turn_id, status="error")
         raise
 
+    # Kept beside the turn rather than on the context because a mid-run
+    # compaction swaps the context out, and cost has to keep accruing across it.
+    cost = {"cached_tokens": 0}
+
     def on_observation(event: Any) -> None:
         if event.type == "model.request.payload":
             config = context.metadata.get("friday.model_config")
             if isinstance(config, dict):
                 event.data["model"] = dict(config)
+        if event.type == "model.response.payload":
+            cost["cached_tokens"] += _cached_tokens(event.data)
         write_live_event(live_path, turn_id, event)
         if observation_handler is not None:
             observation_handler(event)
@@ -111,9 +118,9 @@ def run_turn(
         if not continuation or not context.metadata.get("friday.user_request"):
             context.metadata["friday.user_request"] = text
         record_context_transition(live_path, turn_id, notice, context.get_messages())
+        if notice:
+            announce_compaction(context, compaction_record(context.metadata.get(LAST_COMPACTION)), on_context_notice)
         begin_guarded_run(context, usage_start)
-        if notice and on_context_notice:
-            on_context_notice(notice)
         if approval_result is not None:
             tool_call_id = _replace_pending_tool_result(context, approval_result)
             context.observe(
@@ -164,7 +171,8 @@ def run_turn(
                 }
             )
         prompt_messages = [dict(message) for message in context.get_messages()]
-        input_estimate = token_estimate(context, build_tools(workspace)) + _tokens(text)
+        tools = build_tools(workspace)
+        input_estimate = token_estimate(context, tools) + _tokens(text)
         start = time.perf_counter()
         loop_result = run_loop(
             agent,
@@ -215,8 +223,13 @@ def run_turn(
         "elapsed_ms": int((time.perf_counter() - start) * 1000),
         "requests": turn_usage["requests"],
         "estimated_tokens": estimated,
+        # Cumulative over every request in the turn: what the turn cost.
         "input_tokens": turn_usage["input_tokens"] if not estimated else input_estimate,
         "output_tokens": turn_usage["output_tokens"] if not estimated else _tokens(answer),
+        "cached_tokens": cost["cached_tokens"],
+        # How full the window is now: what the next request has to carry.
+        "window": context_window(context),
+        "window_tokens": token_estimate(context, tools),
     }
     if continuation and isinstance(context.metadata.get(PENDING_TURN_METRICS), dict):
         previous_metrics = context.metadata[PENDING_TURN_METRICS]
@@ -226,6 +239,11 @@ def run_turn(
             "estimated_tokens": bool(previous_metrics.get("estimated_tokens")) or metrics["estimated_tokens"],
             "input_tokens": int(previous_metrics.get("input_tokens", 0)) + metrics["input_tokens"],
             "output_tokens": int(previous_metrics.get("output_tokens", 0)) + metrics["output_tokens"],
+            "cached_tokens": int(previous_metrics.get("cached_tokens", 0)) + metrics["cached_tokens"],
+            # Occupancy is a level, not a total: the resumed reading replaces the
+            # one taken before the approval pause instead of adding to it.
+            "window": metrics["window"],
+            "window_tokens": metrics["window_tokens"],
         }
     loop_status = str(context.metadata.get("friday.loop_status") or "done")
     if loop_status == "needs_approval":
@@ -267,6 +285,8 @@ def run_turn(
             user_message_times=context.metadata.get(USER_MESSAGE_TIMES_KEY),
             thinking_effort=str(context.metadata.get("friday.thinking_effort") or "high"),
             artifacts=artifacts,
+            archived=archived_messages(context),
+            metrics=metrics,
             continuation=continuation,
         )
         finish_live_trace(
@@ -282,6 +302,25 @@ def run_turn(
 
 def _tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
+
+
+def _cached_tokens(data: Any) -> int:
+    """Prompt tokens the provider served from its cache on one response.
+
+    Reported so the turn's cost reads honestly: a re-sent conversation is mostly
+    cache hits, which bill at a fraction of fresh input.
+    """
+    message = data.get("message") if isinstance(data, dict) else None
+    usage = message.get("usage") if isinstance(message, dict) else None
+    if not isinstance(usage, dict):
+        return 0
+    value = usage.get("prompt_cache_hit_tokens")
+    if not isinstance(value, int) or isinstance(value, bool):
+        details = usage.get("prompt_tokens_details")
+        value = details.get("cached_tokens") if isinstance(details, dict) else None
+    if not isinstance(value, int) or isinstance(value, bool):
+        return 0
+    return max(0, value)
 
 
 def _replace_pending_tool_result(context: RunContext, approval_result: dict[str, Any]) -> str:

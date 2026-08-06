@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 from agent_core import AgentEvent, RunContext
@@ -24,7 +25,16 @@ from friday.app_server import (
 )
 from friday.app_server import main as app_server_main
 from friday.im.supervisor import BridgeSupervisor
-from friday.state import delete_session_tree, fork_session, read_session, resume_choices, save_turn, session_path, session_tree
+from friday.state import (
+    ARCHIVED_MESSAGES,
+    delete_session_tree,
+    fork_session,
+    read_session,
+    resume_choices,
+    save_turn,
+    session_path,
+    session_tree,
+)
 from friday.turn import TurnResult
 from friday.turn import TurnCancelled
 
@@ -216,7 +226,7 @@ class TuiGatewayTests(unittest.TestCase):
 
         stop.assert_called_once_with()
 
-    def test_verification_status_omits_trace_details(self) -> None:
+    def test_verification_status_keeps_feedback_but_omits_trace_details(self) -> None:
         result = verification_status(
             {
                 "evidence": ["test passed"],
@@ -226,7 +236,9 @@ class TuiGatewayTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(result, {"passed": True, "verdict": "pass"})
+        # Evidence is trace material; feedback is what the UI shows when a
+        # verification does not pass, so it travels with the status.
+        self.assertEqual(result, {"feedback": "done", "passed": True, "verdict": "pass"})
 
     def test_gateway_exposes_verification_as_status_event(self) -> None:
         gateway = Gateway()
@@ -297,6 +309,24 @@ class TuiGatewayTests(unittest.TestCase):
 
         payload = event.call_args.args[1]
         self.assertEqual(payload["verification"], {"passed": True, "verdict": "pass"})
+
+    def test_message_complete_reports_why_a_guard_ended_the_turn(self) -> None:
+        """A stopped turn otherwise arrives looking exactly like a finished one."""
+        gateway = Gateway()
+        callback = gateway.session.on_turn_complete
+        assert callback is not None
+        result = _turn_result("what I have so far")
+        result.context.metadata["friday.loop_status"] = "context_window"
+
+        with patch.object(gateway, "event") as event:
+            callback(result)
+
+        self.assertEqual(event.call_args.args[1]["status"], "context_window")
+
+        with patch.object(gateway, "event") as event:
+            callback(_turn_result("done"))
+
+        self.assertEqual(event.call_args.args[1]["status"], "done")
 
     def test_message_complete_includes_artifacts(self) -> None:
         gateway = Gateway()
@@ -728,6 +758,112 @@ class TuiGatewayTests(unittest.TestCase):
 
             restored = next(item for item in history if item.get("text") == "Done.")
             self.assertEqual(restored["artifacts"], [artifact])
+
+    def test_every_reply_keeps_the_figures_it_was_answered_with(self) -> None:
+        # A single `last_usage` described only the newest turn, so reopening a
+        # conversation left every earlier reply with no metrics line at all.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                gateway = Gateway()
+                first = {"cached_tokens": 0, "elapsed_ms": 1200, "input_tokens": 900, "output_tokens": 40}
+                second = {"cached_tokens": 800, "elapsed_ms": 3400, "input_tokens": 2100, "output_tokens": 60}
+                context = RunContext(metadata={"workspace": str(root)})
+                context.add_message("user", "first question")
+                context.add_message("assistant", "First answer.")
+                gateway.session.context = context
+                save_turn(root, "first question", "First answer.", gateway.session.session_id, context.get_messages(), metrics=first)
+
+                context.add_message("user", "second question")
+                context.add_message("assistant", "Second answer.")
+                save_turn(root, "second question", "Second answer.", gateway.session.session_id, context.get_messages(), metrics=second)
+                history = session_history(gateway.session)
+            finally:
+                os.chdir(cwd)
+
+            replies = {item["text"]: item.get("metrics") for item in history if item["kind"] == "assistant"}
+            self.assertEqual(replies["First answer."], first)
+            self.assertEqual(replies["Second answer."], second)
+
+    def test_metrics_survive_the_compaction_that_rewrites_the_prompt(self) -> None:
+        # Records are written against the prompt and read back against the
+        # transcript, and compaction moves one without moving the other.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                gateway = Gateway()
+                metrics = {"cached_tokens": 12, "elapsed_ms": 900, "input_tokens": 500, "output_tokens": 30}
+                context = RunContext(metadata={"workspace": str(root)})
+                context.add_message("user", "early question")
+                context.add_message("assistant", "Early answer.")
+                gateway.session.context = context
+                save_turn(root, "early question", "Early answer.", gateway.session.session_id, context.get_messages(), metrics=metrics)
+
+                # Compaction moved the pair into the archive, behind turns the
+                # prompt no longer holds, so the reply the record was written
+                # against at index 1 now sits at index 3 of the transcript.
+                compacted = RunContext(metadata={"workspace": str(root)})
+                compacted.add_message("user", "later question")
+                compacted.add_message("assistant", "Later answer.")
+                compacted.metadata[ARCHIVED_MESSAGES] = [
+                    {"role": "user", "content": "older question"},
+                    {"role": "assistant", "content": "Older answer."},
+                    {"role": "user", "content": "early question"},
+                    {"role": "assistant", "content": "Early answer."},
+                ]
+                gateway.session.context = compacted
+                history = session_history(gateway.session)
+            finally:
+                os.chdir(cwd)
+
+            texts = [item["text"] for item in history if item["kind"] == "assistant"]
+            self.assertEqual(texts, ["Older answer.", "Early answer.", "Later answer."])
+            restored = next(item for item in history if item.get("text") == "Early answer.")
+            self.assertEqual(restored["metrics"], metrics)
+            # The figures belong to one reply, not to whatever sits at that index.
+            self.assertIsNone(next(item for item in history if item["text"] == "Older answer.").get("metrics"))
+
+    def test_a_started_run_puts_its_conversation_in_the_list_before_the_reply(self) -> None:
+        # A session reaches the list by being saved, and it is saved when the turn
+        # ends, so a conversation just started showed no trace of itself.
+        gateway = Gateway()
+        announced: list[tuple[str, dict[str, Any]]] = []
+
+        with (
+            patch.object(gateway.session, "chat", return_value=_turn_result("done")),
+            patch.object(gateway, "ok"),
+            patch.object(gateway, "event", side_effect=lambda name, payload: announced.append((name, payload))),
+        ):
+            gateway.run_chat("1", "look into this")
+
+        # The start is what the sidebar was missing; the end it already had.
+        self.assertEqual(
+            [payload.get("running") for name, payload in announced if name == "session.updated"],
+            [True, False],
+        )
+
+    def test_a_running_conversation_is_listed_even_with_nothing_on_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                gateway = Gateway()
+                session_id = gateway.session.session_id
+                with gateway._state:
+                    gateway.runs[session_id] = cast(Any, object())
+                    gateway.run_labels[session_id] = "look into this"
+
+                choices = gateway.session_choices()
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual([choice["id"] for choice in choices], [session_id])
+        self.assertTrue(choices[0]["running"])
+        self.assertEqual(choices[0]["user"], "look into this")
 
     def test_gateway_continues_pending_goal_after_approval(self) -> None:
         gateway = Gateway()

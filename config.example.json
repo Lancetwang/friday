@@ -2,7 +2,6 @@
   "provider": "deepseek",
   "model": "deepseek-v4-flash",
   "base_url": "https://api.deepseek.com",
-  "context_window": 353000,
-  "max_output_tokens": 65536,
-  "run_token_budget": 2824000
+  "context_window": 300000,
+  "max_output_tokens": 65536
 }

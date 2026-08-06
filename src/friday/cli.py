@@ -379,7 +379,7 @@ def _session(stream: bool) -> FridaySession:
         stream=stream,
         on_delta=_print_delta if stream else None,
         on_progress=_print_progress,
-        on_context_notice=lambda notice: print(f"[context] {notice.split(':', 1)[0]}"),
+        on_context_notice=lambda record: print(f"[context] {record.get('notice') or 'compacted'}"),
         on_turn_complete=lambda result: _print_turn(result, stream),
         on_approval=lambda result: print(_approval_status(result)),
         on_rejection=lambda result: print(f"Rejected: {result.get('command') or 'pending command'}"),
@@ -423,9 +423,7 @@ def _slash(text: str, session: FridaySession) -> None:
         _server, url = start_trace_server()
         print(f"Trace Workbench: {url}")
     elif command == "compact":
-        summary = session.compact()
-        print("compacted conversation:")
-        print(summary)
+        print(session.compact())
     elif command == "resume":
         count = session.resume()
         print(f"resumed {count} turns")

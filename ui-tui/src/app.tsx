@@ -4,7 +4,7 @@ import TextInput from 'ink-text-input'
 
 import type { GatewayClient } from './gatewayClient.js'
 import { Markdown, type Theme } from './markdown.js'
-import type { BridgeStatus, GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
+import type { BridgeStatus, ContextCompaction, GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
 
 const theme: Theme = {
   accent: '#4F6CD8',
@@ -93,6 +93,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         if (event.payload.text) {
           setMessages(items => [...items, { metrics: event.payload.metrics, role: 'assistant', text: event.payload.text }])
         }
+        const cutShort = stopReasonLine(event.payload.status)
+        if (cutShort) {
+          setMessages(items => [...items, { role: 'system', text: cutShort }])
+        }
         activeTurn.current = null
         setProgress(event.payload.progress ?? null)
         setStreaming('')
@@ -130,6 +134,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setMessages(items => updateVerification(items, activeTurn.current, event.payload))
       } else if (event.type === 'progress.update') {
         setProgress(event.payload)
+      } else if (event.type === 'context.compacted') {
+        const line = compactionLine(event.payload)
+        setMessages(items => [...items, { role: 'system', text: line }])
+        setActivity(shortText(line, 80))
       } else if (event.type === 'gateway.stderr') {
         setActivity(event.payload.line)
       } else if (event.type === 'gateway.protocol_error') {
@@ -911,6 +919,38 @@ function shortText(value: string, max: number) {
   return text.length > max ? `${text.slice(0, max - 3)}...` : text
 }
 
+/** A turn a guard ended reads as a normal answer, so name the reason. */
+function stopReasonLine(status?: string) {
+  if (status === 'no_progress') {
+    return 'Friday stopped early: the same step kept producing the same result. The answer above is what it had.'
+  }
+  if (status === 'context_window') {
+    return 'Friday stopped early: the context window is full and compaction could not free enough of it.'
+  }
+  return ''
+}
+
+/** Compaction rewrites the prompt, not the conversation. Say which one moved. */
+function compactionLine(payload: ContextCompaction) {
+  if (payload.ok === false) {
+    return `Context compaction failed (${payload.reason || 'unknown'}). This conversation may hit the model's limit.`
+  }
+  if (payload.kind === 'tool_results') {
+    return `Context trimmed: shortened ${payload.tool_results ?? 0} tool results. Full output is still on disk.`
+  }
+  const saved = payload.before_tokens && payload.after_tokens
+    ? ` (~${shortTokens(payload.before_tokens)} to ~${shortTokens(payload.after_tokens)} tokens)`
+    : ''
+  const kept = payload.kept_turns ? `, plus the last ${payload.kept_turns} steps verbatim` : ''
+  const written = payload.fallback ? ' Friday wrote the summary locally because the model could not.' : ''
+  return `Context compacted${saved}: the model now reads a summary of the earlier work${kept}. Everything above stays in this conversation.${written}`
+}
+
+function shortTokens(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  return value >= 1000 ? `${Math.round(value / 1000)}k` : String(value)
+}
+
 function formatSeconds(seconds: number) {
   return `${Math.max(0, seconds).toFixed(1)}s`
 }
@@ -957,14 +997,23 @@ function Composer({ busy, input, onChange, onSubmit }: { busy: boolean; input: s
 
 function Metrics({ metrics }: { metrics: NonNullable<Message['metrics']> }) {
   const mark = metrics.estimated_tokens ? '~' : ''
-  const input = metrics.input_tokens == null ? 'n/a' : `${mark}${metrics.input_tokens}`
-  const output = metrics.output_tokens == null ? 'n/a' : `${mark}${metrics.output_tokens}`
+  const input = metrics.input_tokens == null ? 'n/a' : `${mark}${shortTokens(metrics.input_tokens)}`
+  const output = metrics.output_tokens == null ? 'n/a' : `${mark}${shortTokens(metrics.output_tokens)}`
   const seconds = metrics.elapsed_ms == null ? 'n/a' : `${(metrics.elapsed_ms / 1000).toFixed(1)}s`
-  return (
-    <Text color={theme.dim}>
-      in {input} · out {output} · {seconds}
-    </Text>
-  )
+  const parts: string[] = []
+  if (metrics.window_tokens != null && metrics.window) {
+    const percent = Math.round((metrics.window_tokens / metrics.window) * 100)
+    // Occupancy is always Friday's own estimate, never a provider count.
+    parts.push(`ctx ~${shortTokens(metrics.window_tokens)}/${shortTokens(metrics.window)} (${percent}%)`)
+  }
+  // The request count is what makes the rest legible: the token figures are sums
+  // over every call the turn made, each re-sending the conversation, so they run
+  // far ahead of the window. Cache is quoted inside the input it is part of --
+  // beside it, it read as a second context larger than the first.
+  if (metrics.requests) parts.push(`${metrics.requests} req`)
+  parts.push(`in ${input} (${metrics.cached_tokens == null ? 'n/a' : shortTokens(metrics.cached_tokens)} cached) / out ${output}`)
+  parts.push(seconds)
+  return <Text color={theme.dim}>{parts.join(' · ')}</Text>
 }
 
 function shortModel(model: string) {

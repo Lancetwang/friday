@@ -9,14 +9,13 @@ from typing import Any, Callable, Literal
 from agent_core import Agent, CallableNode, Flow, RunContext
 
 from friday.agent_flow import GUARD_STOP_REASON, inherit_guarded_run
-from friday.config import DEFAULT_MODEL_CONFIG
+from friday.compaction import LAST_COMPACTION, announce_compaction, compaction_record
 from friday.prompts import goal_attempt_prompt, retry_prompt
 from friday.verification import record_verification, verify_friday
 
 AGENT_MAX_STEPS = 10000
 FLOW_MAX_STEPS = 10000
-TOKEN_BUDGET_SOFT_LIMIT = 0.85
-GUARD_STOP_REASONS = {"no_progress", "token_budget", "context_window"}
+GUARD_STOP_REASONS = {"no_progress", "context_window"}
 
 LoopStatus = Literal[
     "done",
@@ -24,7 +23,6 @@ LoopStatus = Literal[
     "blocked",
     "inconclusive",
     "no_progress",
-    "token_budget",
     "context_window",
     "error",
     "max_attempts",
@@ -123,7 +121,6 @@ def run_loop(
         "start_event": len(context.events),
         "status": "done",
         "stream": stream,
-        "token_budget": _token_budget(context),
         "usage_start": _usage_snapshot(context),
         "verifications": [],
     }
@@ -191,11 +188,12 @@ def _refresh_context(state: dict[str, Any]) -> None:
         return
     new_context.on_event = context.on_event
     new_context.on_observation = context.on_observation
+    if notice:
+        announce_compaction(new_context, compaction_record(new_context.metadata.get(LAST_COMPACTION)))
     inherit_guarded_run(new_context, context)
     state["agent"] = agent
     state["context"] = new_context
     state["start_event"] = 0
-    new_context.emit("context.transition", category="context", data={"notice": notice})
 
 
 def _verify(state: dict[str, Any]):
@@ -233,21 +231,18 @@ def _verify(state: dict[str, Any]):
         result["feedback"] = str(result.get("feedback") or "Verifier requested repair without a concrete next check.")
         return _finish(state, result, "inconclusive")
 
+    # Recorded for the trace and the cost figure the UIs show, never compared
+    # against a ceiling: repairs re-send the conversation, so this total grows
+    # with the square of the work and says nothing about whether to continue.
     tokens_used = _tokens_used(state["context"], state.get("usage_start"))
     if tokens_used is not None:
         result["tokens_used"] = tokens_used
-        result["token_budget"] = state["token_budget"]
 
     repair_signature = _repair_signature(result)
     attempt_signature = state.get("attempt_signature")
     if repair_signature == state.get("last_repair_signature") and attempt_signature == state.get("last_attempt_signature"):
         result["stop_reason"] = "no_progress"
         return _finish(state, result, "no_progress")
-
-    if tokens_used is not None:
-        if tokens_used >= int(state["token_budget"] * TOKEN_BUDGET_SOFT_LIMIT):
-            result["stop_reason"] = "token_budget"
-            return _finish(state, result, "token_budget")
 
     if state["max_attempts"] is not None and state["attempt"] >= state["max_attempts"]:
         result["stop_reason"] = "max_attempts"
@@ -316,12 +311,6 @@ def _tokens_used(context: RunContext, start: Any) -> int | None:
         return None
     total = usage.since(start).to_dict().get("total_tokens")
     return total if isinstance(total, int) else None
-
-
-def _token_budget(context: RunContext) -> int:
-    config = context.metadata.get("friday.model_config", {})
-    value = config.get("run_token_budget") if isinstance(config, dict) else None
-    return value if isinstance(value, int) and value > 0 else DEFAULT_MODEL_CONFIG.run_token_budget
 
 
 def _to_result(state: dict[str, Any]) -> LoopResult:
