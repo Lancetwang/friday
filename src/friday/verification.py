@@ -22,20 +22,20 @@ from friday.storage import project_state_dir
 from friday.tools import _shell_surface, allow_permissions_for_session, build_tools, pending_approval
 
 VERIFIER_MAX_STEPS = 10000
-# DeepSeek serves a 1M-token window on the v4 models. The verifier is a fresh
-# one-shot check on every turn, so cap it at the model's real ceiling instead
-# of the working session's configured window: the check never needs to budget.
+# The verifier is a fresh one-shot check on every turn, so give it the full
+# 1M-token window regardless of provider: the check never needs to budget
+# against a long-running conversation.
 VERIFIER_CONTEXT_WINDOW = 1_000_000
 
 
 def _verifier_config(config: ModelConfig) -> ModelConfig:
     """The verifier's independent model configuration.
 
-    The verifier keeps the session's provider/model but gets the full
-    deepseek window: it is a one-shot check, not a long-running conversation,
-    so it should never budget against the work agent's window.
+    The verifier keeps the session's provider/model but gets the full 1M
+    window: it is a one-shot check, not a long-running conversation, so it
+    should never budget against the work agent's window.
     """
-    if config.provider == "deepseek" and config.context_window < VERIFIER_CONTEXT_WINDOW:
+    if config.context_window < VERIFIER_CONTEXT_WINDOW:
         return replace(config, context_window=VERIFIER_CONTEXT_WINDOW)
     return config
 

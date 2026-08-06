@@ -953,7 +953,7 @@ class ResetTests(unittest.TestCase):
             self.assertEqual(config.max_output_tokens, 4096)
 
     def test_default_model_budget_is_300k_with_64k_output(self) -> None:
-        self.assertEqual(DEFAULT_MODEL_CONFIG.context_window, 300000)
+        self.assertEqual(DEFAULT_MODEL_CONFIG.context_window, 1_000_000)
         self.assertEqual(DEFAULT_MODEL_CONFIG.max_output_tokens, 65536)
         self.assertEqual(DEFAULT_MODEL_CONFIG.run_token_budget, 40000000)
 
@@ -1074,7 +1074,7 @@ class ResetTests(unittest.TestCase):
                 {"thinking": {"type": "enabled"}},
             )
             self.assertIn("flow", agent_class.call_args.kwargs)
-            self.assertEqual(context.metadata["friday.model_config"]["context_window"], 300000)
+            self.assertEqual(context.metadata["friday.model_config"]["context_window"], 1_000_000)
             self.assertEqual(context.metadata["friday.model_config"]["run_token_budget"], 40000000)
 
 
@@ -2271,7 +2271,7 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "pass")
         self.assertEqual(context_window(verifier_context), 1_000_000)
 
-    def test_verifier_keeps_non_deepseek_context_window(self) -> None:
+    def test_verifier_lifts_every_provider_to_the_full_window(self) -> None:
         agent = Mock()
         verifier_context = RunContext()
         agent.new_context.return_value = verifier_context
@@ -2285,7 +2285,7 @@ class VerificationTests(unittest.TestCase):
         ):
             _agent, context = build_verifier(Path.cwd(), config)
 
-        self.assertEqual(context.metadata["friday.model_config"]["context_window"], 200000)
+        self.assertEqual(context.metadata["friday.model_config"]["context_window"], 1_000_000)
 
     def test_verifier_prompt_excludes_main_answer(self) -> None:
         prompt = verification_prompt(

@@ -21,7 +21,7 @@ class ModelConfig:
     model: str = "deepseek-v4-flash"
     base_url: str = "https://api.deepseek.com"
     vision: bool = False
-    context_window: int = 300000
+    context_window: int = 1_000_000
     max_output_tokens: int = 65536
     # Kept so existing config files still load, and reported as the turn's cost.
     # Nothing compares a run against it: every step re-sends the conversation, so
