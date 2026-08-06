@@ -2,6 +2,14 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.5 - The full window, on every role (2026-08-06)
+
+- Every model now defaults to the full 1M-token window, and one model serves all three roles: the work agent, the verifier, and the trace analyst all use the workspace's own model configuration, so a provider whose real ceiling is below 1M never gets a window it cannot serve. (The verifier previously forced the full window only for DeepSeek.)
+- The desktop no longer grinds as a conversation grows. Streamed replies are batched and rendered as plain text until they finish, unchanged messages are never re-rendered or re-parsed, and long conversations stay responsive instead of slowing with every turn.
+- The desktop's memory is now bounded no matter how long a session runs: attached images live in a capped LRU budget instead of the timeline, oversized tool output is truncated, and a project left idle for five minutes frees both its backend process and its on-screen history (reopening it restores the same conversation automatically).
+- Fixed a race where reopening a project while its idle backend was being reclaimed could misreport a clean stop as a crash. The gateway now distinguishes stops this window asked for from real crashes by process id, so a restart mid-reclaim is never surfaced as an error.
+- Windows installers are now built and published to the GitHub release alongside the macOS DMGs, so a desktop update no longer requires building locally.
+
 ## v0.1.4 - A verifier that never asks, and a welcome that knows the time (2026-08-06)
 
 - Fixed the desktop reporting "Verifier returned invalid JSON" whenever the verifier's own command needed approval. The verifier runs as an extension of the main session, so an approval it triggers now lands on that session's pending slot where the turn, the UI, and the post-run check can all see it; an empty verifier answer is also reported as "no output" instead of being blamed on the JSON.
