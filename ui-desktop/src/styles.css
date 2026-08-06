@@ -1624,6 +1624,7 @@ input[type="checkbox"] {
   color: var(--ink);
   font-family: var(--font-serif);
   font-size: clamp(1.5rem, 3.2vw, var(--text-hero));
+  animation: welcome-fade 600ms ease-out both;
 }
 
 .welcome-prompt i {
@@ -4261,6 +4262,17 @@ html.scrolling *::-webkit-scrollbar-thumb:hover,
 @keyframes welcome-cursor {
   50% {
     opacity: 0;
+  }
+}
+
+@keyframes welcome-fade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 

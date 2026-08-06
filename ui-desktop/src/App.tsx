@@ -369,7 +369,18 @@ type SidebarSection = 'phone' | 'projects' | 'recent'
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 520
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
-const WELCOME_MESSAGE_KEYS = ['welcome.0', 'welcome.1', 'welcome.2']
+const WELCOME_MESSAGE_KEYS = ['welcome.0', 'welcome.1', 'welcome.2', 'welcome.3', 'welcome.4', 'welcome.5']
+
+// Picks the time-of-day greeting that prefixes the random welcome hint. The
+// greeting is plain fixed copy, never model output, so it is chosen locally.
+function welcomeGreetingKey(now = new Date()): string {
+  const hour = now.getHours()
+  if (hour >= 5 && hour < 12) return 'welcome.greeting.morning'
+  if (hour >= 12 && hour < 18) return 'welcome.greeting.afternoon'
+  if (hour >= 18 && hour < 23) return 'welcome.greeting.evening'
+  return 'welcome.greeting.late'
+}
+
 const emptyModelCatalog: ModelCatalog = { active: '', profiles: [], providers: [] }
 
 function nextId(prefix: string) {
@@ -1823,7 +1834,11 @@ function App() {
 
   const timelineItems = bindCheckpoints(items, checkpoints, activeSession)
   const sourcesByMessage = collectMessageSources(timelineItems)
-  const showWelcome = status === 'ready' && !activeSession && !timelineItems.length && !pendingApproval && !busy
+  // A brand-new session always carries a session id from the backend, so the
+  // welcome hint keys off the conversation being empty rather than unnamed:
+  // it shows on first launch, on a fresh session, and on resuming a session
+  // that never received a message.
+  const showWelcome = status === 'ready' && !timelineItems.length && !pendingApproval && !busy
 
   return (
     <div className="desktop-window">
@@ -2047,7 +2062,7 @@ function App() {
           }}
           ref={timeline}
         >
-          {showWelcome && <WelcomePrompt key={activeProject} />}
+          {showWelcome && <WelcomePrompt key={`${activeProject}::${activeSession}`} />}
           {!showWelcome && groupActivityItems(timelineItems).map(item => Array.isArray(item)
             ? item.length === 1
               ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onFork={forkConversation} onLoadArtifact={loadArtifact} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
@@ -2324,7 +2339,11 @@ function App() {
 }
 
 function WelcomePrompt() {
-  const [message] = useState(() => t(WELCOME_MESSAGE_KEYS[Math.floor(Math.random() * WELCOME_MESSAGE_KEYS.length)]!))
+  const [message] = useState(() => {
+    const greeting = t(welcomeGreetingKey())
+    const hint = t(WELCOME_MESSAGE_KEYS[Math.floor(Math.random() * WELCOME_MESSAGE_KEYS.length)]!)
+    return t('welcome.greeting.format', { greeting, hint })
+  })
   const characters = Array.from(message)
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const [visible, setVisible] = useState(reduceMotion ? characters.length : 0)

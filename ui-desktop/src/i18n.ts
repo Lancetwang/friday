@@ -89,9 +89,17 @@ const en: Record<string, string> = {
   'modelMenu.keyRequired': 'API key required',
 
   // Welcome
+  'welcome.greeting.morning': 'Good morning',
+  'welcome.greeting.afternoon': 'Good afternoon',
+  'welcome.greeting.evening': 'Good evening',
+  'welcome.greeting.late': "It's late",
+  'welcome.greeting.format': '{greeting}, {hint}',
   'welcome.0': 'Where shall we start today?',
   'welcome.1': 'What can I help you with today?',
   'welcome.2': 'Start with an idea.',
+  'welcome.3': 'Is there something you would like to get done?',
+  'welcome.4': "I'm ready when you are.",
+  'welcome.5': "Let's make something useful.",
 
   // Approval panel
   'approval.title': 'Approval required',
@@ -383,9 +391,17 @@ const zh: Record<string, string> = {
   'modelMenu.keyRequired': '需要 API key',
 
   // Welcome
+  'welcome.greeting.morning': '早上好',
+  'welcome.greeting.afternoon': '下午好',
+  'welcome.greeting.evening': '晚上好',
+  'welcome.greeting.late': '夜深了',
+  'welcome.greeting.format': '{greeting}，{hint}',
   'welcome.0': '今天我们从哪里开始？',
   'welcome.1': '今天我能帮你做什么？',
   'welcome.2': '从一个想法开始吧。',
+  'welcome.3': '想做点什么，尽管吩咐。',
+  'welcome.4': '我准备好了，随时可以开工。',
+  'welcome.5': '一起做点有用的事吧。',
 
   // Approval panel
   'approval.title': '需要批准',
