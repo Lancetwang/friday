@@ -14,7 +14,13 @@ use tauri_plugin_shell::{
 };
 
 #[derive(Default)]
-struct GatewayState(Mutex<HashMap<PathBuf, CommandChild>>);
+struct GatewayState {
+    children: Mutex<HashMap<PathBuf, CommandChild>>,
+    /// Pids this window stopped on purpose, so their exit is not reported as a
+    /// crash. Keyed by workspace; an entry is consumed when the exit event for
+    /// that pid is emitted.
+    stopped: Mutex<HashMap<PathBuf, u32>>,
+}
 
 fn workspace_root(requested: Option<String>) -> Result<PathBuf, String> {
     if let Some(path) = requested.filter(|value| !value.trim().is_empty()) {
@@ -113,7 +119,7 @@ fn gateway_start(
     state: tauri::State<'_, GatewayState>,
     workspace: Option<String>,
 ) -> Result<String, String> {
-    let mut current = state.0.lock().map_err(|error| error.to_string())?;
+    let mut current = state.children.lock().map_err(|error| error.to_string())?;
     let workspace = workspace_root(workspace)?;
     if current.contains_key(&workspace) {
         return Ok(workspace.display().to_string());
@@ -186,7 +192,7 @@ fn gateway_start(
             remember(&line, &mut stderr_tail);
             let _ = app.emit("gateway-stderr", (event_workspace.clone(), line));
         }
-        if let Ok(mut gateways) = app.state::<GatewayState>().0.lock() {
+        if let Ok(mut gateways) = app.state::<GatewayState>().children.lock() {
             if gateways
                 .get(&process_workspace)
                 .is_some_and(|current| current.pid() == child_pid)
@@ -199,7 +205,22 @@ fn gateway_start(
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        let _ = app.emit("gateway-exit", (event_workspace, detail));
+        // A stop this window asked for is housekeeping: the window handles it as
+        // an idle reclaim and does not surface it. Anything else is a crash the
+        // window has to report, and only a matching pid proves which one it is
+        // (the user may have restarted the project while this process was
+        // shutting down, so the workspace alone cannot tell them apart).
+        let stopped_by_us = app
+            .state::<GatewayState>()
+            .stopped
+            .lock()
+            .ok()
+            .and_then(|mut stopped| stopped.remove(&process_workspace))
+            == Some(child_pid);
+        let _ = app.emit(
+            if stopped_by_us { "gateway-stopped" } else { "gateway-exit" },
+            (event_workspace, detail),
+        );
     });
 
     current.insert(workspace, child);
@@ -212,7 +233,7 @@ fn gateway_send(
     message: String,
     state: tauri::State<'_, GatewayState>,
 ) -> Result<(), String> {
-    let mut current = state.0.lock().map_err(|error| error.to_string())?;
+    let mut current = state.children.lock().map_err(|error| error.to_string())?;
     let workspace = canonical_directory(PathBuf::from(workspace))?;
     let child = current
         .get_mut(&workspace)
@@ -227,13 +248,17 @@ fn gateway_stop(
     workspace: Option<String>,
     state: tauri::State<'_, GatewayState>,
 ) -> Result<(), String> {
-    let mut current = state.0.lock().map_err(|error| error.to_string())?;
+    let mut current = state.children.lock().map_err(|error| error.to_string())?;
+    let mut stopped = state.stopped.lock().map_err(|error| error.to_string())?;
     if let Some(workspace) = workspace {
-        if let Some(child) = current.remove(&canonical_directory(PathBuf::from(workspace))?) {
+        let workspace = canonical_directory(PathBuf::from(workspace))?;
+        if let Some(child) = current.remove(&workspace) {
+            stopped.insert(workspace, child.pid());
             let _ = child.kill();
         }
     } else {
-        for (_, child) in current.drain() {
+        for (workspace, child) in current.drain() {
+            stopped.insert(workspace, child.pid());
             let _ = child.kill();
         }
     }

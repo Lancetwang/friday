@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { open as openUrl } from '@tauri-apps/plugin-shell'
-import { CSSProperties, FormEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useRef, useState } from 'react'
+import { CSSProperties, FormEvent, KeyboardEvent, memo, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
@@ -300,6 +300,8 @@ type TimelineItem = {
   metrics?: Metrics
   name?: string
   status?: 'approval' | 'done' | 'error' | 'running'
+  /** True only while message.delta is still appending to this item. */
+  streaming?: boolean
   text: string
   thinking?: ThinkingState
   toolCallId?: string
@@ -358,6 +360,15 @@ type PendingRequest = {
 // holding a backend for a whole session.
 const BACKEND_IDLE_MS = 5 * 60 * 1000
 const BACKEND_SWEEP_MS = 60 * 1000
+// Streaming deltas are coalesced before they touch React state: re-rendering on
+// every token makes long answers grind, because each flush re-parses the
+// growing message.
+const STREAM_FLUSH_MS = 80
+// Tool results (bash output, file reads) and old messages are the largest
+// strings a conversation keeps; capping what the timeline retains bounds the
+// window's heap no matter how long a session runs.
+const MAX_TOOL_TEXT = 16_000
+const MAX_MESSAGE_TEXT = 100_000
 const PROJECTS_KEY = 'friday.desktop.projects'
 const ACTIVE_PROJECT_KEY = 'friday.desktop.activeProject'
 const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
@@ -385,6 +396,50 @@ const emptyModelCatalog: ModelCatalog = { active: '', profiles: [], providers: [
 
 function nextId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function capText(text: string, limit: number) {
+  return text.length > limit ? `${text.slice(0, limit)}\n\n… [truncated]` : text
+}
+
+// Attached images are base64 data URLs, so a session that scrolls past many
+// attachments would otherwise pin every decoded copy for the life of the
+// window. The timeline stores cache keys instead; the URLs live here under an
+// LRU budget, with reads reinserting so eviction drops the least viewed first.
+// The same trick the artifact thumbnails already use, applied to user images.
+const IMAGE_CACHE_BYTES = 96 * 1024 * 1024
+const imageCache = new Map<string, string>()
+let imageCacheBytes = 0
+
+function imageCacheKey(session: string, itemId: string, index: number) {
+  return `${session}\u0000${itemId}\u0000${index}`
+}
+
+function readCachedImage(key: string) {
+  const value = imageCache.get(key)
+  if (value === undefined) return ''
+  imageCache.delete(key)
+  imageCache.set(key, value)
+  return value
+}
+
+function writeImage(session: string, itemId: string, index: number, dataUrl: string) {
+  const key = imageCacheKey(session, itemId, index)
+  imageCacheBytes -= imageCache.get(key)?.length ?? 0
+  imageCache.set(key, dataUrl)
+  imageCacheBytes += dataUrl.length
+  while (imageCache.size > 1 && imageCacheBytes > IMAGE_CACHE_BYTES) {
+    const oldest = imageCache.keys().next()
+    if (oldest.done) break
+    imageCacheBytes -= imageCache.get(oldest.value)?.length ?? 0
+    imageCache.delete(oldest.value)
+  }
+}
+
+function writeMessageImages(session: string, itemId: string, images: string[]) {
+  for (let index = 0; index < images.length; index += 1) {
+    writeImage(session, itemId, index, images[index]!)
+  }
 }
 
 /** A turn a guard ended reads as a normal answer, so name the reason. */
@@ -573,6 +628,33 @@ function App() {
   const followOutput = useRef(true)
   const pendingRequests = useRef(new Map<string, PendingRequest>())
   const requestId = useRef(0)
+  // Streaming text lands here and is flushed to state in batches; see
+  // STREAM_FLUSH_MS. Keyed per workspace/session/stream so several projects can
+  // stream at once without their deltas interleaving.
+  const streamBuffers = useRef(new Map<string, { apply: (text: string) => void; text: string; timer: number }>())
+
+  const streamAppend = (key: string, text: string, apply: (text: string) => void) => {
+    const existing = streamBuffers.current.get(key)
+    if (existing) {
+      existing.text += text
+      return
+    }
+    const entry = { apply, text, timer: 0 }
+    streamBuffers.current.set(key, entry)
+    entry.timer = window.setTimeout(() => {
+      if (streamBuffers.current.get(key) !== entry) return
+      streamBuffers.current.delete(key)
+      entry.apply(entry.text)
+    }, STREAM_FLUSH_MS)
+  }
+
+  const flushStream = (key: string) => {
+    const entry = streamBuffers.current.get(key)
+    if (!entry) return
+    streamBuffers.current.delete(key)
+    window.clearTimeout(entry.timer)
+    entry.apply(entry.text)
+  }
   const sidebarDrag = useRef<{ startWidth: number; startX: number } | null>(null)
   // Keyed by pathKey; the value is the path itself, which the idle sweep needs to
   // name a backend it wants stopped.
@@ -584,10 +666,11 @@ function App() {
   const projectsRef = useRef(initialProjects.current)
   const selectProjectRef = useRef<(workspace: string) => Promise<string | undefined>>(async () => undefined)
   const lastUsed = useRef(new Map<string, number>())
-  // Backends this window stopped on purpose, so their exit is not reported as a
-  // crash, and the conversation each one was on, so reselecting it comes back to
-  // the same place instead of a fresh session.
-  const reapedProjects = useRef(new Set<string>())
+  // Backends this window stopped on purpose are reported by the gateway as
+  // `gateway-stopped` (never surfaced), so a session stopped while its process
+  // was shutting down is not mistaken for a crash. The conversation each one
+  // was on is remembered here, so reselecting it comes back to the same place
+  // instead of a fresh session.
   const reapedSessions = useRef(new Map<string, string>())
   const viewsRef = useRef<Record<string, ProjectView>>({})
 
@@ -619,7 +702,6 @@ function App() {
     const key = pathKey(workspace)
     startedProjects.current.set(key, workspace)
     lastUsed.current.set(key, Date.now())
-    reapedProjects.current.delete(key)
   }
 
   const sendGateway = <T,>(workspace: string, method: string, params: Record<string, unknown> = {}) => {
@@ -693,7 +775,7 @@ function App() {
         busy: Boolean(current.info.running),
         checkpoints: checkpointResult.checkpoints,
         info: current.info,
-        items: timelineFromHistory(current.history),
+        items: timelineFromHistory(current.history, current.info.session_id || ''),
         models: modelResult,
         pendingApproval: current.info.approval?.pending ? current.info.approval : null,
         sessions: saved.choices,
@@ -714,9 +796,33 @@ function App() {
   // capping the number of live backends would restart them while the user is
   // switching between projects, which is when they are least willing to wait.
   useEffect(() => {
+    const stopBackend = (key: string, workspace: string, view: ProjectView | undefined) => {
+      const session = view?.activeSession || activeSessions.current.get(key) || ''
+      if (session) reapedSessions.current.set(key, session)
+      startedProjects.current.delete(key)
+      void invoke('gateway_stop', { workspace })
+        .then(() => {
+          // The user may have reselected while the stop was in flight, and that
+          // reselect rehydrates on its own. Reclaim only a view nobody is
+          // using: dropping the timeline frees the largest strings the window
+          // holds, which is what makes a day of use accumulate.
+          if (startedProjects.current.has(key) || samePath(activeProjectRef.current, workspace)) return
+          updateView(workspace, current => ({
+            ...current,
+            busy: false,
+            items: [],
+            pendingApproval: null,
+            status: 'idle'
+          }))
+        })
+        .catch(() => {
+          startedProjects.current.set(key, workspace)
+        })
+    }
     const sweep = () => {
       const active = pathKey(activeProjectRef.current)
       const now = Date.now()
+      const eligible: Array<{ idleFor: number; key: string; view: ProjectView | undefined; workspace: string }> = []
       for (const [key, workspace] of [...startedProjects.current]) {
         // Matched with pathKey rather than read by key: views are stored under the
         // path the caller used, and a miss here would read as "not busy" and stop a
@@ -725,20 +831,25 @@ function App() {
         const view = entry?.[1]
         const waiting = [...pendingRequests.current.values()].some(item => samePath(item.workspace, workspace))
         const idleFor = now - (lastUsed.current.get(key) ?? now)
-        if (key === active || waiting || view?.busy || view?.pendingApproval || idleFor < BACKEND_IDLE_MS) continue
-
-        reapedProjects.current.add(key)
-        const session = view?.activeSession || activeSessions.current.get(key) || ''
-        if (session) reapedSessions.current.set(key, session)
-        startedProjects.current.delete(key)
-        void invoke('gateway_stop', { workspace }).catch(() => {
-          reapedProjects.current.delete(key)
-          startedProjects.current.set(key, workspace)
-        })
+        if (key === active || waiting || view?.busy || view?.pendingApproval) continue
+        eligible.push({ idleFor, key, view, workspace })
+      }
+      eligible.sort((a, b) => a.idleFor - b.idleFor)
+      // Only the idle timeout reclaims: capping the number of live backends
+      // would restart them while the user is switching between projects, which
+      // is when they are least willing to wait.
+      for (const item of eligible) {
+        if (item.idleFor < BACKEND_IDLE_MS) break
+        stopBackend(item.key, item.workspace, item.view)
       }
     }
     const timer = window.setInterval(sweep, BACKEND_SWEEP_MS)
     return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => () => {
+    for (const entry of streamBuffers.current.values()) window.clearTimeout(entry.timer)
+    streamBuffers.current.clear()
   }, [])
 
   useEffect(() => {
@@ -793,6 +904,7 @@ function App() {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined
     let unlistenExit: UnlistenFn | undefined
+    let unlistenStopped: UnlistenFn | undefined
     let disposed = false
 
     const handleLine = (workspace: string, line: string) => {
@@ -847,23 +959,28 @@ function App() {
         if (!reasoningId || !text) return
         const itemId = `thinking-${reasoningId}`
         const assistantId = activeAssistants.current.get(eventKey)
-        updateView(workspace, current => {
-          if (current.items.some(item => item.id === itemId)) {
+        const streamKey = `${eventKey}\u0000thinking`
+        streamAppend(streamKey, text, chunk => {
+          if (!openProjects.current.has(pathKey(workspace))) return
+          updateView(workspace, current => {
+            if (current.items.some(item => item.id === itemId)) {
+              return {
+                ...current,
+                items: current.items.map(item => item.id === itemId ? { ...item, text: item.text + chunk } : item)
+              }
+            }
+            const block: TimelineItem = { id: itemId, kind: 'reasoning', text: chunk, thinking: { started: Date.now() } }
+            const index = assistantId ? current.items.findIndex(item => item.id === assistantId) : -1
             return {
               ...current,
-              items: current.items.map(item => item.id === itemId ? { ...item, text: item.text + text } : item)
+              items: index < 0
+                ? [...current.items, block]
+                : [...current.items.slice(0, index), block, ...current.items.slice(index)]
             }
-          }
-          const block: TimelineItem = { id: itemId, kind: 'reasoning', text, thinking: { started: Date.now() } }
-          const index = assistantId ? current.items.findIndex(item => item.id === assistantId) : -1
-          return {
-            ...current,
-            items: index < 0
-              ? [...current.items, block]
-              : [...current.items.slice(0, index), block, ...current.items.slice(index)]
-          }
+          })
         })
       } else if (type === 'reasoning.complete') {
+        flushStream(`${eventKey}\u0000thinking`)
         const itemId = `thinking-${String(payload.id || '')}`
         const error = Boolean(payload.error)
         updateView(workspace, current => ({
@@ -875,28 +992,34 @@ function App() {
         }))
       } else if (type === 'message.delta') {
         const text = String(payload.text || '')
+        if (!text) return
         let id = activeAssistants.current.get(eventKey)
         if (!id) {
           id = nextId('assistant')
           activeAssistants.current.set(eventKey, id)
         }
-        updateView(workspace, current => {
-          const now = Date.now()
-          let found = false
-          const items = current.items.map(item => {
-            if (item.kind === 'reasoning' && item.thinking && item.thinking.ended == null) {
-              return { ...item, thinking: { ...item.thinking, ended: now } }
+        const assistantId = id
+        const streamKey = `${eventKey}\u0000assistant`
+        streamAppend(streamKey, text, chunk => {
+          if (!openProjects.current.has(pathKey(workspace))) return
+          updateView(workspace, current => {
+            const now = Date.now()
+            let found = false
+            const items = current.items.map(item => {
+              if (item.kind === 'reasoning' && item.thinking && item.thinking.ended == null) {
+                return { ...item, thinking: { ...item.thinking, ended: now } }
+              }
+              if (item.id === assistantId) {
+                found = true
+                return { ...item, streaming: true, text: item.text + chunk }
+              }
+              return item
+            })
+            return {
+              ...current,
+              items: found ? items : [...items, { id: assistantId, kind: 'assistant', streaming: true, text: chunk }]
             }
-            if (item.id === id) {
-              found = true
-              return { ...item, text: item.text + text }
-            }
-            return item
           })
-          return {
-            ...current,
-            items: found ? items : [...items, { id, kind: 'assistant', text }]
-          }
         })
       } else if (type === 'message.suspended') {
         updateView(workspace, current => ({
@@ -905,6 +1028,7 @@ function App() {
           cancelling: false
         }))
       } else if (type === 'message.complete') {
+        flushStream(`${eventKey}\u0000assistant`)
         const text = String(payload.text || '')
         const metrics = (payload.metrics || {}) as Metrics
         const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts as ArtifactInfo[] : []
@@ -917,7 +1041,7 @@ function App() {
         activeAssistants.current.delete(eventKey)
         updateView(workspace, current => {
           let items: TimelineItem[] = id
-            ? current.items.map(item => item.id === id ? { ...item, artifacts, metrics, text: text || item.text } : item)
+            ? current.items.map(item => item.id === id ? { ...item, artifacts, metrics, streaming: false, text: text || item.text } : item)
             : text ? [...current.items, { artifacts, id: nextId('assistant'), kind: 'assistant', metrics, text }] : current.items
           items = verification
             ? items.map(item => item.id === 'verification-status' ? { ...item, text: verificationLabel(verification) } : item)
@@ -949,6 +1073,7 @@ function App() {
           refreshTree(workspace, sessionId)
         ]).catch(() => undefined)
       } else if (type === 'message.cancelled') {
+        flushStream(`${eventKey}\u0000assistant`)
         activeAssistants.current.delete(eventKey)
         updateView(workspace, current => ({
           ...current,
@@ -962,6 +1087,7 @@ function App() {
       } else if (type === 'session.updated') {
         void refreshSessions(workspace).catch(() => undefined)
       } else if (type === 'tool.start') {
+        flushStream(`${eventKey}\u0000assistant`)
         const assistantId = activeAssistants.current.get(eventKey)
         const tool: TimelineItem = {
           arguments: JSON.stringify(payload.arguments || {}, null, 2),
@@ -993,7 +1119,7 @@ function App() {
             nextItems[index] = {
               ...nextItems[index],
               status: approval?.approval_required ? 'approval' : payload.error ? 'error' : 'done',
-              text: String(payload.content || nextItems[index].text)
+              text: capText(String(payload.content || nextItems[index].text), MAX_TOOL_TEXT)
             }
           }
           return {
@@ -1041,18 +1167,23 @@ function App() {
 
     void (async () => {
       unlisten = await listen<[string, string]>('gateway-line', event => handleLine(event.payload[0], event.payload[1]))
+      // A process this window stopped on purpose: housekeeping, so it reads as
+      // an idle project rather than a crash. The gateway only emits this when
+      // the exiting pid is the one we killed, so a project restarted while the
+      // old process was shutting down is never misreported -- that restart owns
+      // the state now.
+      unlistenStopped = await listen<[string, string]>('gateway-stopped', event => {
+        const [workspace] = event.payload
+        const key = pathKey(workspace)
+        if (!openProjects.current.has(key)) return
+        if (startedProjects.current.has(key)) return
+        updateView(workspace, current => ({ ...current, busy: false, status: 'idle' }))
+      })
       unlistenExit = await listen<[string, string]>('gateway-exit', event => {
         const [workspace, detail] = event.payload
         const key = pathKey(workspace)
         startedProjects.current.delete(key)
         if (!openProjects.current.has(key)) return
-        if (reapedProjects.current.delete(key)) {
-          // This window asked for the stop. Reclaiming an idle backend is
-          // housekeeping, so it is not reported as the crash the branch below
-          // describes; the project simply reads as not running.
-          updateView(workspace, current => ({ ...current, busy: false, status: 'idle' }))
-          return
-        }
         const reason = detail.trim() ? `\n${detail.trim().slice(-2000)}` : ''
         for (const [id, pending] of pendingRequests.current) {
           if (samePath(pending.workspace, workspace)) {
@@ -1132,6 +1263,7 @@ function App() {
       disposed = true
       unlisten?.()
       unlistenExit?.()
+      unlistenStopped?.()
       for (const pending of pendingRequests.current.values()) {
         pending.reject(new Error('Friday window closed.'))
       }
@@ -1161,6 +1293,9 @@ function App() {
     const submittedSession = activeSession
 
     followOutput.current = true
+    const userItemId = nextId('user')
+    const imageUrls = attachment ? [attachment.dataUrl] : []
+    if (imageUrls.length) writeMessageImages(submittedSession, userItemId, imageUrls)
     updateView(activeProject, current => ({
       ...current,
       attachment: null,
@@ -1171,8 +1306,8 @@ function App() {
         ...current.items,
         {
           createdAt: new Date().toISOString(),
-          id: nextId('user'),
-          images: attachment ? [attachment.dataUrl] : [],
+          id: userItemId,
+          images: imageUrls.map((_, index) => imageCacheKey(submittedSession, userItemId, index)),
           kind: 'user',
           text
         }
@@ -1329,7 +1464,7 @@ function App() {
         checkpoints: [],
         forkTree: { nodes: [], root: '' },
         info: result.info,
-        items: timelineFromHistory(result.history),
+        items: timelineFromHistory(result.history, result.info.session_id || ''),
         pendingApproval: null
       }))
       return refreshSessions(workspace)
@@ -1381,7 +1516,7 @@ function App() {
         activeSession: result.info.session_id || '',
         busy: Boolean(result.info.running),
         info: result.info,
-        items: timelineFromHistory(result.history),
+        items: timelineFromHistory(result.history, result.info.session_id || ''),
         pendingApproval: result.info.approval?.pending ? result.info.approval : null
       }))
       void Promise.all([refreshCheckpoints(workspace), refreshTree(workspace, session.id)]).catch(() => undefined)
@@ -1501,7 +1636,6 @@ function App() {
       if (entry.startsWith(`${key}::`)) activeAssistants.current.delete(entry)
     }
     lastUsed.current.delete(key)
-    reapedProjects.current.delete(key)
     reapedSessions.current.delete(key)
     setExpandedProjects(current => {
       const next = new Set(current)
@@ -1594,7 +1728,7 @@ function App() {
               attachment: null,
               checkpoints: [],
               info: result.info,
-              items: timelineFromHistory(result.history),
+              items: timelineFromHistory(result.history, result.info.session_id || ''),
               pendingApproval: null
             }
           : current)
@@ -1606,7 +1740,7 @@ function App() {
       })))
   }
 
-  const restoreCheckpoint = (checkpointId: string) => {
+  const restoreCheckpoint = useCallback((checkpointId: string) => {
     if (busy || !checkpointId) return
     updateView(activeProject, current => ({ ...current, busy: true }))
     void sendGateway<{
@@ -1618,7 +1752,7 @@ function App() {
         activeSession: result.info.session_id || '',
         busy: false,
         info: result.info,
-        items: timelineFromHistory(result.history),
+        items: timelineFromHistory(result.history, result.info.session_id || ''),
         pendingApproval: result.info.approval?.pending ? result.info.approval : null
       }))
       return Promise.all([refreshSessions(activeProject), refreshCheckpoints(activeProject)])
@@ -1629,9 +1763,9 @@ function App() {
         items: [...current.items, { id: nextId('checkpoint'), kind: 'system', text: String(error) }]
       }))
     })
-  }
+  }, [busy])
 
-  const forkConversation = (messageIndex: number) => {
+  const forkConversation = useCallback((messageIndex: number) => {
     if (busy || messageIndex < 0 || !activeSession) return
     updateView(activeProject, current => ({ ...current, busy: true }))
     void sendGateway<{ history: HistoryItem[]; info: SessionInfo; tree: ForkTree }>(activeProject, 'session.fork', {
@@ -1645,7 +1779,7 @@ function App() {
         checkpoints: [],
         forkTree: result.tree,
         info: result.info,
-        items: timelineFromHistory(result.history),
+        items: timelineFromHistory(result.history, result.info.session_id || ''),
         pendingApproval: null
       }))
       return refreshSessions(activeProject)
@@ -1656,7 +1790,7 @@ function App() {
         items: [...current.items, { id: nextId('fork'), kind: 'system', text: String(error) }]
       }))
     })
-  }
+  }, [busy, activeSession])
 
   const openForkNode = (node: ForkNode) => {
     void resumeSession(activeProject, {
@@ -1681,7 +1815,7 @@ function App() {
           busy: Boolean(result.info.running),
           forkTree: { nodes: [], root: '' },
           info: result.info,
-          items: timelineFromHistory(result.history),
+          items: timelineFromHistory(result.history, result.info.session_id || ''),
           pendingApproval: null
         }))
         return Promise.all([refreshSessions(activeProject), refreshTree(activeProject, result.info.session_id)])
@@ -1699,17 +1833,19 @@ function App() {
       .catch(error => setSkillError(String(error)))
   }
 
-  const loadArtifact = (artifact: ArtifactInfo) =>
-    sendGateway<ArtifactDetail>(activeProject, 'artifact.get', { path: artifact.path })
+  const loadArtifact = useCallback(
+    (artifact: ArtifactInfo) => sendGateway<ArtifactDetail>(activeProject, 'artifact.get', { path: artifact.path }),
+    [activeProject]
+  )
 
-  const openArtifact = (artifact: ArtifactInfo) => {
+  const openArtifact = useCallback((artifact: ArtifactInfo) => {
     void loadArtifact(artifact)
       .then(setArtifactPreview)
       .catch(error => updateView(activeProject, current => ({
         ...current,
         items: [...current.items, { id: nextId('artifact'), kind: 'system', text: String(error) }]
       })))
-  }
+  }, [loadArtifact])
 
   const openObservability = () => {
     if (!activeProject) return
@@ -1832,8 +1968,9 @@ function App() {
     )) : <div className="empty-sessions">{t('sidebar.empty')}</div>
   }
 
-  const timelineItems = bindCheckpoints(items, checkpoints, activeSession)
-  const sourcesByMessage = collectMessageSources(timelineItems)
+  const timelineItems = useMemo(() => bindCheckpoints(items, checkpoints, activeSession), [items, checkpoints, activeSession])
+  const sourcesByMessage = useMemo(() => collectMessageSources(timelineItems), [timelineItems])
+  const groupedTimeline = useMemo(() => groupActivityItems(timelineItems), [timelineItems])
   // A brand-new session always carries a session id from the backend, so the
   // welcome hint keys off the conversation being empty rather than unnamed:
   // it shows on first launch, on a fresh session, and on resuming a session
@@ -2063,7 +2200,7 @@ function App() {
           ref={timeline}
         >
           {showWelcome && <WelcomePrompt key={`${activeProject}::${activeSession}`} />}
-          {!showWelcome && groupActivityItems(timelineItems).map(item => Array.isArray(item)
+          {!showWelcome && groupedTimeline.map(item => Array.isArray(item)
             ? item.length === 1
               ? <TimelineRow busy={busy} item={item[0]!} key={item[0]!.id} onFork={forkConversation} onLoadArtifact={loadArtifact} onOpenArtifact={openArtifact} onOpenLink={openLinkExternally} onPreview={setPreviewImage} onRestore={restoreCheckpoint} sources={sourcesByMessage.get(item[0]!.id)} />
               : <ActivityGroup items={item} key={`activity-${item[0]!.id}`} onOpenLink={openLinkExternally} />
@@ -3431,32 +3568,49 @@ function bindCheckpoints(items: TimelineItem[], checkpoints: CheckpointChoice[],
     .slice(-userIndexes.length)
   if (!ordered.length) return items
 
-  const next: TimelineItem[] = items.map(item => ({ ...item, checkpointId: undefined }))
+  // Copy only the entries that change, so untouched rows keep their identity
+  // and the memoized TimelineRow does not re-render (and re-parse markdown)
+  // on every streamed chunk.
+  const next = [...items]
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!
+    if (item.checkpointId !== undefined) next[index] = { ...item, checkpointId: undefined }
+  }
   const offset = userIndexes.length - ordered.length
   for (let position = offset; position < userIndexes.length; position += 1) {
     const checkpoint = ordered[position - offset]
-    next[userIndexes[position]!]!.checkpointId = checkpoint!.id
+    const index = userIndexes[position]!
+    next[index] = { ...next[index]!, checkpointId: checkpoint!.id }
   }
   return next
 }
 
-function timelineFromHistory(history: HistoryItem[]) {
-  return history.map((item, index): TimelineItem => ({
-    arguments: item.arguments == null ? undefined : JSON.stringify(item.arguments, null, 2),
-    artifacts: item.artifacts,
-    id: `history-${index}-${item.tool_call_id || item.kind}`,
-    forkIndex: item.kind === 'assistant' ? item.message_index : undefined,
-    images: item.images,
-    kind: item.kind,
-    // Saved with the reply, so reopening a conversation keeps the figures that
-    // were shown when it was answered.
-    metrics: item.metrics,
-    name: item.name,
-    status: item.status,
-    text: item.text,
-    createdAt: item.timestamp,
-    toolCallId: item.tool_call_id
-  }))
+function timelineFromHistory(history: HistoryItem[], sessionId: string) {
+  return history.map((item, index): TimelineItem => {
+    const id = `history-${index}-${item.tool_call_id || item.kind}`
+    // Image data URLs are the largest strings a session carries. They go into
+    // the LRU budget instead of the timeline itself, so a conversation with
+    // many attachments does not pin every decoded copy for the life of the
+    // window.
+    const images = sessionId ? (item.images || []) : []
+    if (images.length) writeMessageImages(sessionId, id, images)
+    return {
+      arguments: item.arguments == null ? undefined : capText(JSON.stringify(item.arguments, null, 2), MAX_TOOL_TEXT),
+      artifacts: item.artifacts,
+      id,
+      forkIndex: item.kind === 'assistant' ? item.message_index : undefined,
+      images: images.map((_, imageIndex) => imageCacheKey(sessionId, id, imageIndex)),
+      kind: item.kind,
+      // Saved with the reply, so reopening a conversation keeps the figures that
+      // were shown when it was answered.
+      metrics: item.metrics,
+      name: item.name,
+      status: item.status,
+      text: capText(item.text, item.kind === 'tool' ? MAX_TOOL_TEXT : MAX_MESSAGE_TEXT),
+      createdAt: item.timestamp,
+      toolCallId: item.tool_call_id
+    }
+  })
 }
 
 // Thumbnails are base64 data URLs, so a session that scrolls past many image
@@ -3535,7 +3689,7 @@ function ArtifactIcon({
   return <span aria-hidden="true" className={`artifact-icon ${artifact.kind}`}>{artifactExtension(artifact)}</span>
 }
 
-function TimelineRow({
+const TimelineRow = memo(function TimelineRow({
   busy,
   item,
   onFork,
@@ -3582,21 +3736,32 @@ function TimelineRow({
     <article className={`message ${item.kind}`}>
       <div className="message-body">
         <div className="message-text">
-          <ReactMarkdown
-            components={markdownComponents(onOpenLink)}
-            rehypePlugins={markdownRehypePlugins}
-            remarkPlugins={markdownRemarkPlugins}
-          >
-            {normalizeMarkdown(item.text)}
-          </ReactMarkdown>
+          {item.streaming ? (
+            // While the answer is in flight the text renders as-is: markdown
+            // (and KaTeX) would re-parse on every flush, which is what makes
+            // long generations grind.
+            <div className="streaming-text">{item.text}</div>
+          ) : (
+            <ReactMarkdown
+              components={markdownComponents(onOpenLink)}
+              rehypePlugins={markdownRehypePlugins}
+              remarkPlugins={markdownRemarkPlugins}
+            >
+              {normalizeMarkdown(item.text)}
+            </ReactMarkdown>
+          )}
         </div>
         {item.images?.length ? (
           <div className="message-images">
-            {item.images.map((image, index) => (
-              <button key={`${item.id}-image-${index}`} onClick={() => onPreview(image)} type="button">
-                <img alt={`Attachment ${index + 1}`} src={image} />
-              </button>
-            ))}
+            {item.images.map((image, index) => {
+              const src = readCachedImage(image)
+              if (!src) return null
+              return (
+                <button key={`${item.id}-image-${index}`} onClick={() => onPreview(src)} type="button">
+                  <img alt={`Attachment ${index + 1}`} src={src} />
+                </button>
+              )
+            })}
           </div>
         ) : null}
         {item.artifacts?.length ? (
@@ -3694,9 +3859,9 @@ function TimelineRow({
       </div>
     </article>
   )
-}
+})
 
-function ThinkingRow({ item, onOpenLink }: { item: TimelineItem; onOpenLink: (url: string) => void }) {
+const ThinkingRow = memo(function ThinkingRow({ item, onOpenLink }: { item: TimelineItem; onOpenLink: (url: string) => void }) {
   const thinking = item.thinking || { started: Date.now() }
   const done = thinking.ended != null
   const [now, setNow] = useState(Date.now())
@@ -3723,17 +3888,23 @@ function ThinkingRow({ item, onOpenLink }: { item: TimelineItem; onOpenLink: (ur
         {!done && <span className="thinking-time">{formatThinkingDuration(elapsed)}</span>}
       </summary>
       <div className="thinking-content">
-        <ReactMarkdown
-          components={markdownComponents(onOpenLink)}
-          rehypePlugins={markdownRehypePlugins}
-          remarkPlugins={markdownRemarkPlugins}
-        >
-          {normalizeMarkdown(item.text || '…')}
-        </ReactMarkdown>
+        {done ? (
+          <ReactMarkdown
+            components={markdownComponents(onOpenLink)}
+            rehypePlugins={markdownRehypePlugins}
+            remarkPlugins={markdownRemarkPlugins}
+          >
+            {normalizeMarkdown(item.text || '…')}
+          </ReactMarkdown>
+        ) : (
+          // Same deal as assistant messages: no markdown parsing while the
+          // chain of thought is still growing.
+          <div className="streaming-text">{item.text || '…'}</div>
+        )}
       </div>
     </details>
   )
-}
+})
 
 function formatThinkingDuration(ms: number) {
   const seconds = Math.max(0, ms / 1000)

@@ -807,6 +807,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
         return []
     history: list[dict[str, Any]] = []
     tools: dict[str, int] = {}
+    user_indexes: list[int] = []
     assistant_parts: list[str] = []
     assistant_index = -1
     snapshot = read_session(session_path(Path.cwd().resolve(), session.session_id)) or {}
@@ -837,6 +838,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
         content = _message_text(message.get("content"))
         if role == "user" and content and not message.get("friday_internal"):
             flush_assistant()
+            user_indexes.append(len(history))
             history.append(
                 {
                     "images": _message_images(message.get("content")),
@@ -889,6 +891,13 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                     }
                 )
     flush_assistant()
+    # The desktop renders images from an LRU budget and only ever displays the
+    # most recent ones, but the payload itself is shipped whole over IPC: older
+    # attachments are dropped here so an image-heavy conversation does not
+    # re-transfer megabytes every time it is resumed.
+    for index in user_indexes[:-6]:
+        if history[index].get("images"):
+            history[index]["images"] = []
     message_times = session.context.metadata.get(USER_MESSAGE_TIMES_KEY, [])
     records = [item for item in message_times if isinstance(item, dict)] if isinstance(message_times, list) else []
     record_index = len(records) - 1

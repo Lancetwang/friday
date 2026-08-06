@@ -1785,6 +1785,11 @@ input[type="checkbox"] {
   overflow-wrap: anywhere;
 }
 
+.streaming-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .message.user .message-text {
   color: var(--ink);
   font-size: var(--text-body);
