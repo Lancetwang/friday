@@ -76,6 +76,7 @@ flowchart TD
 
 ## 文档
 
+- [文档索引](docs/index.md) — 全部指南
 - [安装](docs/install.zh-CN.md) ([English](docs/install.md))
 - [更新日志](CHANGELOG.md)
 - [快速开始](docs/quick-start.zh-CN.md) ([English](docs/quick-start.md))
@@ -85,9 +86,11 @@ flowchart TD
 - [工具](docs/tools.md)
 - [记忆](docs/memory.md)
 - [Skills](docs/skills.md)
+- [验证](docs/verification.md)
 - [手机接入（飞书）](docs/im-feishu.md)
 - [可观测性](docs/observability.md)
 - [检查点与撤回](docs/checkpoints.md)
+- [评估结果](docs/evaluation-results.md)
 
 ## 验证
 

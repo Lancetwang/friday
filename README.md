@@ -78,6 +78,7 @@ flowchart TD
 
 ## Docs
 
+- [Docs Index](docs/index.md) — complete guide hub
 - [Install](docs/install.md) ([中文](docs/install.zh-CN.md))
 - [Changelog](CHANGELOG.md)
 - [Quick Start](docs/quick-start.md) ([中文](docs/quick-start.zh-CN.md))
@@ -87,9 +88,11 @@ flowchart TD
 - [Tools](docs/tools.md)
 - [Memory](docs/memory.md)
 - [Skills](docs/skills.md)
+- [Verification](docs/verification.md)
 - [Phone Bridge](docs/im-feishu.md)
 - [Observability](docs/observability.md)
 - [Checkpoints](docs/checkpoints.md)
+- [Evaluation Results](docs/evaluation-results.md)
 
 ## Validate
 

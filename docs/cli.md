@@ -35,6 +35,9 @@ friday compact
 friday resume
 friday resume --list
 friday resume --session <id>
+friday session list
+friday session rename <id> <title>
+friday session delete <id>
 friday approve
 friday approve --for-session
 friday reject
@@ -65,19 +68,23 @@ Top-level `goal`, `compact`, `context`, `progress`, `resume`, `approve`, and
 chat/TUI counterparts. Use `--session <id>` when the latest session is not the
 one you want.
 
-Slash commands in chat/TUI:
+Slash commands in chat and TUI:
 
 ```text
 /help
+/new
+/model [id]
+/thinking [off|low|high|max]
 /memory [help|status|list|search|add|update|remove|consolidate]
 /context
 /progress
 /trace
-/phone [on|off]
 /compact
 /goal <task>
 /resume
+/session list|rename|delete
 /undo [checkpoint-id]
+/permission [manual|auto|bypass]
 /approve
 /approve session
 /reject
@@ -85,6 +92,9 @@ Slash commands in chat/TUI:
 /reset
 /exit
 ```
+
+`/phone [on|off]` switches the Feishu bridge from the TUI only; the plain CLI
+chat does not expose it. See [Phone Bridge](im-feishu.md).
 
 Permission flags:
 

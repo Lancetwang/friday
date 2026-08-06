@@ -11,7 +11,7 @@ The global file is `~/.friday/config.json`. An optional `~/.friday/projects/<wor
   "provider": "deepseek",
   "model": "deepseek-v4-flash",
   "base_url": "https://api.deepseek.com",
-  "context_window": 300000,
+  "context_window": 1000000,
   "max_output_tokens": 65536
 }
 ```
@@ -38,4 +38,4 @@ JINA_API_KEY=optional-web-fetch-key
 
 Friday exposes both config paths in the Environment prompt, so it can edit them when explicitly asked. Changes take effect after Friday starts a new session or rebuilds the context.
 
-The defaults use a 300K working context, a 64K per-call output budget, and a 2.824M cumulative budget per turn. At 85% of the cumulative budget, Friday completes the current verification but does not begin another repair. The output budget is deliberately configurable because provider limits differ; set it no higher than the selected model supports. Friday's verifier keeps its own smaller JSON response budget.
+The defaults use the model's full 1M-token window and a 64K per-call output budget. The window is the only bound on a run: compaction keeps the conversation inside it, and no budget stops a turn on spend (see [Verification](verification.md)). The output budget is deliberately configurable because provider limits differ; set it no higher than the selected model supports. Friday's verifier keeps its own smaller JSON response budget.
