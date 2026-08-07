@@ -284,8 +284,16 @@ const en: Record<string, string> = {
 
   // Models
   'models.title': 'Models',
-  'models.desc': 'Expand a provider, paste its API key, and save — Friday will use it.',
+  'models.desc': 'Known providers only need an API key — Friday discovers their models. For any other OpenAI-compatible service, add it below.',
   'models.inUse': 'In use',
+  'models.builtinHint': 'Models are discovered automatically when you save the key.',
+  'models.discoveredCount': '{n} models available — pick one from the model menu in the chat input.',
+  'models.customHint': 'Any service that speaks the OpenAI chat API: add its base URL, model id, and API key.',
+  'models.addCustom': 'Add OpenAI-compatible endpoint',
+  'models.addCustomHint': 'Base URL and API key are yours to fill in',
+  'models.name': 'Name',
+  'models.removeEntry': 'Delete this entry',
+  'models.deleted': 'Entry removed',
   'models.baseUrl': 'Base URL',
   'models.model': 'Model',
   'models.apiKey': 'API key',
@@ -295,7 +303,6 @@ const en: Record<string, string> = {
   'models.removeKeyArmed': 'The saved key will be removed on save',
   'models.savedActive': 'Saved and activated',
   'models.saveUse': 'Save and use',
-  'models.vision': 'supports vision',
 
   // Web search
   'web.title': 'Web Search',
@@ -582,11 +589,17 @@ const zh: Record<string, string> = {
   'general.namePlaceholder': 'Friday 该如何称呼你？',
   'general.responseLanguage': 'Friday 交互语言',
   'general.responseLanguagePlaceholder': '例如：中文',
-
-  // Models
   'models.title': '模型',
-  'models.desc': '展开一个供应商，填入 API key 并保存，Friday 就会使用它。',
+  'models.desc': '内置厂商只需填入 API key，Friday 会自动发现其模型；其他 OpenAI 兼容服务请在下方自行添加。',
   'models.inUse': '使用中',
+  'models.builtinHint': '保存 key 时会自动获取该厂商的模型列表。',
+  'models.discoveredCount': '已发现 {n} 个模型，可在聊天输入框的模型菜单中选用',
+  'models.customHint': '任何兼容 OpenAI 聊天接口的服务：填入 Base URL、模型 ID 和 API key。',
+  'models.addCustom': '添加 OpenAI 兼容接入点',
+  'models.addCustomHint': '自行填写 Base URL 与 API key',
+  'models.name': '名称',
+  'models.removeEntry': '删除该配置',
+  'models.deleted': '已删除',
   'models.baseUrl': 'Base URL',
   'models.model': 'Model',
   'models.apiKey': 'API key',
@@ -596,7 +609,6 @@ const zh: Record<string, string> = {
   'models.removeKeyArmed': '保存时将移除已存的 key',
   'models.savedActive': '已保存并启用',
   'models.saveUse': '保存并使用',
-  'models.vision': '支持视觉输入',
 
   // Web search
   'web.title': '联网搜索',

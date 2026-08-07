@@ -186,6 +186,7 @@ class Gateway:
         self.reasoning_ids: dict[str, str] = {}
         self.reasoning_seq = 0
         self.tool_names: dict[str, str] = {}
+        self.tool_started: dict[str, float] = {}
         self.sessions: dict[str, FridaySession] = {}
         self.runs: dict[str, threading.Thread] = {}
         self.run_labels: dict[str, str] = {}
@@ -731,6 +732,7 @@ class Gateway:
             if call_id:
                 with self._state:
                     self.tool_names[f"{session.session_id}:{call_id}"] = name
+                    self.tool_started[f"{session.session_id}:{call_id}"] = time.monotonic()
             self.session_event(
                 session,
                 "tool.start",
@@ -752,12 +754,15 @@ class Gateway:
             approval = value if isinstance(value, dict) and value.get("approval_required") else None
             with self._state:
                 tool_name = self.tool_names.pop(f"{session.session_id}:{call_id}", "")
+                started = self.tool_started.pop(f"{session.session_id}:{call_id}", None)
+            elapsed_ms = int((time.monotonic() - started) * 1000) if started is not None else None
             self.session_event(
                 session,
                 "tool.complete",
                 {
                     "tool_call_id": call_id,
                     "name": tool_name,
+                    "elapsed_ms": elapsed_ms,
                     "error": bool(event.data.get("is_error")),
                     "content": content,
                     "approval": approval,
@@ -783,6 +788,8 @@ class Gateway:
         with self._state:
             for key in [key for key in self.tool_names if key.startswith(prefix)]:
                 del self.tool_names[key]
+            for key in [key for key in self.tool_started if key.startswith(prefix)]:
+                del self.tool_started[key]
 
     def session_event(self, session: FridaySession, event_type: str, payload: dict[str, Any]) -> None:
         self.event(event_type, {**payload, "session_id": session.session_id})

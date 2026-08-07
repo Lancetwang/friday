@@ -51,6 +51,10 @@ PROVIDERS = (
     {
         "id": "deepseek",
         "label": "DeepSeek",
+        # Built-in providers have a fixed base URL and discover their models
+        # through the provider's /models endpoint: configuring one is just
+        # pasting an API key.
+        "builtin": True,
         "base_url": "https://api.deepseek.com",
         "models": (
             {"id": "deepseek-v4-flash", "vision": False},
@@ -60,6 +64,7 @@ PROVIDERS = (
     {
         "id": "mimo",
         "label": "Xiaomi MiMo",
+        "builtin": True,
         "base_url": "https://api.xiaomimimo.com/v1",
         "models": (
             {"id": "mimo-v2.5", "vision": True},
@@ -69,6 +74,7 @@ PROVIDERS = (
     {
         "id": "openai",
         "label": "OpenAI",
+        "builtin": True,
         "base_url": "https://api.openai.com/v1",
         "models": (
             {"id": "gpt-5.1", "vision": True},
@@ -79,11 +85,21 @@ PROVIDERS = (
     {
         "id": "anthropic",
         "label": "Anthropic",
+        "builtin": True,
         "base_url": "https://api.anthropic.com",
         "models": (
             {"id": "claude-sonnet-4-20250514", "vision": True},
             {"id": "claude-opus-4-20250514", "vision": True},
         ),
+    },
+    # Everything else: any service that speaks the OpenAI chat API. The user
+    # supplies the base URL, the model id, and the API key.
+    {
+        "id": "openai-compatible",
+        "label": "OpenAI Compatible",
+        "builtin": False,
+        "base_url": "",
+        "models": (),
     },
 )
 
@@ -113,6 +129,131 @@ def load_model_config(
     )
 
 
+def fetch_provider_models(provider_id: str, base_url: str, api_key: str) -> list[str]:
+    """List the model ids a provider advertises through its /models endpoint.
+
+    Every built-in provider except Anthropic speaks the OpenAI-compatible
+    models API. Raises ValueError when the API key is rejected so callers can
+    surface that to the user; other failures are left to the caller to treat
+    as "no listing available".
+    """
+    if provider_id == "anthropic":
+        from anthropic import Anthropic, AuthenticationError
+
+        client = Anthropic(api_key=api_key, base_url=base_url or None)
+        try:
+            models = client.models.list()
+        except AuthenticationError as exc:
+            raise ValueError(_key_rejected_message(provider_id, exc)) from exc
+        return sorted({str(model.id) for model in models})
+    from openai import AuthenticationError, OpenAI, PermissionDeniedError
+
+    client = OpenAI(api_key=api_key, base_url=base_url or None)
+    try:
+        models = client.models.list()
+    except (AuthenticationError, PermissionDeniedError) as exc:
+        raise ValueError(_key_rejected_message(provider_id, exc)) from exc
+    return sorted({str(model.id) for model in models})
+
+
+def _key_rejected_message(provider_id: str, exc: Exception) -> str:
+    status = getattr(exc, "status_code", None) or getattr(exc, "status", None) or 401
+    return (
+        f"API key rejected by {_provider_label(provider_id)} (HTTP {status}). "
+        "Check the key and try again."
+    )
+
+
+def _fetch_models(provider: Mapping[str, Any], api_key: str) -> list[str] | None:
+    """Fetch a built-in provider's model list, or None when it is unavailable.
+
+    A rejected key is a hard error (it is how Friday validates the key on
+    save); any other failure falls back to the provider's static model list.
+    """
+    try:
+        return fetch_provider_models(str(provider["id"]), str(provider["base_url"]), api_key)
+    except ValueError:
+        raise
+    except Exception:
+        return None
+
+
+def _provider(provider_id: str) -> dict[str, Any]:
+    return next((item for item in PROVIDERS if item["id"] == provider_id), {})
+
+
+def _profile_id(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", value).strip("-")
+
+
+def _default_profile(base: ModelConfig) -> dict[str, Any]:
+    return {
+        "id": "default",
+        "name": _provider_label(base.provider),
+        "provider": base.provider,
+        "model": base.model,
+        "base_url": base.base_url,
+        "vision": _supports_vision(base.provider, base.model),
+        "context_window": base.context_window,
+        "max_output_tokens": base.max_output_tokens,
+        "run_token_budget": base.run_token_budget,
+    }
+
+
+def _sync_builtin_profiles(
+    provider: Mapping[str, Any],
+    model_ids: list[str] | None,
+    profiles: list[dict[str, Any]],
+    base: ModelConfig,
+    credentials: dict[str, str],
+    api_key: str,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Turn a built-in provider's model list into one profile per model.
+
+    Each model becomes a profile so the chat model menu can offer everything
+    the provider actually serves. The provider's key is copied to each of its
+    profiles (the credential store is keyed by profile id), and auto profiles
+    for models the provider no longer serves are dropped.
+    """
+    static = {str(item["id"]) for item in provider["models"]}
+    fetched = set(model_ids) if model_ids is not None else static
+    profiles = [
+        profile
+        for profile in profiles
+        if not (profile.get("auto") and profile["provider"] == provider["id"])
+    ]
+    for model_id in sorted(fetched):
+        existing = next(
+            (profile for profile in profiles if profile["provider"] == provider["id"] and profile["model"] == model_id),
+            None,
+        )
+        if existing is not None:
+            existing.update(
+                {
+                    "auto": True,
+                    "name": model_id,
+                    "base_url": str(provider["base_url"]),
+                    "vision": _supports_vision(str(provider["id"]), model_id),
+                }
+            )
+        else:
+            existing = {
+                "id": _profile_id(f"{provider['id']}-{model_id}"),
+                "name": model_id,
+                "provider": provider["id"],
+                "model": model_id,
+                "base_url": str(provider["base_url"]),
+                "vision": _supports_vision(str(provider["id"]), model_id),
+                "context_window": base.context_window,
+                "max_output_tokens": base.max_output_tokens,
+                "run_token_budget": base.run_token_budget,
+                "auto": True,
+            }
+            profiles.append(existing)
+        credentials[str(existing["id"])] = api_key
+    return profiles, credentials
+
+
 def load_model_catalog(workspace: Path, *, home: Path | None = None) -> dict[str, Any]:
     base = _load_base_config(workspace, home=home)
     user_dir = friday_home(home)
@@ -128,19 +269,7 @@ def load_model_catalog(workspace: Path, *, home: Path | None = None) -> dict[str
         except ValueError:
             continue
     if not profiles:
-        profiles = [
-            {
-                "id": "default",
-                "name": _provider_label(base.provider),
-                "provider": base.provider,
-                "model": base.model,
-                "base_url": base.base_url,
-                "vision": _supports_vision(base.provider, base.model),
-                "context_window": base.context_window,
-                "max_output_tokens": base.max_output_tokens,
-                "run_token_budget": base.run_token_budget,
-            }
-        ]
+        profiles = [_default_profile(base)]
     active = str(data.get("active") or "")
     if not any(profile["id"] == active for profile in profiles):
         active = profiles[0]["id"]
@@ -161,7 +290,6 @@ def load_model_catalog(workspace: Path, *, home: Path | None = None) -> dict[str
         "providers": [dict(provider) for provider in PROVIDERS],
     }
 
-
 def save_model_profile(
     workspace: Path,
     value: dict[str, Any],
@@ -175,24 +303,74 @@ def save_model_profile(
     catalog = load_model_catalog(workspace, home=home)
     profile_id = str(value.get("id") or uuid.uuid4().hex[:12])
     profile = _validate_profile({**value, "id": profile_id}, base)
+    provider = _provider(profile["provider"])
+    user_dir = friday_home(home)
+    credentials = _read_credentials(home)
+
+    new_key = api_key is not None and bool(api_key.strip()) and not clear_api_key
+    fetched: list[str] | None = None
+    if provider.get("builtin") and new_key:
+        # Fetching the model list also validates the key: a rejected key fails
+        # the save before anything is written.
+        fetched = _fetch_models(provider, api_key.strip())
+
     profiles = [
         profile
         if current["id"] == profile_id
         else {key: item for key, item in current.items() if key != "api_key_configured"}
         for current in catalog["profiles"]
     ]
-    if not any(current["id"] == profile_id for current in profiles):
+    # An empty model marks a built-in provider save: the provider's profiles
+    # come from the model list, not from one explicit model.
+    explicit = bool(profile["model"])
+    if not explicit:
+        profiles = [current for current in profiles if current["id"] != profile_id]
+    elif not any(current["id"] == profile_id for current in profiles):
         profiles.append(profile)
-    active = profile_id if activate else catalog["active"]
-    user_dir = friday_home(home)
-    write_json_atomic(user_dir / PROFILES_FILE, {"active": active, "profiles": profiles})
-    credentials = _read_credentials(home)
-    if clear_api_key:
-        credentials.pop(profile_id, None)
-    elif api_key is not None and api_key.strip():
+
+    if provider.get("builtin"):
+        if clear_api_key:
+            for current in profiles:
+                if current["provider"] == profile["provider"]:
+                    credentials.pop(current["id"], None)
+        elif new_key:
+            profiles, credentials = _sync_builtin_profiles(
+                provider, fetched, profiles, base, credentials, api_key.strip()
+            )
+    elif new_key:
         credentials[profile_id] = api_key.strip()
+
+    # Drop credentials whose profile no longer exists (e.g. a provider removed
+    # a model, or an entry was deleted elsewhere).
+    profile_ids = {current["id"] for current in profiles}
+    for key in list(credentials):
+        if key not in profile_ids:
+            credentials.pop(key, None)
+
+    if not profiles:
+        profiles = [_default_profile(base)]
+
+    active = _active_after_save(catalog, profiles, profile, explicit, activate)
+    write_json_atomic(user_dir / PROFILES_FILE, {"active": active, "profiles": profiles})
     write_json_atomic(user_dir / CREDENTIALS_FILE, credentials, private=True)
     return load_model_catalog(workspace, home=home)
+
+
+def _active_after_save(
+    catalog: dict[str, Any],
+    profiles: list[dict[str, Any]],
+    profile: dict[str, Any],
+    explicit: bool,
+    activate: bool,
+) -> str:
+    if activate:
+        if explicit:
+            return profile["id"]
+        provider_profiles = [current["id"] for current in profiles if current["provider"] == profile["provider"]]
+        if provider_profiles:
+            return provider_profiles[0]
+    active = catalog["active"]
+    return active if any(current["id"] == active for current in profiles) else profiles[0]["id"]
 
 
 def delete_model_profile(workspace: Path, profile_id: str, *, home: Path | None = None) -> dict[str, Any]:
@@ -469,17 +647,30 @@ def _validate(values: dict[str, Any]) -> ModelConfig:
 
 
 def _validate_profile(value: dict[str, Any], base: ModelConfig) -> dict[str, Any]:
-    profile_id = re.sub(r"[^A-Za-z0-9_-]+", "-", str(value.get("id") or "")).strip("-")
+    profile_id = _profile_id(str(value.get("id") or ""))
     provider = str(value.get("provider") or "").strip().lower()
     name = str(value.get("name") or "").strip()
     model = str(value.get("model") or "").strip()
     base_url = str(value.get("base_url") or "").strip().rstrip("/")
-    if not profile_id or not name or not model:
-        raise ValueError("Model configuration id, name, and model are required.")
+    if not profile_id or not name:
+        raise ValueError("Model configuration id and name are required.")
     if provider not in {item["id"] for item in PROVIDERS}:
         raise ValueError(f"Unsupported model provider: {provider}")
-    if not re.match(r"^https?://", base_url):
-        raise ValueError("Model Base URL must start with http:// or https://.")
+    entry = _provider(provider)
+    if entry.get("builtin"):
+        # A built-in provider's base URL is fixed; an empty value means the
+        # provider default, and an empty model marks a key-only save whose
+        # profiles come from the provider's model list.
+        base_url = base_url or str(entry["base_url"])
+        if base_url and not re.match(r"^https?://", base_url):
+            raise ValueError("Model Base URL must start with http:// or https://.")
+    else:
+        if not model:
+            raise ValueError("Model configuration model is required.")
+        if not base_url or not re.match(r"^https?://", base_url):
+            raise ValueError(
+                "Model Base URL is required for OpenAI-compatible providers and must start with http:// or https://."
+            )
     numbers: dict[str, int] = {}
     for key in ("context_window", "max_output_tokens", "run_token_budget"):
         raw = value.get(key, getattr(base, key))
@@ -488,7 +679,7 @@ def _validate_profile(value: dict[str, Any], base: ModelConfig) -> dict[str, Any
         numbers[key] = raw
     if numbers["max_output_tokens"] > numbers["context_window"]:
         raise ValueError("Maximum output tokens cannot exceed the context window.")
-    return {
+    result = {
         "id": profile_id,
         "name": name,
         "provider": provider,
@@ -497,18 +688,28 @@ def _validate_profile(value: dict[str, Any], base: ModelConfig) -> dict[str, Any
         "vision": _supports_vision(provider, model),
         **numbers,
     }
+    if value.get("auto"):
+        result["auto"] = True
+    return result
 
 
 def _supports_vision(provider: str, model: str) -> bool:
     lowered = model.lower()
+    known = next(
+        (item for item in _provider(provider).get("models", ()) if item["id"] == model),
+        None,
+    )
+    if known is not None:
+        return bool(known["vision"])
     if provider == "mimo":
         return lowered == "mimo-v2.5"
     if provider == "anthropic":
         return lowered.startswith("claude-")
     if provider == "openai":
         return lowered.startswith(("gpt-4o", "gpt-4.1", "gpt-5"))
+    # Unknown models default to text-only: rejecting an image is safe, sending
+    # one to a model that cannot see it is not.
     return False
-
 
 def _provider_label(provider: str) -> str:
     return next((str(item["label"]) for item in PROVIDERS if item["id"] == provider), provider.title())

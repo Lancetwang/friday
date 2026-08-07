@@ -71,6 +71,8 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   const [busy, setBusy] = useState(false)
   const [toolsExpanded, setToolsExpanded] = useState(false)
   const [info, setInfo] = useState<SessionInfo | null>(null)
+  const infoRef = useRef<SessionInfo | null>(null)
+  infoRef.current = info
   const [progress, setProgress] = useState<ProgressState | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [resumePicker, setResumePicker] = useState<ResumePicker | null>(null)
@@ -102,6 +104,9 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setStreaming('')
         setBusy(false)
       } else if (event.type === 'reasoning.delta') {
+        // Thinking effort "off" is a promise to hide reasoning: some providers
+        // still stream it, so honor the choice here instead of rendering it.
+        if (infoRef.current?.thinking_effort === 'off') return
         const id = event.payload.id || ''
         if (id && event.payload.text) {
           setMessages(items => upsertThinking(items, activeTurn.current, id, event.payload.text))
@@ -109,12 +114,22 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'reasoning.complete') {
         setMessages(items => completeThinking(items, activeTurn.current, event.payload.id, Boolean(event.payload.error)))
       } else if (event.type === 'tool.start') {
+        // The stream so far is transient narration interrupted by this tool
+        // round; clearing it keeps rounds from concatenating into one
+        // unreadable stream that the final answer then replaces.
+        setStreaming('')
         const startMs = Date.now()
         setMessages(items => addToolRun(items, activeTurn.current, { arguments: event.payload.arguments, id: event.payload.tool_call_id || `${startMs}-${items.length}`, name: event.payload.name, startMs }))
         setActivity(`tool ${event.payload.name}`)
       } else if (event.type === 'tool.complete') {
         const endMs = Date.now()
-        setMessages(items => updateToolRun(items, activeTurn.current, event.payload.tool_call_id, { content: event.payload.content, endMs, error: event.payload.error }))
+        // Prefer the backend-measured execution time: it excludes the event
+        // round trip and stays accurate however long the tool really ran.
+        setMessages(items => updateToolRun(items, activeTurn.current, event.payload.tool_call_id, run => ({
+          content: event.payload.content,
+          endMs: typeof event.payload.elapsed_ms === 'number' ? run.startMs + event.payload.elapsed_ms : endMs,
+          error: event.payload.error
+        })))
         const approval = approvalFromContent(event.payload.content)
         if (approval) {
           setApprovalPicker(current => current ?? { approval, index: approvalIndex('once'), instruction: '' })
@@ -616,7 +631,7 @@ function closeOpenThinking(messages: UiMessage[], turnId: string | null) {
   return next
 }
 
-function updateToolRun(messages: UiMessage[], turnId: string | null, id: string, patch: Partial<ToolRun>) {
+function updateToolRun(messages: UiMessage[], turnId: string | null, id: string, patch: Partial<ToolRun> | ((run: ToolRun) => Partial<ToolRun>)) {
   const index = turnIndex(messages, turnId)
   if (index === -1) {
     return messages
@@ -628,7 +643,8 @@ function updateToolRun(messages: UiMessage[], turnId: string | null, id: string,
   if (toolIndex === -1) {
     return messages
   }
-  tools[toolIndex] = { ...tools[toolIndex]!, ...patch }
+  const run = tools[toolIndex]!
+  tools[toolIndex] = { ...run, ...(typeof patch === 'function' ? patch(run) : patch) }
   next[index] = { ...message, tools }
   return next
 }
@@ -777,10 +793,12 @@ function ToolPanel({ toolsExpanded, now, runs }: { toolsExpanded: boolean; now: 
   if (!runs.length) {
     return null
   }
+  const shown = runs.slice(-6)
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text color={theme.dim}>tools (Ctrl+O)</Text>
-      {runs.slice(-6).map(run => {
+      {runs.length > shown.length ? <Text color={theme.dim}>… {runs.length - shown.length} earlier tool call{runs.length - shown.length > 1 ? 's' : ''} hidden</Text> : null}
+      {shown.map(run => {
         const done = Boolean(run.endMs)
         const color = !done ? theme.warn : run.error ? theme.error : theme.ok
         const seconds = formatSeconds(((run.endMs ?? now) - run.startMs) / 1000)

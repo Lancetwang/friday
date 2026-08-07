@@ -629,22 +629,23 @@ class TuiGatewayTests(unittest.TestCase):
 
     def test_gateway_saves_model_key_without_returning_it(self) -> None:
         gateway = Gateway()
-        with patch.object(gateway, "ok") as ok:
-            gateway.handle(
-                {
-                    "id": "1",
-                    "method": "model.save",
-                    "params": {
-                        "api_key": "private-key",
-                        "profile": {
-                            "name": "MiMo",
-                            "provider": "mimo",
-                            "model": "mimo-v2.5",
-                            "base_url": "https://api.xiaomimimo.com/v1",
+        with patch("friday.config.fetch_provider_models", return_value=["mimo-v2.5"]):
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle(
+                    {
+                        "id": "1",
+                        "method": "model.save",
+                        "params": {
+                            "api_key": "private-key",
+                            "profile": {
+                                "name": "MiMo",
+                                "provider": "mimo",
+                                "model": "mimo-v2.5",
+                                "base_url": "https://api.xiaomimimo.com/v1",
+                            },
                         },
-                    },
-                }
-            )
+                    }
+                )
 
         result = ok.call_args.args[1]
         self.assertNotIn("private-key", str(result))

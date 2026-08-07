@@ -72,7 +72,10 @@ def main(argv: list[str] | None = None) -> None:
     model_add.add_argument("name")
     model_add.add_argument("--id")
     model_add.add_argument("--provider", choices=[item["id"] for item in PROVIDERS], required=True)
-    model_add.add_argument("--model", required=True)
+    model_add.add_argument(
+        "--model",
+        help="Model id. Omit it for a built-in provider to discover its models through /models.",
+    )
     model_add.add_argument("--base-url")
     model_add.add_argument("--no-key", action="store_true", help="Keep the existing key or configure it through an environment variable.")
     model_use = model_sub.add_parser("use", help="Select a configured model.")
@@ -546,6 +549,17 @@ def _model_cli(args) -> None:
         print(f"Removed model configuration: {args.id}")
         return
     provider = next(item for item in PROVIDERS if item["id"] == args.provider)
+    if not provider["builtin"] and not args.model:
+        raise ValueError("--model is required for OpenAI-compatible providers.")
+    if provider["builtin"] and not args.model:
+        api_key = getpass.getpass(f"{provider['label']} API key (hidden): ")
+        catalog = save_model_profile(
+            root,
+            {"id": args.id or provider["id"], "name": args.name, "provider": args.provider, "model": ""},
+            api_key=api_key,
+        )
+        print(f"Discovered models from {provider['label']}; active: {catalog['active']}")
+        return
     api_key = None if args.no_key else getpass.getpass(f"{provider['label']} API key (hidden): ")
     catalog = save_model_profile(
         root,

@@ -1004,17 +1004,18 @@ class ResetTests(unittest.TestCase):
             home = Path(tmp) / "home"
             root.mkdir()
 
-            catalog = save_model_profile(
-                root,
-                {
-                    "name": "MiMo Vision",
-                    "provider": "mimo",
-                    "model": "mimo-v2.5",
-                    "base_url": "https://api.xiaomimimo.com/v1",
-                },
-                api_key="private-key",
-                home=home,
-            )
+            with patch("friday.config.fetch_provider_models", return_value=["mimo-v2.5", "mimo-v2.5-pro"]):
+                catalog = save_model_profile(
+                    root,
+                    {
+                        "name": "MiMo Vision",
+                        "provider": "mimo",
+                        "model": "mimo-v2.5",
+                        "base_url": "https://api.xiaomimimo.com/v1",
+                    },
+                    api_key="private-key",
+                    home=home,
+                )
             profile_id = catalog["active"]
             config = load_model_config(root, home=home, profile_id=profile_id)
 
@@ -1023,6 +1024,148 @@ class ResetTests(unittest.TestCase):
             self.assertEqual(model_api_key(config, home=home), "private-key")
             self.assertNotIn("private-key", json.dumps(load_model_catalog(root, home=home)))
             self.assertNotIn("private-key", (home / ".friday" / "models.json").read_text(encoding="utf-8"))
+
+    def test_builtin_save_discovers_models_and_copies_the_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            (home / ".friday").mkdir(parents=True)
+
+            with patch("friday.config.fetch_provider_models", return_value=["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-r1"]):
+                catalog = save_model_profile(
+                    root,
+                    {"name": "DeepSeek", "provider": "deepseek", "model": ""},
+                    api_key="sk-test",
+                    home=home,
+                )
+
+            deepseek = [p for p in catalog["profiles"] if p["provider"] == "deepseek"]
+            self.assertEqual({p["model"] for p in deepseek}, {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-r1"})
+            self.assertTrue(all(p.get("auto") for p in deepseek))
+            self.assertTrue(all(p["api_key_configured"] for p in deepseek))
+            config = load_model_config(root, home=home, profile_id=catalog["active"])
+            self.assertEqual(model_api_key(config, home=home), "sk-test")
+
+    def test_builtin_save_drops_auto_profiles_for_removed_models(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            (home / ".friday").mkdir(parents=True)
+
+            with patch("friday.config.fetch_provider_models", return_value=["deepseek-v4-flash", "deepseek-v4-pro"]):
+                first = save_model_profile(
+                    root,
+                    {"name": "DeepSeek", "provider": "deepseek", "model": ""},
+                    api_key="sk-test",
+                    home=home,
+                )
+            with patch("friday.config.fetch_provider_models", return_value=["deepseek-v4-pro"]):
+                second = save_model_profile(
+                    root,
+                    {"name": "DeepSeek", "provider": "deepseek", "model": ""},
+                    api_key="sk-test",
+                    home=home,
+                )
+
+            models = {p["model"] for p in second["profiles"] if p["provider"] == "deepseek"}
+            self.assertEqual(models, {"deepseek-v4-pro"})
+            self.assertNotIn(
+                next(p["id"] for p in first["profiles"] if p["model"] == "deepseek-v4-flash"),
+                {p["id"] for p in second["profiles"]},
+            )
+
+    def test_builtin_save_reuses_an_existing_profile_for_the_same_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            (home / ".friday").mkdir(parents=True)
+            (home / ".friday" / "models.json").write_text(
+                json.dumps({
+                    "active": "default",
+                    "profiles": [{
+                        "id": "default",
+                        "name": "DeepSeek",
+                        "provider": "deepseek",
+                        "model": "deepseek-v4-flash",
+                        "base_url": "https://api.deepseek.com",
+                        "vision": False,
+                        "context_window": 200000,
+                        "max_output_tokens": 4096,
+                        "run_token_budget": 40000000,
+                    }],
+                }),
+                encoding="utf-8",
+            )
+
+            with patch("friday.config.fetch_provider_models", return_value=["deepseek-v4-flash", "deepseek-v4-pro"]):
+                catalog = save_model_profile(
+                    root,
+                    {"name": "DeepSeek", "provider": "deepseek", "model": ""},
+                    api_key="sk-test",
+                    home=home,
+                )
+
+            kept = next(p for p in catalog["profiles"] if p["provider"] == "deepseek" and p["model"] == "deepseek-v4-flash")
+            self.assertEqual(kept["id"], "default")
+            self.assertEqual(kept["context_window"], 200000)
+            self.assertEqual(kept["max_output_tokens"], 4096)
+            self.assertTrue(kept["auto"])
+
+    def test_openai_compatible_profile_requires_a_base_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            (home / ".friday").mkdir(parents=True)
+
+            with self.assertRaisesRegex(ValueError, "Base URL"):
+                save_model_profile(
+                    root,
+                    {"name": "vLLM", "provider": "openai-compatible", "model": "qwen-72b", "base_url": ""},
+                    api_key="sk-local",
+                    home=home,
+                )
+
+    def test_openai_compatible_profile_saves_without_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            (home / ".friday").mkdir(parents=True)
+
+            catalog = save_model_profile(
+                root,
+                {"name": "vLLM", "provider": "openai-compatible", "model": "qwen-72b", "base_url": "http://localhost:8000/v1"},
+                api_key="sk-local",
+                home=home,
+            )
+
+            profile = next(p for p in catalog["profiles"] if p["provider"] == "openai-compatible")
+            self.assertEqual(profile["model"], "qwen-72b")
+            self.assertEqual(profile["base_url"], "http://localhost:8000/v1")
+            self.assertNotIn("auto", profile)
+
+    def test_builtin_save_rejects_an_invalid_key_before_writing_anything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            (home / ".friday").mkdir(parents=True)
+
+            with patch("friday.config.fetch_provider_models", side_effect=ValueError("API key rejected by DeepSeek (HTTP 401).")):
+                with self.assertRaisesRegex(ValueError, "API key rejected"):
+                    save_model_profile(
+                        root,
+                        {"name": "DeepSeek", "provider": "deepseek", "model": ""},
+                        api_key="bad-key",
+                        home=home,
+                    )
+
+            self.assertFalse((home / ".friday" / "models.json").exists())
+            self.assertFalse((home / ".friday" / "model-credentials.json").exists())
 
     def test_web_search_credentials_are_private_and_load_into_the_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True):

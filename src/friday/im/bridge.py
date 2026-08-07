@@ -84,6 +84,11 @@ class FridayBridge:
     def on_event(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "tool.start":
             self._last_tool = str(payload.get("name") or "")
+            # The stream so far is transient narration interrupted by the tool
+            # round; clearing it keeps rounds from concatenating into one
+            # unreadable stream that the final message then replaces.
+            with self._stream_lock:
+                self._parts = []
             self._note_status(f"Running {self._last_tool}...")
         elif event_type == "message.delta":
             self._append_delta(str(payload.get("text") or ""))

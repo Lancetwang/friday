@@ -1,6 +1,11 @@
 # Model Configuration
 
-The desktop app exposes model profiles under **Settings > Models**. Each profile keeps its provider, base URL, model name, token limits, and optional vision capability separate, so conversations can switch models without editing files.
+The desktop app exposes model providers under **Settings > Models**. Two kinds of providers exist:
+
+- **Built-in providers** (DeepSeek, Xiaomi MiMo, OpenAI, Anthropic) have a fixed base URL. Configuring one is just pasting an API key: Friday calls the provider's `/models` endpoint on save (which also validates the key), and turns every model it advertises into a profile. The chat input's model menu then lists all of them, and selecting one switches the conversation.
+- **OpenAI-compatible providers** cover every other service that speaks the OpenAI chat API (self-hosted vLLM, SiliconFlow, Groq, ...). Each entry keeps its own name, base URL, model id, and API key; add as many as you need.
+
+Every profile keeps its provider, base URL, model name, token limits, and optional vision capability separate, so conversations can switch models without editing files. Profiles created by model discovery are marked `auto`; re-saving the key re-syncs them (new models appear, removed ones are dropped), while manually configured OpenAI-compatible entries are never touched.
 
 Friday keeps non-secret model settings in JSON and credentials outside project files.
 
@@ -18,9 +23,9 @@ The global file is `~/.friday/config.json`. An optional `~/.friday/projects/<wor
 
 | Key | Meaning |
 | --- | --- |
-| `provider` | Provider name. Friday uses it to look for `<PROVIDER>_API_KEY`. |
+| `provider` | Provider name. Friday uses it to look for `<PROVIDER>_API_KEY`. Use `openai-compatible` for services that speak the OpenAI chat API without a dedicated entry. |
 | `model` | OpenAI-compatible model identifier. |
-| `base_url` | Provider API base URL. Use an empty string for the OpenAI default. |
+| `base_url` | Provider API base URL. Use an empty string for the OpenAI default. Required for `openai-compatible` profiles. |
 | `context_window` | How much the conversation may occupy, and the denominator compaction measures against. |
 | `max_output_tokens` | Maximum generated tokens for one main-agent model call. |
 | `run_token_budget` | Accepted so older config files keep loading, and no longer enforced. Nothing stops a turn on spend. |
