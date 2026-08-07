@@ -91,6 +91,16 @@ export function PlusIcon(props: IconProps) {
   )
 }
 
+export function InfoIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 11v4.5" />
+      <path d="M12 8v.1" />
+    </Glyph>
+  )
+}
+
 export function ArrowUpIcon(props: IconProps) {
   return (
     <Glyph {...props}>

@@ -2382,11 +2382,73 @@ input[type="checkbox"] {
 }
 
 .metrics {
-  margin-top: 10px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 0 0 2px;
+}
+
+.metrics-summary {
   color: var(--faint);
   font-family: var(--font-mono);
   font-size: var(--text-caption);
   font-variant-numeric: tabular-nums;
+}
+
+.metrics-info {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  --glyph-size: 11px;
+  color: var(--faint);
+  background: transparent;
+  cursor: help;
+  transition: color var(--dur-1) ease-out, background-color var(--dur-1) ease-out;
+}
+
+.metrics-info:hover,
+.metrics-info:focus-visible {
+  color: var(--ink);
+  background: var(--fill);
+}
+
+.metrics-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 320px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity var(--dur-1) ease-out,
+    transform var(--dur-2) var(--ease-out),
+    visibility 0s linear 160ms;
+}
+
+.metrics:hover .metrics-popover,
+.metrics:focus-within .metrics-popover {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+}
+
+.metrics-popover p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-caption);
+  line-height: var(--leading-body);
 }
 
 .system-row {

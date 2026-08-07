@@ -141,6 +141,7 @@ const en: Record<string, string> = {
   'metrics.cost': 'in {input} ({cached} cached) / out {output}',
   'metrics.explain':
     'Context is how full the conversation is now. The token counts are totals over every request this turn made, each one re-sending the conversation, so they run ahead of the context figure; the cached part was served from the provider\'s prefix cache and billed at a fraction of fresh input.',
+  'metrics.info': 'About these numbers',
 
   // Thinking
   'thinking.running': 'Thinking',
@@ -449,6 +450,7 @@ const zh: Record<string, string> = {
   'metrics.cost': '输入 {input}（其中缓存 {cached}）/ 输出 {output}',
   'metrics.explain':
     '“上下文”是当前对话占用了多少窗口。token 数是本轮所有请求的累计值——每次请求都会把整段对话重新发一遍，所以它会远高于上下文占用；其中“缓存”部分由模型侧的前缀缓存命中，按远低于新输入的价格计费。',
+  'metrics.info': '这些数字的说明',
 
   // Thinking
   'thinking.running': '思考中',

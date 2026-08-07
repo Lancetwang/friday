@@ -17,6 +17,7 @@ import {
   ChevronIcon,
   CloseIcon,
   DiamondIcon,
+  InfoIcon,
   MinusIcon,
   PencilIcon,
   PlusIcon,
@@ -4237,7 +4238,17 @@ function MetricsLine({ metrics }: { metrics: Metrics }) {
     })
   )
   parts.push(metrics.elapsed_ms == null ? 'n/a' : `${(metrics.elapsed_ms / 1000).toFixed(1)}s`)
-  return <div className="metrics" title={t('metrics.explain')}>{parts.join(' · ')}</div>
+  return (
+    <div className="metrics">
+      <span className="metrics-summary">{parts.join(' · ')}</span>
+      <button aria-label={t('metrics.info')} className="metrics-info" title={t('metrics.info')} type="button">
+        <InfoIcon />
+      </button>
+      <span className="metrics-popover" role="tooltip">
+        <p>{t('metrics.explain')}</p>
+      </span>
+    </div>
+  )
 }
 
 function sessionLabel(session: ResumeChoice) {
