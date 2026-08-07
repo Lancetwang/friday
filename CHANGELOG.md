@@ -2,6 +2,15 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.6 - Discovered models and a calmer turn (2026-08-07)
+
+- Built-in providers (DeepSeek, Xiaomi MiMo, OpenAI, Anthropic) are now configured with just an API key: Friday calls the provider's `/models` endpoint on save, which validates the key and turns every advertised model into a profile. Re-saving re-syncs the list (new models appear, removed ones drop), and the chat model menu shows everything the provider serves.
+- A new **OpenAI Compatible** provider covers every other service that speaks the OpenAI chat API (vLLM, SiliconFlow, Groq, ...). Each entry keeps its own name, base URL, model id, and API key, and can be deleted from the same page.
+- Streaming is consistent across surfaces: the intermediate narration between tool rounds no longer accumulates into one unreadable stream that the final answer then replaces. The desktop, TUI, and phone cards all drop it at each tool boundary, and reasoning stays hidden when the thinking effort is `off` — the final answer is the only text that ever renders.
+- Tool rows now show the backend-measured execution time next to the result preview in the desktop and TUI (the trace workbench already showed both).
+- Long tool activity groups scroll inside a capped height instead of owning the screen, and group labels carry the call count (`Ran multiple commands ×8`).
+- The composer is flatter with a softer radius, grows with the draft up to a third of the window, and then scrolls internally instead of taking over the screen.
+
 ## v0.1.5 - The full window, on every role (2026-08-06)
 
 - Every model now defaults to the full 1M-token window, and one model serves all three roles: the work agent, the verifier, and the trace analyst all use the workspace's own model configuration, so a provider whose real ceiling is below 1M never gets a window it cannot serve. (The verifier previously forced the full window only for DeepSeek.)
