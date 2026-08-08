@@ -121,6 +121,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         const startMs = Date.now()
         setMessages(items => addToolRun(items, activeTurn.current, { arguments: event.payload.arguments, id: event.payload.tool_call_id || `${startMs}-${items.length}`, name: event.payload.name, startMs }))
         setActivity(`tool ${event.payload.name}`)
+      } else if (event.type === 'tool.update') {
+        setMessages(items => updateToolRun(items, activeTurn.current, event.payload.tool_call_id, run => ({
+          content: event.payload.content ?? run.content
+        })))
       } else if (event.type === 'tool.complete') {
         const endMs = Date.now()
         // Prefer the backend-measured execution time: it excludes the event
@@ -547,7 +551,6 @@ type ResumePicker = {
 type Approval = {
   command?: string
   id?: string
-  max_chars?: number
   message?: string
   pending?: boolean
   reason?: string

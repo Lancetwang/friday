@@ -742,6 +742,16 @@ class Gateway:
                     "arguments": event.data.get("arguments", {}),
                 },
             )
+        elif event.type == "tool.progress":
+            self.session_event(
+                session,
+                "tool.update",
+                {
+                    "tool_call_id": str(event.data.get("tool_call_id") or ""),
+                    "name": str(event.data.get("name") or ""),
+                    "content": str(event.data.get("content") or ""),
+                },
+            )
         elif event.type == "tool.result":
             call_id = str(event.data.get("tool_call_id") or "")
             content = event.data.get("content", "")

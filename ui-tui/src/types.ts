@@ -7,6 +7,7 @@ export type GatewayEvent =
   | { type: 'reasoning.delta'; payload: { id: string; text: string } }
   | { type: 'reasoning.complete'; payload: { error?: boolean; id: string } }
   | { type: 'tool.start'; payload: { tool_call_id: string; name: string; arguments?: unknown } }
+  | { type: 'tool.update'; payload: { tool_call_id: string; name: string; content?: string } }
   | { type: 'tool.complete'; payload: { tool_call_id: string; name: string; error?: boolean; content?: string; elapsed_ms?: number } }
   | { type: 'approval.pending'; payload: { command?: string; reason?: string } }
   | { type: 'approval.resolved'; payload: { decision: string; continued?: boolean } }

@@ -1,4 +1,4 @@
-﻿version = 1
+version = 1
 revision = 3
 requires-python = ">=3.12"
 
@@ -168,7 +168,7 @@ wheels = [
 
 [[package]]
 name = "friday-agent"
-version = "0.1.4"
+version = "0.1.8"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -186,7 +186,7 @@ feishu = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.54.0" },
     { name = "dulwich", specifier = ">=0.25.0,<0.26" },
-    { name = "friday-agent-core", specifier = "==0.1.7", index = "https://pypi.org/simple" },
+    { name = "friday-agent-core", specifier = "==0.1.9", index = "https://pypi.org/simple" },
     { name = "lark-oapi", marker = "extra == 'feishu'", specifier = ">=1.4.0" },
     { name = "rich", specifier = ">=13.7.0" },
 ]
@@ -194,14 +194,14 @@ provides-extras = ["feishu"]
 
 [[package]]
 name = "friday-agent-core"
-version = "0.1.7"
+version = "0.1.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/7e/6728444f1f4817442a018d77aedc93200a523b88e0aa4a268791fdd2c4ac/friday_agent_core-0.1.7.tar.gz", hash = "sha256:c17bdc2402d82e2465cb2067ac4699377c9c339fc348c34593966b2fc719abb0", size = 56747, upload-time = "2026-07-31T18:54:03.104Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/04/5b/c553780540fd38682940b63fa6309e6694fe52eacb8129093a6ba264d1bd/friday_agent_core-0.1.9.tar.gz", hash = "sha256:f7c546570acd4c318e913a199c04afeebf6e52a53bfdd560284e69ed52c55180", size = 59542, upload-time = "2026-08-08T07:15:55.645Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/20/f7008f985c3eee6430070efb9021ed996776b94b4bf0cf84e1c243dbb16a/friday_agent_core-0.1.7-py3-none-any.whl", hash = "sha256:198fd46965d1d4d7abb5801e60f52ba91f8c8f23fb0e108be9a4025462ad0ef2", size = 25640, upload-time = "2026-07-31T18:54:01.956Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/b2/55d412c6f938a7fc1aa24c6462209b6bdf68eb7957e9f4ecd84fb6514f59/friday_agent_core-0.1.9-py3-none-any.whl", hash = "sha256:da6353ccd6f005c5d174c2f0cb8d756957f65a9f355b3006150121d71faf4461", size = 26885, upload-time = "2026-08-08T07:15:54.32Z" },
 ]
 
 [[package]]

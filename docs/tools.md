@@ -2,9 +2,9 @@
 
 Friday keeps the tool surface small:
 
-- `Read`: read a line window from a text file, or load a local image into a vision-capable model.
+- `Read`: read a continuous text page, or load a local image into a vision-capable model.
 - `Write`: create or overwrite a UTF-8 text file.
-- `Edit`: edit by line range or exact text match.
+- `Edit`: apply one or more exact, non-overlapping replacements in one call.
 - `Bash`: run shell commands in the workspace.
 - `Glob`: find files by path pattern.
 - `Grep`: search file contents by regex.
@@ -12,9 +12,11 @@ Friday keeps the tool surface small:
 - `WebFetch`: fetch a known URL as clean Markdown through Jina Reader.
 - `UpdatePlan`: maintain the visible objective and step status for non-trivial work in the current session.
 
-`Bash` runs PowerShell on Windows and `bash -lc` elsewhere. A timeout terminates the whole spawned process tree so grandchildren cannot keep Friday blocked by inherited output pipes.
+`Read` follows the same useful ceiling as Pi: at most 2,000 lines or 50 KiB per call. A truncated result includes `next_start_line`; because the source file already contains the complete text, Friday does not create a duplicate artifact for reads.
 
-`Read`, `Bash`, and `WebFetch` return their normal inline content while it fits the requested limit. On overflow, Friday returns a bounded head-and-tail preview and stores the complete text under `~/.friday/projects/<workspace-id>/tool-results/<session-id>/`; the preview includes the full path for selective reading. Context compaction may later remove the inline preview, but keeps the artifact path, source metadata, and execution status. Deleting that conversation removes its large-result directory.
+`Write` and `Edit` use atomic replacement and serialize concurrent changes to the same resolved path. `Edit` matches every replacement against the original file, rejects ambiguous or overlapping matches, and preserves its UTF-8 BOM and line-ending style.
+
+`Bash` runs PowerShell on Windows and `bash -lc` elsewhere. It streams a rolling output tail to interactive clients while running. The final tool result contains at most the last 2,000 lines or 50 KiB; on overflow, Friday stores the complete output under `~/.friday/projects/<workspace-id>/tool-results/<session-id>/` and returns its path. A timeout terminates the whole spawned process tree so grandchildren cannot keep Friday blocked by inherited output pipes. `WebFetch` keeps its bounded head-and-tail preview with the same managed full-output path behavior. Context compaction may later remove an inline preview, but keeps the artifact path, source metadata, and execution status. Deleting that conversation removes its large-result directory.
 
 Every Bash call passes a code-level pre-execution policy. Destructive system operations and explicit deny rules are rejected even in full-access mode. Other risky commands either suspend the Agent Loop for approval or, in `auto` mode, go to a separate tool-free reviewer that compares the current user request, command, workspace, and risk; reviewer failure denies safely. The TUI offers four manual decisions: approve once, approve without asking again in the active session, reject, or reject and tell Friday how to continue.
 
@@ -26,7 +28,7 @@ Tool subprocesses do not inherit the API keys Friday loaded from its own credent
 
 Friday is a local agent that acts with the privileges of the user who ran it. Two limits follow from that and are deliberate:
 
-- `Read`, `Glob`, and `Grep` are not confined to the workspace. They can reach any file the user can read, including `~/.friday/model-credentials.json`. Confining them would break ordinary work — reading a config in `~`, comparing against a sibling checkout — and would not contain an attacker who already has Bash.
+- `Read` is not confined to the workspace and can reach any file the user can read, including `~/.friday/model-credentials.json`; `Glob` and `Grep` remain workspace searches. Confining `Read` would break ordinary work — reading a config in `~`, comparing against a sibling checkout — and would not contain an attacker who already has Bash.
 - Because reads are unconfined, the approval prompt on network egress is the control that matters. A prompt-injected instruction can get file contents into the model's context without asking, but it cannot move them off the machine without an approved `Bash` egress command or a `WebFetch` call.
 
 The practical consequence: treat an egress approval as approving the *contents of the current context*, not just the command. In `bypass` mode there is no such checkpoint, so use it only in workspaces whose inputs you trust.

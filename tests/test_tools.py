@@ -6,13 +6,15 @@ import tempfile
 import time
 import unittest
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from agent_core import Agent, RunContext, reset_current_context, set_current_context, tool
+from agent_core import Agent, RunContext, ToolCall, ToolExecutor, reset_current_context, set_current_context, tool
 
+import friday.tools as friday_tools
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _pinned_core_version, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
 from friday.compaction import COMPACT_TARGET_RATIO, LAST_COMPACTION, announce_compaction, clean_summary, compact_in_place, compaction_record, fit_recent_steps, fit_recent_turns, split_memory_section, summary_is_usable, transcript
@@ -26,7 +28,7 @@ from friday.progress import append_progress_checkpoint, begin_progress, current_
 from friday.skills import discover_skills, skill_routing
 from friday.state import archived_messages, conversation_body, delete_session, hydrate, read_session, rename_session, session_path, state_from_snapshot, transcript_messages
 from friday.storage import project_state_dir, workspace_key
-from friday.tools import APPROVAL_FILE, MAX_TOOL_OUTPUT_CHARS, PERMISSIONS_FILE, SESSION_PERMISSIONS_ALLOWED, _dangerous_shell, _hard_denied_shell, _permission_decision, _read_response, allow_permissions_for_session, approve_pending, build_tools, pending_approval
+from friday.tools import APPROVAL_FILE, MAX_TOOL_OUTPUT_BYTES, MAX_TOOL_OUTPUT_LINES, PERMISSIONS_FILE, SESSION_PERMISSIONS_ALLOWED, _dangerous_shell, _hard_denied_shell, _permission_decision, _read_response, allow_permissions_for_session, approve_pending, build_tools, pending_approval
 from friday.verification import VERIFIER_MAX_STEPS, build_verifier, needs_verification, parse_verification, verification_prompt, verify_friday
 
 
@@ -96,14 +98,14 @@ class ToolTests(unittest.TestCase):
             read = tools["Read"]("note.txt")
             self.assertIn("hello", read["content"])
 
-            tools["Edit"]("note.txt", "hi", old_text="hello")
+            tools["Edit"]("note.txt", [{"old_text": "hello", "new_text": "hi"}])
             self.assertIn("hi", tools["Read"]("note.txt")["content"])
 
             self.assertIn("outside", tools["Read"](str(outside))["content"])
             with self.assertRaises(ValueError):
                 tools["Write"](str(outside), "changed")
             with self.assertRaises(ValueError):
-                tools["Edit"](str(outside), "changed", old_text="outside")
+                tools["Edit"](str(outside), [{"old_text": "outside", "new_text": "changed"}])
 
     def test_read_allows_managed_memory_and_credentials_but_not_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
@@ -125,64 +127,71 @@ class ToolTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tools["Write"](str(home / "USER.md"), "changed")
 
-    def test_read_and_edit_line_ranges(self) -> None:
+    def test_read_pagination_and_batch_edit_preserve_file_format(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
-            tools["Write"]("note.txt", "one\ntwo\nthree\nfour\n")
+            (root / "note.txt").write_bytes(b"\xef\xbb\xbfone\r\ntwo\r\nthree\r\n")
 
             read = tools["Read"]("note.txt", start_line=2, line_count=2)
             self.assertEqual(read["content"], "2: two\n3: three")
             self.assertEqual(read["end_line"], 3)
             self.assertNotIn("full_output_path", read)
 
-            result = tools["Edit"]("note.txt", "TWO\nTHREE", start_line=2, end_line=3)
-            self.assertEqual(result["mode"], "line_range")
-            self.assertEqual((root / "note.txt").read_text(encoding="utf-8"), "one\nTWO\nTHREE\nfour\n")
-
-            tools["Edit"]("note.txt", "inserted", start_line=2, end_line=0)
+            result = tools["Edit"](
+                "note.txt",
+                [
+                    {"old_text": "one", "new_text": "ONE"},
+                    {"old_text": "three", "new_text": "THREE"},
+                ],
+            )
+            self.assertEqual(result["replacements"], 2)
             self.assertEqual(
-                (root / "note.txt").read_text(encoding="utf-8"),
-                "one\ninserted\nTWO\nTHREE\nfour\n",
+                (root / "note.txt").read_bytes(),
+                b"\xef\xbb\xbfONE\r\ntwo\r\nTHREE\r\n",
             )
 
-            tools["Edit"]("note.txt", "", start_line=1, end_line=5)
-            self.assertEqual((root / "note.txt").read_text(encoding="utf-8"), "")
-
-    def test_read_saves_full_selected_output_only_when_over_limit(self) -> None:
+    def test_read_uses_pi_limits_without_creating_duplicate_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
-            tools["Write"]("long.txt", "\n".join(f"line-{index}-" + "x" * 40 for index in range(20)))
+            tools["Write"]("many.txt", "\n".join(f"line-{index}" for index in range(2505)))
+            tools["Write"]("wide.txt", "\n".join("x" * 100 for _ in range(1000)))
 
-            result = tools["Read"]("long.txt", line_count=20, max_chars=240)
+            line_limited = tools["Read"]("many.txt", line_count=10_000_000)
+            byte_limited = tools["Read"]("wide.txt")
 
-            artifact = root / result["full_output_path"]
-            self.assertTrue(result["output_truncated"])
-            self.assertLessEqual(len(result["content"]), 240)
-            self.assertIn("1: line-0", result["content"])
-            self.assertIn("20: line-19", result["content"])
-            self.assertIn("1: line-0", artifact.read_text(encoding="utf-8"))
-            self.assertIn("20: line-19", artifact.read_text(encoding="utf-8"))
-            self.assertIn(result["full_output_path"], result["content"])
+            self.assertEqual(line_limited["end_line"], MAX_TOOL_OUTPUT_LINES)
+            self.assertEqual(line_limited["next_start_line"], MAX_TOOL_OUTPUT_LINES + 1)
+            self.assertEqual(line_limited["truncated_by"], "lines")
+            self.assertLessEqual(len(byte_limited["content"].encode("utf-8")), MAX_TOOL_OUTPUT_BYTES)
+            self.assertEqual(byte_limited["truncated_by"], "bytes")
+            self.assertEqual(byte_limited["next_start_line"], byte_limited["end_line"] + 1)
+            self.assertNotIn("full_output_path", line_limited)
+            self.assertNotIn("full_output_path", byte_limited)
+            self.assertNotIn("max_chars", tools["Read"].parameters["properties"])
 
-    def test_a_tool_cannot_be_asked_for_more_output_than_the_ceiling(self) -> None:
-        """Size arguments are model-chosen, and the window is re-sent every step.
-
-        A single unbounded result would both crowd out the conversation and
-        multiply the cost of every step after it, so the request is capped and
-        the rest stays on disk behind a pointer.
-        """
+    def test_same_file_edits_are_serialized_across_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
-            tools["Write"]("huge.txt", "\n".join(f"line-{index}-" + "x" * 200 for index in range(2000)))
+            tools["Write"]("note.txt", "alpha\nbeta\n")
+            original_write = friday_tools._write_text
 
-            read = tools["Read"]("huge.txt", line_count=2000, max_chars=10_000_000)
+            def delayed_write(path: Path, content: str) -> None:
+                time.sleep(0.05)
+                original_write(path, content)
 
-            self.assertLessEqual(len(read["content"]), MAX_TOOL_OUTPUT_CHARS)
-            self.assertTrue(read["output_truncated"])
-            self.assertIn(read["full_output_path"], read["content"])
+            with patch("friday.tools._write_text", side_effect=delayed_write):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = [
+                        pool.submit(tools["Edit"], "note.txt", [{"old_text": "alpha", "new_text": "ALPHA"}]),
+                        pool.submit(tools["Edit"], "note.txt", [{"old_text": "beta", "new_text": "BETA"}]),
+                    ]
+                    for result in results:
+                        result.result()
+
+            self.assertEqual((root / "note.txt").read_text(encoding="utf-8"), "ALPHA\nBETA\n")
 
     def test_match_listing_tools_cap_the_requested_result_count(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,8 +216,8 @@ class ToolTests(unittest.TestCase):
             root.mkdir()
             tools = {tool.name: tool for tool in build_tools(root)}
 
-            result = tools["Bash"]('python -c "print(\'x\' * 1000)"', max_chars=100)
-            restored = tools["Read"](result["full_output_path"], max_chars=2000)
+            result = tools["Bash"]('python -c "print(\'\\n\'.join([\'x\' * 100 for _ in range(1000)]))"')
+            restored = tools["Read"](result["full_output_path"])
 
             self.assertIn("x" * 100, restored["content"])
             self.assertFalse((root / ".friday").exists())
@@ -231,19 +240,50 @@ class ToolTests(unittest.TestCase):
 
             self.assertIn("你好", result["output"])
 
+    def test_run_shell_emits_transient_live_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bash = next(tool for tool in build_tools(root, root / ".friday") if tool.name == "Bash")
+            events = []
+            context = RunContext(on_event=events.append)
+            token = set_current_context(context)
+            try:
+                result = ToolExecutor([bash]).execute(
+                    ToolCall(
+                        "bash-live",
+                        "Bash",
+                        {
+                            "command": "python -u -c \"import time; print('one', flush=True); time.sleep(.2); print('two', flush=True)\""
+                        },
+                    )
+                )
+            finally:
+                reset_current_context(token)
+
+            updates = [event for event in events if event.type == "tool.progress"]
+            self.assertFalse(result.is_error)
+            self.assertTrue(updates)
+            self.assertEqual(updates[-1].data["tool_call_id"], "bash-live")
+            self.assertIn("two", updates[-1].data["content"])
+            self.assertEqual(context.events, [])
+
     def test_run_shell_saves_full_output_only_when_over_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = {tool.name: tool for tool in build_tools(root, root / ".friday")}
 
-            result = tools["Bash"]('python -c "print(\'HEAD\' + \'x\' * 2000 + \'TAIL\')"', max_chars=200)
+            result = tools["Bash"]('python -c "print(\'HEAD\'); print(\'x\' * 60000); print(\'TAIL\')"')
 
             artifact = root / result["full_output_path"]
             self.assertTrue(result["truncated"])
-            self.assertLessEqual(len(result["output"]), 200)
-            self.assertIn("HEAD", result["output"])
+            self.assertLessEqual(result["output_bytes"], MAX_TOOL_OUTPUT_BYTES)
+            self.assertEqual(result["truncated_by"], "bytes")
+            self.assertNotIn("HEAD", result["output"])
             self.assertIn("TAIL", result["output"])
-            self.assertIn("HEAD" + "x" * 2000 + "TAIL", artifact.read_text(encoding="utf-8"))
+            full_output = artifact.read_text(encoding="utf-8")
+            self.assertIn("HEAD", full_output)
+            self.assertIn("x" * 60000, full_output)
+            self.assertIn("TAIL", full_output)
 
     def test_run_shell_timeout_kills_the_process_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

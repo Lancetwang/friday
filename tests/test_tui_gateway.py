@@ -490,6 +490,13 @@ class TuiGatewayTests(unittest.TestCase):
             )
             gateway.on_agent_event(
                 AgentEvent(
+                    "tool.progress",
+                    category="tool",
+                    data={"tool_call_id": "call-1", "name": "Read", "content": "working"},
+                )
+            )
+            gateway.on_agent_event(
+                AgentEvent(
                     "tool.result",
                     category="tool",
                     data={"tool_call_id": "call-1", "content": "Friday", "is_error": False},
@@ -498,6 +505,8 @@ class TuiGatewayTests(unittest.TestCase):
 
         self.assertEqual(event.call_args_list[0].args[1]["tool_call_id"], "call-1")
         self.assertEqual(event.call_args_list[1].args[1]["tool_call_id"], "call-1")
+        self.assertEqual(event.call_args_list[1].args[0], "tool.update")
+        self.assertEqual(event.call_args_list[2].args[1]["tool_call_id"], "call-1")
 
     def test_gateway_routes_memory_commands_without_building_an_agent(self) -> None:
         gateway = Gateway()

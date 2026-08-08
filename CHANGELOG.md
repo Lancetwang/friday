@@ -2,6 +2,12 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.8 - Bounded file tools with live command progress (2026-08-08)
+
+- Read now returns at most 2,000 lines or 50 KiB with an explicit continuation point, while preserving Friday's external-file, image, and complete-artifact behavior.
+- Edit accepts multiple exact replacements in one call, preserves BOM and line endings, writes atomically, and serializes concurrent edits to the same file.
+- Bash streams correlated progress while running, keeps the final 2,000 lines or 50 KiB in context, and stores complete oversized output as a managed artifact for later inspection.
+
 ## v0.1.7 - Parallel tools and a calmer trace (2026-08-08)
 
 - Independent tool calls now run concurrently: Read, Glob, Grep, WebSearch, and WebFetch are declared parallel-safe, so a model batch of independent calls executes together instead of one after another (up to four at a time). Write, Edit, Bash, and UpdatePlan stay serial, which keeps the single approval slot and workspace side effects safe. The runtime measures each call's real execution time inside its own thread.

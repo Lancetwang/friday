@@ -1127,6 +1127,16 @@ function App() {
               : [...items.slice(0, index), tool, ...items.slice(index)]
           }
         })
+      } else if (type === 'tool.update') {
+        const toolCallId = String(payload.tool_call_id || '')
+        updateView(workspace, current => ({
+          ...current,
+          items: current.items.map(item =>
+            item.kind === 'tool' && item.toolCallId === toolCallId && item.status === 'running'
+              ? { ...item, text: capText(String(payload.content || ''), MAX_TOOL_TEXT) }
+              : item
+          )
+        }))
       } else if (type === 'tool.complete') {
         const toolCallId = String(payload.tool_call_id || '')
         const approval = payload.approval as Approval | undefined

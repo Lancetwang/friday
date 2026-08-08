@@ -1,24 +1,28 @@
 from __future__ import annotations
 
+import codecs
 import hashlib
 import ipaddress
 import json
 import os
 import platform
+import queue
 import re
 import signal
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypedDict
 from uuid import uuid4
 
-from agent_core import RunContext, get_current_context, tool
+from agent_core import RunContext, get_current_context, get_current_tool_call, tool
 
 from friday.progress import update_plan
 from friday.storage import migrate_legacy_runtime, project_state_dir, write_text_atomic
@@ -29,6 +33,8 @@ CONTEXT_FILE_LIMIT = 8000
 # ceiling: an append-only context is re-sent on every step, and one oversized
 # result would both fill the window and inflate the cost of the whole run.
 MAX_TOOL_OUTPUT_CHARS = 50000
+MAX_TOOL_OUTPUT_LINES = 2000
+MAX_TOOL_OUTPUT_BYTES = 50 * 1024
 MAX_TOOL_MATCHES = 1000
 MAX_TOOL_LINE_CHARS = 2000
 IMAGE_MIME_TYPES = {
@@ -84,6 +90,15 @@ INSTRUCTION_FILE_NAMES = (
 )
 
 
+class EditOperation(TypedDict):
+    old_text: Annotated[str, "Exact text that must occur once in the original file."]
+    new_text: Annotated[str, "Replacement text; use an empty string to delete the match."]
+
+
+_FILE_LOCKS_GUARD = threading.Lock()
+_FILE_LOCKS: dict[Path, tuple[threading.Lock, int]] = {}
+
+
 def build_tools(workspace: Path, friday_dir: Path | None = None):
     workspace = workspace.resolve()
     friday_dir = (friday_dir or migrate_legacy_runtime(workspace)).resolve()
@@ -107,12 +122,15 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
             result["context"] = context
         return result
 
-    @tool(description="Read any local UTF-8 text file or load a local image.", name="Read", parallel=True)
+    @tool(
+        description="Read any local UTF-8 text file or image. Text is returned as a continuous page of at most 2000 lines or 50 KiB; use next_start_line to continue.",
+        name="Read",
+        parallel=True,
+    )
     def read_file(
         path: Annotated[str, "Absolute path, or a path relative to the workspace."],
         start_line: Annotated[int, "1-based line number to start reading from."] = 1,
-        line_count: Annotated[int, "Maximum number of lines to read."] = 120,
-        max_chars: Annotated[int, "Maximum characters to return."] = 6000,
+        line_count: Annotated[int, "Maximum number of lines to read, capped at 2000."] = MAX_TOOL_OUTPUT_LINES,
     ) -> dict:
         file_path = resolved_path(path)
         mime_type = IMAGE_MIME_TYPES.get(file_path.suffix.lower())
@@ -128,24 +146,7 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
                 {"path": str(file_path), "image": True, "mime_type": mime_type, "size": size},
                 [file_path],
             )
-        text = file_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        start = max(1, start_line)
-        selected = lines[start - 1 : start - 1 + max(1, line_count)]
-        content = "\n".join(f"{number}: {line}" for number, line in enumerate(selected, start=start))
-        preview, artifact = _bounded_tool_output(friday_dir, "read", content, max_chars, ".txt")
-        end = start + len(selected) - 1 if selected else start - 1
-        result = {
-            "path": str(file_path),
-            "total_lines": len(lines),
-            "start_line": start,
-            "end_line": end,
-            "truncated": end < len(lines),
-            "content": preview,
-        }
-        if artifact:
-            result.update({"output_truncated": True, **artifact})
-        return with_context(result, [file_path])
+        return with_context(_read_text_page(file_path, start_line, line_count), [file_path])
 
     @tool(description="Create or overwrite a UTF-8 text file inside the current workspace.", name="Write")
     def write_file(
@@ -153,56 +154,39 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
         content: Annotated[str, "Full file content."],
     ) -> dict:
         file_path = in_workspace(path)
-        _write_text(file_path, content)
+        with _file_mutation(file_path):
+            _write_text(file_path, content)
         return with_context({"path": str(file_path), "chars": len(content), "lines": len(content.splitlines())}, [file_path])
 
-    @tool(description="Edit a UTF-8 text file by line range or exact text inside the current workspace.", name="Edit")
+    @tool(description="Apply one or more disjoint exact-text replacements to a UTF-8 file inside the current workspace.", name="Edit")
     def edit_file(
         path: Annotated[str, "Path inside the workspace."],
-        replacement: Annotated[str, "Replacement text."],
-        start_line: Annotated[int, "1-based first line to replace. Use with end_line."] = 0,
-        end_line: Annotated[int, "1-based last line to replace, inclusive. Use 0 to insert before start_line."] = 0,
-        old_text: Annotated[str, "Exact text to replace when not using line range."] = "",
+        edits: Annotated[
+            list[EditOperation],
+            "Exact, non-overlapping replacements matched against the original file. Each old_text must be unique.",
+        ],
     ) -> dict:
         file_path = in_workspace(path)
-        text = file_path.read_text(encoding="utf-8")
-        if start_line > 0:
-            newline = "\n" if text.endswith("\n") else ""
-            lines = text.splitlines()
-            start = min(start_line, len(lines) + 1)
-            end = min(max(end_line, start - 1), len(lines))
-            replacement_lines = replacement.splitlines()
-            new_lines = [*lines[: start - 1], *replacement_lines, *lines[end:]]
-            _write_text(file_path, _join_lines(new_lines, bool(new_lines) and bool(newline)))
-            return with_context({
-                "path": str(file_path),
-                "mode": "line_range",
-                "start_line": start,
-                "end_line": end,
-                "replacement_lines": len(replacement_lines),
-                "total_lines": len(new_lines),
-            }, [file_path])
-        if not old_text:
-            raise ValueError("Provide start_line/end_line or old_text.")
-        count = text.count(old_text)
-        if count != 1:
-            raise ValueError(f"Expected exactly one match, found {count}.")
-        _write_text(file_path, text.replace(old_text, replacement, 1))
-        return with_context({"path": str(file_path), "mode": "exact_text", "replacements": 1}, [file_path])
+        with _file_mutation(file_path):
+            updated, first_changed_line = _apply_exact_edits(file_path.read_text(encoding="utf-8"), edits, str(file_path))
+            _write_text(file_path, updated)
+        return with_context(
+            {"path": str(file_path), "replacements": len(edits), "first_changed_line": first_changed_line},
+            [file_path],
+        )
 
     @tool(description="Run a shell command in the current workspace. Uses PowerShell on Windows.", name="Bash")
     def run_shell(
         command: Annotated[str, "Shell command to run."],
         timeout_seconds: Annotated[int, "Timeout in seconds."] = 60,
-        max_chars: Annotated[int, "Maximum output characters to return."] = 8000,
     ) -> dict:
         decision, reason = _permission_decision(friday_dir, command)
         if decision == "deny":
             return {"blocked": True, "message": f"Command blocked before execution: {reason}"}
         if decision == "approval":
-            approval = _write_approval(friday_dir, command, timeout_seconds, max_chars, reason)
+            approval = _write_approval(friday_dir, command, timeout_seconds, reason)
             return {**approval, "approval_required": True, "message": "Execution paused for human approval."}
-        return _run_shell(workspace, command, timeout_seconds, max_chars, friday_dir)
+        return _run_shell(workspace, command, timeout_seconds, friday_dir)
 
     @tool(description="Find files and directories by glob pattern inside the current workspace.", name="Glob", parallel=True)
     def glob_files(
@@ -311,7 +295,6 @@ def approve_pending(workspace: Path | None = None, *, session_id: str = "", reje
         root,
         str(approval.get("command", "")),
         int(approval.get("timeout_seconds", 60)),
-        int(approval.get("max_chars", 8000)),
         friday_dir,
     )
     return {"approved": True, "approval": approval, "result": result}
@@ -573,6 +556,128 @@ def _remote_url_error(url: str) -> str:
     return ""
 
 
+def _read_text_page(path: Path, start_line: int, line_count: int) -> dict[str, Any]:
+    start = max(1, int(start_line))
+    requested_lines = _capped(line_count, MAX_TOOL_OUTPUT_LINES)
+    rendered: list[str] = []
+    output_bytes = 0
+    total_lines = 0
+    byte_limit_hit = False
+    oversized_line_bytes = 0
+
+    with path.open("r", encoding="utf-8-sig", newline=None) as file:
+        for number, raw_line in enumerate(file, start=1):
+            total_lines = number
+            if number < start or len(rendered) >= requested_lines or byte_limit_hit:
+                continue
+            line = raw_line.rstrip("\r\n")
+            value = f"{number}: {line}"
+            encoded_bytes = len(value.encode("utf-8")) + (1 if rendered else 0)
+            if output_bytes + encoded_bytes > MAX_TOOL_OUTPUT_BYTES:
+                byte_limit_hit = True
+                if not rendered:
+                    oversized_line_bytes = encoded_bytes
+                continue
+            rendered.append(value)
+            output_bytes += encoded_bytes
+
+    if start > max(1, total_lines):
+        raise ValueError(f"start_line {start} is beyond end of file ({total_lines} lines).")
+
+    end = start + len(rendered) - 1 if rendered else start - 1
+    truncated = end < total_lines
+    result: dict[str, Any] = {
+        "path": str(path),
+        "total_lines": total_lines,
+        "start_line": start,
+        "end_line": end,
+        "truncated": truncated,
+        "content": "\n".join(rendered),
+    }
+    if oversized_line_bytes:
+        result.update(
+            {
+                "truncated_by": "bytes",
+                "oversized_line_bytes": oversized_line_bytes,
+                "content": (
+                    f"Line {start} exceeds the {MAX_TOOL_OUTPUT_BYTES}-byte read limit. "
+                    "Use Bash to inspect a bounded byte range from that line."
+                ),
+            }
+        )
+    elif truncated:
+        result["truncated_by"] = "bytes" if byte_limit_hit else "lines"
+        result["next_start_line"] = end + 1
+    return result
+
+
+@contextmanager
+def _file_mutation(path: Path):
+    """Serialize a complete read-modify-write cycle for one resolved path."""
+    key = path.resolve()
+    with _FILE_LOCKS_GUARD:
+        lock, users = _FILE_LOCKS.get(key, (threading.Lock(), 0))
+        _FILE_LOCKS[key] = (lock, users + 1)
+    try:
+        with lock:
+            yield
+    finally:
+        with _FILE_LOCKS_GUARD:
+            current_lock, users = _FILE_LOCKS[key]
+            if users == 1:
+                del _FILE_LOCKS[key]
+            else:
+                _FILE_LOCKS[key] = (current_lock, users - 1)
+
+
+def _apply_exact_edits(content: str, edits: list[EditOperation], path: str) -> tuple[str, int]:
+    if not edits:
+        raise ValueError("edits must contain at least one replacement.")
+
+    bom = "\ufeff" if content.startswith("\ufeff") else ""
+    body = content[len(bom) :]
+    line_ending = "\r\n" if "\r\n" in body else "\r" if "\r" in body and "\n" not in body else "\n"
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    matches: list[tuple[int, int, str, int]] = []
+
+    for index, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            raise ValueError(f"edits[{index}] must be an object.")
+        old_text = edit.get("old_text")
+        new_text = edit.get("new_text")
+        if not isinstance(old_text, str) or not old_text:
+            raise ValueError(f"edits[{index}].old_text must be a non-empty string.")
+        if not isinstance(new_text, str):
+            raise ValueError(f"edits[{index}].new_text must be a string.")
+        old_normalized = old_text.replace("\r\n", "\n").replace("\r", "\n")
+        new_normalized = new_text.replace("\r\n", "\n").replace("\r", "\n")
+        start = normalized.find(old_normalized)
+        if start < 0:
+            raise ValueError(f"edits[{index}].old_text was not found in {path}.")
+        if normalized.find(old_normalized, start + 1) >= 0:
+            raise ValueError(f"edits[{index}].old_text is not unique in {path}.")
+        matches.append((start, start + len(old_normalized), new_normalized, index))
+
+    matches.sort(key=lambda item: item[0])
+    for previous, current in zip(matches, matches[1:]):
+        if current[0] < previous[1]:
+            raise ValueError(
+                f"edits[{previous[3]}] and edits[{current[3]}] overlap in {path}; merge them into one edit."
+            )
+
+    parts: list[str] = []
+    cursor = 0
+    for start, end, replacement, _index in matches:
+        parts.extend((normalized[cursor:start], replacement))
+        cursor = end
+    parts.append(normalized[cursor:])
+    updated = "".join(parts)
+    if line_ending != "\n":
+        updated = updated.replace("\n", line_ending)
+    first_changed_line = normalized.count("\n", 0, matches[0][0]) + 1
+    return bom + updated, first_changed_line
+
+
 def _capped(value: Any, ceiling: int) -> int:
     """Hold a model-chosen size argument between 1 and ``ceiling``."""
     try:
@@ -592,6 +697,27 @@ def _bounded_tool_output(
     limit = _capped(max_chars, MAX_TOOL_OUTPUT_CHARS)
     if len(content) <= limit:
         return content, {}
+    output_path = _store_tool_output(friday_dir, kind, content, suffix)
+    return _head_tail_preview(content, limit, output_path), {"full_output_path": output_path}
+
+
+def _bounded_tail_output(friday_dir: Path, kind: str, content: str, suffix: str) -> tuple[str, dict[str, Any]]:
+    preview, truncation = _truncate_tail(content)
+    if not truncation["truncated"]:
+        return preview, {}
+    output_path = _store_tool_output(friday_dir, kind, content, suffix)
+    if truncation["truncated_by"] == "bytes":
+        notice = f"Showing the last {truncation['output_bytes']} bytes."
+    else:
+        start = truncation["total_lines"] - truncation["output_lines"] + 1
+        notice = f"Showing lines {start}-{truncation['total_lines']} of {truncation['total_lines']}."
+    return (
+        f"{preview}\n\n[{notice} Full output: {output_path}]",
+        {"full_output_path": output_path, **truncation},
+    )
+
+
+def _store_tool_output(friday_dir: Path, kind: str, content: str, suffix: str) -> str:
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     session_id = _current_session_id()
     artifact_dir = friday_dir / "tool-results"
@@ -600,8 +726,37 @@ def _bounded_tool_output(
     path = artifact_dir / f"{kind}-{digest[:16]}{suffix}"
     if not path.exists():
         _write_text(path, content)
-    output_path = str(path.resolve())
-    return _head_tail_preview(content, limit, output_path), {"full_output_path": output_path}
+    return str(path.resolve())
+
+
+def _truncate_tail(content: str) -> tuple[str, dict[str, Any]]:
+    lines = content.splitlines()
+    total_bytes = len(content.encode("utf-8"))
+    total_lines = len(lines)
+    if total_lines <= MAX_TOOL_OUTPUT_LINES and total_bytes <= MAX_TOOL_OUTPUT_BYTES:
+        return content, {
+            "truncated": False,
+            "total_lines": total_lines,
+            "total_bytes": total_bytes,
+            "output_lines": total_lines,
+            "output_bytes": total_bytes,
+            "truncated_by": "",
+        }
+
+    preview = "\n".join(lines[-MAX_TOOL_OUTPUT_LINES:])
+    encoded = preview.encode("utf-8")
+    truncated_by = "lines"
+    if len(encoded) > MAX_TOOL_OUTPUT_BYTES:
+        preview = encoded[-MAX_TOOL_OUTPUT_BYTES:].decode("utf-8", errors="ignore")
+        truncated_by = "bytes"
+    return preview, {
+        "truncated": True,
+        "total_lines": total_lines,
+        "total_bytes": total_bytes,
+        "output_lines": preview.count("\n") + bool(preview),
+        "output_bytes": len(preview.encode("utf-8")),
+        "truncated_by": truncated_by,
+    }
 
 
 def _head_tail_preview(content: str, limit: int, full_output_path: str) -> str:
@@ -614,12 +769,6 @@ def _head_tail_preview(content: str, limit: int, full_output_path: str) -> str:
     return content[:head] + marker + content[-tail:]
 
 
-def _join_lines(lines: list[str], trailing_newline: bool) -> str:
-    if not lines:
-        return ""
-    return "\n".join(lines) + ("\n" if trailing_newline else "")
-
-
 def _write_text(path: Path, content: str) -> None:
     write_text_atomic(path, content)
 
@@ -628,7 +777,6 @@ def _run_shell(
     workspace: Path,
     command: str,
     timeout_seconds: int = 60,
-    max_chars: int = 8000,
     friday_dir: Path | None = None,
 ) -> dict:
     if platform.system() == "Windows":
@@ -639,9 +787,6 @@ def _run_shell(
     process = subprocess.Popen(
         cmd,
         cwd=workspace,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         env=_child_environment(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -649,36 +794,76 @@ def _run_shell(
         start_new_session=os.name != "nt",
     )
     deadline = time.monotonic() + max(1, timeout_seconds)
-    cancel_event = None
     context = get_current_context()
-    if context is not None:
-        cancel_event = context.metadata.get("friday.cancel_event")
-    while True:
-        try:
-            output, _ = process.communicate(timeout=min(0.2, max(0.01, deadline - time.monotonic())))
-            break
-        except subprocess.TimeoutExpired as error:
-            if cancel_event is not None and cancel_event.is_set():
-                _terminate_process_tree(process)
-                process.communicate(timeout=5)
-                from friday.turn import TurnCancelled
+    cancel_event = context.metadata.get("friday.cancel_event") if context is not None else None
+    output_queue: queue.Queue[bytes | None] = queue.Queue()
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    chunks: list[str] = []
+    live_tail = ""
+    last_update = 0.0
 
-                raise TurnCancelled("Request cancelled by user.")
-            if time.monotonic() < deadline:
-                continue
-            _terminate_process_tree(process)
+    def read_output() -> None:
+        assert process.stdout is not None
+        read = getattr(process.stdout, "read1", process.stdout.read)
+        try:
+            while chunk := read(4096):
+                output_queue.put(chunk)
+        finally:
+            output_queue.put(None)
+
+    reader = threading.Thread(target=read_output, name="friday-bash-output", daemon=True)
+    reader.start()
+    timed_out = False
+    cancelled = False
+    try:
+        finished = False
+        while not finished:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                _terminate_process_tree(process)
+            elif time.monotonic() >= deadline and process.poll() is None:
+                timed_out = True
+                _terminate_process_tree(process)
             try:
-                output, _ = process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                output = _timeout_output(error)
-            return _shell_result(workspace, output, max_chars, exit_code=None, timed_out=True, friday_dir=friday_dir)
+                raw = output_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if raw is None:
+                finished = True
+                continue
+            text = decoder.decode(raw)
+            if not text:
+                continue
+            chunks.append(text)
+            live_tail = (live_tail + text)[-8000:]
+            now = time.monotonic()
+            if now - last_update >= 0.1:
+                _notify_shell_progress(live_tail)
+                last_update = now
+        final_text = decoder.decode(b"", final=True)
+        if final_text:
+            chunks.append(final_text)
+            live_tail = (live_tail + final_text)[-8000:]
+        process.wait(timeout=5)
+    except BaseException:
+        _terminate_process_tree(process)
+        raise
+    finally:
+        reader.join(timeout=5)
+        if process.stdout is not None:
+            process.stdout.close()
+
+    output = "".join(chunks)
+    if cancelled:
+        from friday.turn import TurnCancelled
+
+        raise TurnCancelled("Request cancelled by user.")
+    _notify_shell_progress(live_tail)
     return _shell_result(
         workspace,
         output,
-        max_chars,
-        exit_code=process.returncode,
-        timed_out=False,
+        exit_code=None if timed_out else process.returncode,
+        timed_out=timed_out,
         friday_dir=friday_dir,
     )
 
@@ -699,21 +884,32 @@ def _child_environment() -> dict[str, str]:
 def _shell_result(
     workspace: Path,
     output: str | None,
-    max_chars: int,
     *,
     exit_code: int | None,
     timed_out: bool,
     friday_dir: Path | None,
 ) -> dict:
     content = output or ""
-    preview, artifact = _bounded_tool_output(friday_dir or project_state_dir(workspace), "bash", content, max_chars, ".txt")
+    preview, artifact = _bounded_tail_output(friday_dir or project_state_dir(workspace), "bash", content, ".txt")
     result = {"exit_code": exit_code, "timed_out": timed_out, "output": preview}
     if artifact:
-        result.update({"chars": len(content), "truncated": True, **artifact})
+        result.update(artifact)
     return result
 
 
-def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+def _notify_shell_progress(content: str) -> None:
+    context = get_current_context()
+    tool_call = get_current_tool_call()
+    if context is None or tool_call is None or not content:
+        return
+    context.notify(
+        "tool.progress",
+        category="tool",
+        data={"tool_call_id": tool_call.id, "name": tool_call.name, "content": content},
+    )
+
+
+def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
     try:
@@ -729,11 +925,6 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
             os.killpg(process.pid, signal.SIGKILL)
     except (OSError, subprocess.SubprocessError):
         process.kill()
-
-
-def _timeout_output(error: subprocess.TimeoutExpired) -> str:
-    output = error.output or ""
-    return output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output
 
 
 def _dangerous_shell(command: str) -> str:
@@ -1008,13 +1199,12 @@ def _shell_surface(command: str) -> str:
     return "".join(result)
 
 
-def _write_approval(friday_dir: Path, command: str, timeout_seconds: int, max_chars: int, reason: str) -> dict:
+def _write_approval(friday_dir: Path, command: str, timeout_seconds: int, reason: str) -> dict:
     friday_dir.mkdir(parents=True, exist_ok=True)
     session_id = _current_session_id()
     approval = {
         "id": uuid4().hex[:16],
         "command": command,
-        "max_chars": max_chars,
         "reason": reason,
         "timeout_seconds": timeout_seconds,
     }
@@ -1043,5 +1233,3 @@ def _context_for_paths(workspace: Path, paths: list[Path], loaded: set[Path]) ->
                             }
                         )
     return found
-
-
