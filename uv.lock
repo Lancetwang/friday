@@ -168,7 +168,7 @@ wheels = [
 
 [[package]]
 name = "friday-agent"
-version = "0.1.9"
+version = "0.1.10"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -186,7 +186,7 @@ feishu = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.54.0" },
     { name = "dulwich", specifier = ">=0.25.0,<0.26" },
-    { name = "friday-agent-core", specifier = "==0.1.9", index = "https://pypi.org/simple" },
+    { name = "friday-agent-core", specifier = "==0.1.10", index = "https://pypi.org/simple" },
     { name = "lark-oapi", marker = "extra == 'feishu'", specifier = ">=1.4.0" },
     { name = "rich", specifier = ">=13.7.0" },
 ]
@@ -194,14 +194,14 @@ provides-extras = ["feishu"]
 
 [[package]]
 name = "friday-agent-core"
-version = "0.1.9"
+version = "0.1.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/04/5b/c553780540fd38682940b63fa6309e6694fe52eacb8129093a6ba264d1bd/friday_agent_core-0.1.9.tar.gz", hash = "sha256:f7c546570acd4c318e913a199c04afeebf6e52a53bfdd560284e69ed52c55180", size = 59542, upload-time = "2026-08-08T07:15:55.645Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/64/622fc18d34b6b043234010f7c157f68723096bb3053624b5c661a17a1b17/friday_agent_core-0.1.10.tar.gz", hash = "sha256:3623f4a070ad5f164bd217d740a038f2e78fbbb7386df632ca2d9009b31119d8", size = 61595, upload-time = "2026-08-08T13:41:46.926Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/b2/55d412c6f938a7fc1aa24c6462209b6bdf68eb7957e9f4ecd84fb6514f59/friday_agent_core-0.1.9-py3-none-any.whl", hash = "sha256:da6353ccd6f005c5d174c2f0cb8d756957f65a9f355b3006150121d71faf4461", size = 26885, upload-time = "2026-08-08T07:15:54.32Z" },
+    { url = "https://files.pythonhosted.org/packages/a1/10/15046ddc6fc1eb00bc3c9b270ecc8d8ef35ef66629f858c97cbf2310ae13/friday_agent_core-0.1.10-py3-none-any.whl", hash = "sha256:5c1c511101398e6fd57fae7d0f879b0d761791727b9a19ff253b80a8a40236aa", size = 27409, upload-time = "2026-08-08T13:41:45.793Z" },
 ]
 
 [[package]]

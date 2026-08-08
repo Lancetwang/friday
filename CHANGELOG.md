@@ -2,6 +2,13 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.10 - Provider controls and runtime reliability (2026-08-08)
+
+- Added OpenCode Go as a built-in provider and made thinking levels follow each provider and model's native capabilities instead of exposing one invented scale everywhere.
+- Reworked model, web-search, and phone credentials around the same direct key controls, with provider enable/disable state, model refresh, and safer preservation of existing secrets.
+- Unified the corresponding desktop, TUI, and CLI model state so disabled providers cannot remain active and every client reports the same available choices.
+- Updated to `friday-agent-core` 0.1.10, which fixes final-step termination, initial history import, caller-owned history mutation, serial tool barriers, lazy provider construction, and runtime error events.
+
 ## v0.1.9 - Turn-level trace auditing (2026-08-08)
 
 - Reworked the observability workbench around collapsible turns and ordered model, tool, verification, approval, and compaction activity instead of replaying the chat transcript.
