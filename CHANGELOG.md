@@ -2,6 +2,14 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.7 - Parallel tools and a calmer trace (2026-08-08)
+
+- Independent tool calls now run concurrently: Read, Glob, Grep, WebSearch, and WebFetch are declared parallel-safe, so a model batch of independent calls executes together instead of one after another (up to four at a time). Write, Edit, Bash, and UpdatePlan stay serial, which keeps the single approval slot and workspace side effects safe. The runtime measures each call's real execution time inside its own thread.
+- Tool rows and the trace workbench show that per-call time: the desktop and TUI rows display the backend-measured duration next to the result preview, and trace durations prefer the executor measurement, so a parallel batch no longer reads every call as taking as long as the slowest one.
+- Activity groups render one turn's reasoning as a single block (with real accumulated thinking time, not the span that counted tool rounds in between) and aggregate tool runs by name, so a long multi-tool turn stays a few quiet rows until opened.
+- The per-reply metrics line dropped the browser tooltip for a drawn info button and a popover that matches the sources popover, with the row tucked closer to the reply.
+- The composer is flatter with a softer radius, grows with the draft up to a third of the window, and then scrolls internally.
+
 ## v0.1.6 - Discovered models and a calmer turn (2026-08-07)
 
 - Built-in providers (DeepSeek, Xiaomi MiMo, OpenAI, Anthropic) are now configured with just an API key: Friday calls the provider's `/models` endpoint on save, which validates the key and turns every advertised model into a profile. Re-saving re-syncs the list (new models appear, removed ones drop), and the chat model menu shows everything the provider serves.
