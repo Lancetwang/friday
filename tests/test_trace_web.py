@@ -34,23 +34,112 @@ class FakeModel:
 
 
 class TraceSecurityTests(unittest.TestCase):
-    def test_model_request_projection_omits_hidden_messages(self) -> None:
+    def test_audit_projection_keeps_tool_calls_but_omits_hidden_messages(self) -> None:
         event = {
             "seq": 1,
             "type": "model.request",
             "data": {
-                "messages": [{"role": "system", "content": "private control context"}],
+                "messages": [
+                    {"role": "system", "content": "private control context"},
+                    {"role": "user", "content": "inspect the file"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "Read", "arguments": '{"path":"README.md"}'},
+                            }
+                        ],
+                    },
+                ],
+                "tools_ref": [{"type": "function", "function": {"name": "Read"}}],
                 "tool_count": 9,
             },
         }
 
         projected = trace_web._analysis_event(event)
 
-        self.assertEqual(projected["data"], {"message_count": 1, "tool_count": 9})
+        self.assertEqual(projected["data"]["message_count"], 3)
+        self.assertEqual(projected["data"]["private_messages_redacted"], 1)
+        self.assertEqual(projected["data"]["available_tools"], ["Read"])
+        self.assertEqual(projected["data"]["messages"][1]["tool_calls"][0]["function"]["name"], "Read")
         self.assertNotIn("private control context", json.dumps(projected))
+
+    def test_model_response_projection_keeps_tool_call_arguments(self) -> None:
+        event = {
+            "seq": 2,
+            "type": "model.response",
+            "data": {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "Bash", "arguments": '{"command":"pwd"}'}}],
+                },
+                "usage": {"prompt_tokens": 12, "completion_tokens": 4},
+            },
+        }
+
+        projected = trace_web._analysis_event(event)
+
+        self.assertEqual(
+            projected["data"]["message"]["tool_calls"][0]["function"]["arguments"],
+            '{"command":"pwd"}',
+        )
+
+    def test_analyst_receives_the_same_tool_call_projection_as_the_workbench(self) -> None:
+        events = [
+            {
+                "seq": 1,
+                "type": "model.request",
+                "data": {
+                    "messages": [{"role": "system", "content": "private control context"}],
+                    "tool_count": 1,
+                },
+            },
+            {
+                "seq": 2,
+                "type": "model.response",
+                "data": {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{"function": {"name": "Read", "arguments": '{"path":"README.md"}'}}],
+                    },
+                    "usage": {},
+                },
+            },
+        ]
+        turns = [
+            {
+                "turn_id": "turn-1",
+                "mode": "chat",
+                "status": "done",
+                "user": "inspect",
+                "activities": [{"kind": "model", "label": "Model response", "status": "done", "seqs": [1, 2]}],
+            }
+        ]
+
+        with patch("friday.trace_web.trace_turns", return_value=turns):
+            evidence = trace_web._analysis_evidence("session", {}, events)
+
+        self.assertIn('"name": "Read"', evidence)
+        self.assertIn("README.md", evidence)
+        self.assertNotIn("private control context", evidence)
 
 
 class TraceWebTests(unittest.TestCase):
+    def test_trace_ui_is_a_turn_audit_not_a_chat_replay(self) -> None:
+        self.assertIn("function auditRows(t)", trace_web.HTML)
+        self.assertIn('class="sub">Execution Audit', trace_web.HTML)
+        self.assertIn('auditField("Tool input"', trace_web.HTML)
+        self.assertIn("Load audit evidence", trace_web.HTML)
+        self.assertIn("Hide audit evidence", trace_web.HTML)
+        self.assertNotIn("b.remove()", trace_web.HTML)
+        self.assertNotIn("${md(t.user)}", trace_web.HTML)
+        self.assertNotIn("Agent output <small>", trace_web.HTML)
+
     def test_approval_resume_stays_in_one_trace_turn_and_updates_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"FRIDAY_OBSERVABILITY_DIR": tmp}):
             workspace = Path(tmp) / "workspace"

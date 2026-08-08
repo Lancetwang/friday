@@ -1,6 +1,6 @@
 [project]
 name = "friday-agent"
-version = "0.1.8"
+version = "0.1.9"
 description = "Friday, a general-purpose local CLI agent built on agent-core-runtime."
 readme = "README.md"
 license = "MIT"

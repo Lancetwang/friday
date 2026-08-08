@@ -341,7 +341,7 @@ const en: Record<string, string> = {
 const zh: Record<string, string> = {
   // Chrome & sidebar
   'nav.skills': '技能',
-  'nav.observability': '可观测性',
+  'nav.observability': '观测',
   'sidebar.projects': '项目',
   'sidebar.recent': '最近',
   'sidebar.phone': '手机',

@@ -2,6 +2,12 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.9 - Turn-level trace auditing (2026-08-08)
+
+- Reworked the observability workbench around collapsible turns and ordered model, tool, verification, approval, and compaction activity instead of replaying the chat transcript.
+- Human inspection and Trace Analyst now share one bounded, redacted evidence projection that preserves public request messages, assistant tool calls and arguments, tool results, timing, cache usage, and provider token usage without exposing the private control prefix.
+- Audit evidence can be loaded once and then shown or hidden without another request; the workbench uses a calmer serif type system, and the desktop navigation now labels the feature as **观测**.
+
 ## v0.1.8 - Bounded file tools with live command progress (2026-08-08)
 
 - Read now returns at most 2,000 lines or 50 KiB with an explicit continuation point, while preserving Friday's external-file, image, and complete-artifact behavior.

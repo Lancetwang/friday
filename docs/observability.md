@@ -30,17 +30,20 @@ friday trace serve
 header is not a loopback name, so a page on the open web cannot point a hostname
 it controls at `127.0.0.1` and read traces through the browser. It opens a local
 three-pane WebUI:
-session list, agent behavior timeline, and Trace Analyst. The timeline projects
-the lossless trace into only `YOU`, `FRI`, and grouped `TOOL` entries; node and
-flow events remain on disk for evaluation but do not clutter the human view.
+session list, turn audit, and Trace Analyst. Each turn is one expandable row
+with ordered user, model, tool, verification, approval, and compaction events.
+The audit surface emphasizes status, duration, provider token usage, cache
+usage, tool arguments, and tool results; message bodies stay collapsed as raw
+evidence instead of being rendered as a second chat transcript. Node and flow
+events remain on disk for evaluation but do not clutter the human view.
 `/trace` opens the same UI from chat or TUI.
 
-The analyst automatically receives a bounded evidence packet for the selected
-session and makes one call through Friday's configured DeepSeek-compatible
-model. No event selection or tool loop is required; questions appear
-immediately and answers stream into the paper-style analysis pane. Analysis
-conversations are stored under `analyses/` and never enter the original
-session or its memory.
+The analyst automatically receives the same bounded, redacted event projection
+that the Workbench exposes through **Load audit evidence**, including public
+request messages, assistant tool calls and arguments, tool results, timing, and
+usage. No event selection or tool loop is required; questions appear
+immediately and answers stream into the analysis pane. Analysis conversations
+are stored under `analyses/` and never enter the original session or its memory.
 
 Deleting a conversation removes its trace, analysis, checkpoints, and
 session-scoped large tool outputs as one lifecycle unit. Resetting the current
