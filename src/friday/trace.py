@@ -483,7 +483,7 @@ def trace_turns(session_id: str, events: list[dict[str, Any]]) -> list[dict[str,
                         "result": result,
                         "status": "failed" if _tool_result_failed(tool_data) else ("done" if tool_result else "running"),
                         "time": row.get("time"),
-                        "duration_ms": _elapsed_ms(row, tool_result),
+                        "duration_ms": _tool_duration_ms(tool_result, row),
                         "input_tokens": None,
                         "output_tokens": None,
                         "cached_tokens": None,
@@ -740,6 +740,21 @@ def _resolve_descriptor(session_id: str, value: Any) -> Any:
         return load_trace_object(session_id, value["ref"])
     except (FileNotFoundError, json.JSONDecodeError):
         return value.get("preview", "")
+
+
+def _tool_duration_ms(result_event: dict[str, Any] | None, call_event: dict[str, Any] | None) -> int | None:
+    """A tool call's execution time, executor-measured when available.
+
+    The executor times each call inside its own thread, which stays accurate
+    when a batch runs concurrently. The event-gap fallback measures from the
+    batch's shared completion moment and would report every parallel call as
+    taking as long as the slowest one.
+    """
+    if result_event is not None:
+        measured = (result_event.get("data") or {}).get("elapsed_ms")
+        if isinstance(measured, (int, float)):
+            return max(0, round(measured))
+    return _elapsed_ms(call_event, result_event)
 
 
 def _elapsed_ms(start: dict[str, Any] | None, end: dict[str, Any] | None) -> int | None:
