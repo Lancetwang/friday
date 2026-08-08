@@ -8,13 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from agent_core import Agent, RunContext
+from agent_core import Agent, RunContext, get_current_context
 
 from friday.agent_flow import begin_guarded_run
 from friday.app import prepare_context_for_chat
 from friday.checkpoint import begin_checkpoint, checkpoint_artifacts, discard_checkpoint, finish_checkpoint
 from friday.compaction import LAST_COMPACTION, announce_compaction, compaction_record
-from friday.context import context_window, token_estimate
+from friday.context import context_window, observe_context_usage, token_estimate, token_measurement
 from friday.loop import AGENT_MAX_STEPS, run_loop
 from friday.memory import capture_user_memory, relevant_memory
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress
@@ -93,6 +93,7 @@ def run_turn(
     cost = {"cached_tokens": 0}
 
     def on_observation(event: Any) -> None:
+        observe_context_usage(get_current_context() or context, event.type, event.data)
         if event.type == "model.request.payload":
             config = context.metadata.get("friday.model_config")
             if isinstance(config, dict):
@@ -219,6 +220,7 @@ def run_turn(
         context.on_observation = observation_handler
     turn_usage = context.usage.since(usage_start).to_dict()
     estimated = turn_usage["input_tokens"] is None or turn_usage["output_tokens"] is None
+    window_usage = token_measurement(context, tools)
     metrics = {
         "elapsed_ms": int((time.perf_counter() - start) * 1000),
         "requests": turn_usage["requests"],
@@ -229,7 +231,10 @@ def run_turn(
         "cached_tokens": cost["cached_tokens"],
         # How full the window is now: what the next request has to carry.
         "window": context_window(context),
-        "window_tokens": token_estimate(context, tools),
+        "window_tokens": window_usage["tokens"],
+        "window_provider_tokens": window_usage["provider_tokens"],
+        "window_delta_tokens": window_usage["delta_tokens"],
+        "window_token_source": window_usage["source"],
     }
     if continuation and isinstance(context.metadata.get(PENDING_TURN_METRICS), dict):
         previous_metrics = context.metadata[PENDING_TURN_METRICS]
@@ -244,6 +249,9 @@ def run_turn(
             # one taken before the approval pause instead of adding to it.
             "window": metrics["window"],
             "window_tokens": metrics["window_tokens"],
+            "window_provider_tokens": metrics["window_provider_tokens"],
+            "window_delta_tokens": metrics["window_delta_tokens"],
+            "window_token_source": metrics["window_token_source"],
         }
     loop_status = str(context.metadata.get("friday.loop_status") or "done")
     if loop_status == "needs_approval":

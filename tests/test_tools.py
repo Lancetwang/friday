@@ -19,7 +19,7 @@ from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarde
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _pinned_core_version, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
 from friday.compaction import COMPACT_TARGET_RATIO, LAST_COMPACTION, announce_compaction, clean_summary, compact_in_place, compaction_record, fit_recent_steps, fit_recent_turns, split_memory_section, summary_is_usable, transcript
 from friday.config import DEFAULT_MODEL_CONFIG, ModelConfig, build_model, clear_model_credential, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, read_model_credential, read_web_search_credential, refresh_model_profiles, save_model_profile, save_web_search_settings, set_model_enabled
-from friday.context import TOOL_COMPACT_AT, _context_text, compact_tool_results, context_ratio, context_report, context_window, should_compact_conversation, should_compact_tools, tool_compaction_gain
+from friday.context import TOOL_COMPACT_AT, _context_text, compact_tool_results, context_ratio, context_report, context_window, observe_context_usage, should_compact_conversation, should_compact_tools, token_measurement, tool_compaction_gain
 from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
 from friday.model_options import (
@@ -1806,6 +1806,60 @@ class CompactTests(unittest.TestCase):
             self.assertIn("compaction starts at: 255000 tokens (85%)", report)
             self.assertIn("Local est. tokens", report)
 
+    def test_context_measurement_anchors_to_provider_usage_and_estimates_only_the_delta(self) -> None:
+        context = RunContext()
+        context.add_message("system", "stable prefix")
+        context.add_message("user", "hello")
+        request = {"messages": list(context.get_messages()), "tools": []}
+
+        observe_context_usage(context, "model.request.payload", request)
+        observe_context_usage(
+            context,
+            "model.response.payload",
+            {"message": {"usage": {"prompt_tokens": 1234, "completion_tokens": 8}}},
+        )
+
+        exact = token_measurement(context, [])
+        self.assertEqual(exact["tokens"], 1234)
+        self.assertEqual(exact["source"], "provider")
+
+        context.add_message("assistant", "x" * 400)
+        advanced = token_measurement(context, [])
+        self.assertEqual(advanced["provider_tokens"], 1234)
+        self.assertGreater(advanced["delta_tokens"], 0)
+        self.assertEqual(advanced["tokens"], 1234 + advanced["delta_tokens"])
+        self.assertEqual(advanced["source"], "provider+local-delta")
+
+    def test_context_measurement_keeps_agent_scopes_isolated(self) -> None:
+        context = RunContext(active_message_scope="main")
+        context.add_message("system", "main prefix")
+        observe_context_usage(
+            context,
+            "model.request.payload",
+            {"messages": list(context.get_messages()), "tools": []},
+        )
+        observe_context_usage(
+            context,
+            "model.response.payload",
+            {"message": {"usage": {"prompt_tokens": 2000, "completion_tokens": 8}}},
+        )
+
+        with context.use_message_scope("verifier"):
+            context.add_message("system", "verify")
+            observe_context_usage(
+                context,
+                "model.request.payload",
+                {"messages": list(context.get_messages()), "tools": []},
+            )
+            observe_context_usage(
+                context,
+                "model.response.payload",
+                {"message": {"usage": {"prompt_tokens": 300, "completion_tokens": 4}}},
+            )
+            self.assertEqual(token_measurement(context, [])["tokens"], 300)
+
+        self.assertEqual(token_measurement(context, [])["tokens"], 2000)
+
     def test_tool_result_compaction_simplifies_without_dropping_fields(self) -> None:
         context = RunContext()
         output = "line one\nline two\n" * 200
@@ -1866,7 +1920,7 @@ class CompactTests(unittest.TestCase):
             context.emit("tool.call", category="tool", data={"tool_call_id": "call-1", "name": "Read", "arguments": {"path": "big.txt"}})
             context.add_message(
                 "tool",
-                json.dumps({"path": "big.txt", "content": "\n" * 5000}),
+                json.dumps({"path": "big.txt", "content": "\n" * 6000}),
                 tool_call_id="call-1",
             )
 

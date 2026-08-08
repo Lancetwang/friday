@@ -71,13 +71,22 @@ class TurnTests(unittest.TestCase):
             agent = type("Agent", (), {"instructions": "test"})()
 
             def chat(*args, **kwargs):
-                context.add_message("assistant", "x" * 4000)
                 for _ in range(3):
-                    context.record_model_usage({"prompt_tokens": 300000, "completion_tokens": 100})
+                    usage = {
+                        "prompt_tokens": 250000,
+                        "completion_tokens": 100,
+                        "prompt_cache_hit_tokens": 200000,
+                    }
+                    context.observe(
+                        "model.request.payload",
+                        category="model",
+                        data={"messages": list(context.get_messages()), "tools": [], "chat_kwargs": {}},
+                    )
+                    context.record_model_usage(usage)
                     context.observe(
                         "model.response.payload",
                         category="model",
-                        data={"message": {"usage": {"prompt_cache_hit_tokens": 250000}}},
+                        data={"message": {"usage": usage}},
                     )
                 return LoopResult(answer="done")
 
@@ -89,10 +98,13 @@ class TurnTests(unittest.TestCase):
                                 result = run_turn(agent, context, "hello", stream=False)
 
         metrics = result.metrics
-        self.assertEqual(metrics["input_tokens"], 900000)
-        self.assertEqual(metrics["cached_tokens"], 750000)
+        self.assertEqual(metrics["input_tokens"], 750000)
+        self.assertEqual(metrics["cached_tokens"], 600000)
         self.assertEqual(metrics["window"], 300000)
-        self.assertLess(metrics["window_tokens"], 2000)
+        self.assertEqual(metrics["window_tokens"], 250000)
+        self.assertEqual(metrics["window_provider_tokens"], 250000)
+        self.assertEqual(metrics["window_delta_tokens"], 0)
+        self.assertEqual(metrics["window_token_source"], "provider")
         self.assertLess(metrics["window_tokens"], metrics["input_tokens"])
 
     def test_rejection_guidance_is_a_user_message_not_tool_data(self) -> None:

@@ -18,6 +18,12 @@ request can be reconstructed without copying the growing context on every
 model call. Compaction changes the resumable session state but never rewrites
 the raw trace.
 
+Turn input, output, and cache totals come from provider `usage` and are summed
+across that turn's model calls. Window occupancy is separate: Friday anchors it
+to the latest exact provider `prompt_tokens`; messages added after that response
+are reported as a labeled local delta until the next request supplies a fresh
+exact anchor. Cumulative input is never treated as the current window size.
+
 ## Trace Workbench
 
 ```powershell
