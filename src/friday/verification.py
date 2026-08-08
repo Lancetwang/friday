@@ -16,7 +16,11 @@ from friday.config import (
     load_model_config,
     output_token_limit,
 )
-from friday.model_options import DEFAULT_THINKING_EFFORT, thinking_request_kwargs
+from friday.model_options import (
+    DEFAULT_THINKING_EFFORT,
+    normalize_thinking_effort,
+    thinking_request_kwargs,
+)
 from friday.prompts import SECURITY_NOTES, VERIFIER_NOTES
 from friday.storage import project_state_dir
 from friday.tools import _shell_surface, allow_permissions_for_session, build_tools, pending_approval
@@ -34,6 +38,9 @@ def build_verifier(
     # workspace's own model config, so a provider whose real ceiling is not
     # 1M never gets a window it cannot serve.
     config = config or load_model_config(root)
+    thinking_effort = normalize_thinking_effort(
+        config.provider, config.model, thinking_effort
+    )
     system = platform.system()
     shell = "PowerShell" if system == "Windows" else "bash"
     tools = build_tools(root, friday_dir)
@@ -47,7 +54,7 @@ def build_verifier(
                 # the verdict JSON. A tight cap like 900 can leave zero content
                 # tokens, which fails parsing and blocks the whole turn.
                 **output_token_limit(config, 4000),
-                **thinking_request_kwargs(config.provider, thinking_effort),
+                **thinking_request_kwargs(config.provider, config.model, thinking_effort),
                 "tool_choice": "auto",
             },
         ),

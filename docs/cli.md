@@ -74,7 +74,7 @@ Slash commands in chat and TUI:
 /help
 /new
 /model [id]
-/thinking [off|low|high|max]
+/thinking [level]
 /memory [help|status|list|search|add|update|remove|consolidate]
 /context
 /progress

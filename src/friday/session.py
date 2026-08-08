@@ -20,7 +20,11 @@ from friday.app import build_friday, compact_friday, reset_friday, resume_friday
 from friday.checkpoint import finish_pending_checkpoint
 from friday.compaction import LAST_COMPACTION, announce_compaction, compaction_record
 from friday.config import load_model_config
-from friday.model_options import DEFAULT_THINKING_EFFORT, normalize_thinking_effort, supports_thinking
+from friday.model_options import (
+    DEFAULT_THINKING_EFFORT,
+    normalize_thinking_effort,
+    supports_thinking,
+)
 from friday.progress import current_progress, finish_progress
 from friday.state import USER_MESSAGE_TIMES_KEY, SessionState, archived_messages, conversation_body, hydrate, new_session_id
 from friday.tools import (
@@ -264,6 +268,9 @@ class FridaySession:
         """Change providers without losing the live conversation."""
         config = load_model_config(self.workspace, profile_id=profile_id)
         self.model_profile = config.profile_id
+        self.thinking_effort = normalize_thinking_effort(
+            config.provider, config.model, self.thinking_effort
+        )
         self._rebuild()
 
     def select_permission_mode(self, mode: str) -> str:
@@ -278,9 +285,11 @@ class FridaySession:
 
     def select_thinking(self, effort: str) -> str:
         config = load_model_config(self.workspace, profile_id=self.model_profile)
-        if not supports_thinking(config.provider):
-            raise ValueError("The selected model provider does not support configurable thinking.")
-        self.thinking_effort = normalize_thinking_effort(effort)
+        if not supports_thinking(config.provider, config.model):
+            raise ValueError("The selected model does not support configurable thinking.")
+        self.thinking_effort = normalize_thinking_effort(
+            config.provider, config.model, effort, strict=True
+        )
         self._rebuild()
         return self.thinking_effort
 

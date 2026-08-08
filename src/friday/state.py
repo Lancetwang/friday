@@ -159,7 +159,9 @@ def hydrate(context: RunContext, state: SessionState) -> None:
     if isinstance(state.last_usage, dict):
         context.metadata["friday.last_usage"] = dict(state.last_usage)
     context.metadata[USER_MESSAGE_TIMES_KEY] = [dict(item) for item in state.user_message_times]
-    context.metadata["friday.thinking_effort"] = state.thinking_effort
+    # The fresh model build already resolved stale/session values against the
+    # selected model's real options. Keep that resolved value on resume.
+    context.metadata.setdefault("friday.thinking_effort", state.thinking_effort)
     append_progress_checkpoint(context)
 
 
@@ -538,5 +540,4 @@ def records_by_message(records: Any, messages: Sequence[Mapping[str, Any]]) -> d
         taken[fingerprint] = seen + 1
         found[matches[seen]] = record
     return found
-
 

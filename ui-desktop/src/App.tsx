@@ -17,17 +17,20 @@ import {
   ChevronIcon,
   CloseIcon,
   DiamondIcon,
+  EyeIcon,
   InfoIcon,
   MinusIcon,
   PencilIcon,
   PlusIcon,
+  RefreshIcon,
   SearchIcon,
+  TrashIcon,
   UndoIcon
 } from './Icons'
 import { normalizeMarkdown } from './markdown'
 import { MenuDetails } from './MenuDetails'
 import { PhoneBridgeSettings, type BridgeStatus, type FeishuSettings } from './PhoneBridgeSettings'
-import { SaveFooter, SecretField, SettingsMessage, useSettingsSave } from './SettingsForm'
+import { SaveFooter, SettingsMessage, useSettingsSave } from './SettingsForm'
 import { collectMessageSources, hostOf, safeIconUrl, type WebSource } from './sources'
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath]
@@ -97,7 +100,7 @@ type Metrics = {
 
 type PermissionMode = 'auto' | 'bypass' | 'manual'
 type ProjectStatus = 'connecting' | 'error' | 'idle' | 'ready'
-type ThinkingEffort = 'high' | 'low' | 'max' | 'off'
+type ThinkingEffort = string
 
 const permissionOptions: ReadonlyArray<{
   descriptionKey: string
@@ -115,8 +118,13 @@ const thinkingOptions: ReadonlyArray<{
   value: ThinkingEffort
 }> = [
   { descriptionKey: 'effort.off.desc', labelKey: 'effort.off', value: 'off' },
+  { descriptionKey: 'effort.on.desc', labelKey: 'effort.on', value: 'on' },
+  { descriptionKey: 'effort.none.desc', labelKey: 'effort.none', value: 'none' },
+  { descriptionKey: 'effort.minimal.desc', labelKey: 'effort.minimal', value: 'minimal' },
   { descriptionKey: 'effort.low.desc', labelKey: 'effort.low', value: 'low' },
+  { descriptionKey: 'effort.medium.desc', labelKey: 'effort.medium', value: 'medium' },
   { descriptionKey: 'effort.high.desc', labelKey: 'effort.high', value: 'high' },
+  { descriptionKey: 'effort.xhigh.desc', labelKey: 'effort.xhigh', value: 'xhigh' },
   { descriptionKey: 'effort.max.desc', labelKey: 'effort.max', value: 'max' }
 ]
 
@@ -158,6 +166,7 @@ type SessionInfo = {
   model_vision?: boolean
   permission_mode: PermissionMode
   thinking_effort: ThinkingEffort
+  thinking_options?: ThinkingEffort[]
   thinking_supported?: boolean
   session_id?: string
   running?: boolean
@@ -168,6 +177,7 @@ type ModelProfile = {
   api_key_configured: boolean
   base_url: string
   context_window: number
+  enabled: boolean
   id: string
   max_output_tokens: number
   model: string
@@ -177,8 +187,10 @@ type ModelProfile = {
 }
 
 type ModelProvider = {
+  api_key_configured: boolean
   base_url: string
   builtin: boolean
+  enabled: boolean
   id: string
   label: string
   models: Array<{ id: string; vision: boolean }>
@@ -186,6 +198,7 @@ type ModelProvider = {
 
 type ModelCatalog = {
   active: string
+  disabled?: string[]
   profiles: ModelProfile[]
   providers: ModelProvider[]
 }
@@ -1412,15 +1425,45 @@ function App() {
   }
 
   const saveModel = (
-    profile: Omit<ModelProfile, 'api_key_configured' | 'vision'>,
-    apiKey: string,
-    clearApiKey: boolean
+    profile: ModelDraft,
+    apiKey: string
   ) => sendGateway<{ catalog: ModelCatalog; info: SessionInfo }>(activeProject, 'model.save', {
-    activate: true,
-    api_key: apiKey || undefined,
-    clear_api_key: clearApiKey,
+    activate: false,
+    api_key: apiKey,
     profile
   }).then(result => {
+    updateView(activeProject, current => ({ ...current, info: result.info, models: result.catalog }))
+    return result.catalog
+  })
+
+  const revealModelKey = (target: ModelTarget) => sendGateway<{ api_key: string }>(
+    activeProject,
+    'model.key.get',
+    target
+  ).then(result => result.api_key)
+
+  const refreshProviderModels = (target: ModelTarget) => sendGateway<{
+    catalog: ModelCatalog
+    info: SessionInfo
+    models: string[]
+  }>(activeProject, 'model.refresh', target).then(result => {
+    updateView(activeProject, current => ({ ...current, info: result.info, models: result.catalog }))
+    return { catalog: result.catalog, models: result.models }
+  })
+
+  const clearModelKey = (target: ModelTarget) => sendGateway<{ catalog: ModelCatalog; info: SessionInfo }>(
+    activeProject,
+    'model.key.clear',
+    target
+  ).then(result => {
+    updateView(activeProject, current => ({ ...current, info: result.info, models: result.catalog }))
+    return result.catalog
+  })
+
+  const setProviderEnabled = (target: ModelTarget, enabled: boolean) => sendGateway<{
+    catalog: ModelCatalog
+    info: SessionInfo
+  }>(activeProject, 'model.enabled.set', { ...target, enabled }).then(result => {
     updateView(activeProject, current => ({ ...current, info: result.info, models: result.catalog }))
     return result.catalog
   })
@@ -1462,6 +1505,11 @@ function App() {
   const loadSettings = () => sendGateway<AppSettings>(settingsWorkspace, 'settings.get')
   const saveWebSettings = (value: Record<string, unknown>) =>
     sendGateway<WebSearchSettings>(settingsWorkspace, 'settings.web.save', value)
+  const revealWebKey = (provider: string) => sendGateway<{ api_key: string }>(
+    settingsWorkspace,
+    'settings.web.key.get',
+    { provider }
+  ).then(result => result.api_key)
   const saveUserProfile = (profile: Partial<UserProfileSettings>) =>
     sendGateway<UserProfileSettings>(settingsWorkspace, 'settings.user.save', { profile })
   const saveFeishuSettings = (value: Record<string, unknown>) =>
@@ -1470,6 +1518,10 @@ function App() {
       'settings.feishu.save',
       value
     )
+  const revealFeishuSecret = () => sendGateway<{ app_secret: string }>(
+    settingsWorkspace,
+    'settings.feishu.key.get'
+  ).then(result => result.app_secret)
   const setBridgeRunning = (running: boolean) =>
     sendGateway<BridgeStatus>(settingsWorkspace, running ? 'bridge.start' : 'bridge.stop')
   const readBridgeStatus = () => sendGateway<BridgeStatus>(settingsWorkspace, 'bridge.status')
@@ -1906,7 +1958,8 @@ function App() {
   const conversationTitle = selectedSession ? sessionLabel(selectedSession) : selectedFork?.title || t('conversation.new')
   const project = isDefaultWorkspace ? t('project.personal') : projectLabel(activeProject)
   const permission = permissionOptions.find(option => option.value === info.permission_mode) || permissionOptions.find(option => option.value === 'manual')!
-  const thinking = thinkingOptions.find(option => option.value === info.thinking_effort) || thinkingOptions[2]
+  const availableThinkingOptions = thinkingOptions.filter(option => info.thinking_options?.includes(option.value))
+  const thinking = thinkingOptions.find(option => option.value === info.thinking_effort) || thinkingOptions[0]
   const selectedModel = models.profiles.find(profile => profile.id === info.model_profile)
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2209,9 +2262,15 @@ function App() {
             initialSection={settingsSection}
             language={language}
             onClose={() => setPage('chat')}
+            onClearKey={clearModelKey}
+            onEnable={setProviderEnabled}
             onLanguageChange={changeLanguage}
             onLoad={loadSettings}
             onReadMemory={readMemoryFile}
+            onRefreshModels={refreshProviderModels}
+            onRevealFeishuSecret={revealFeishuSecret}
+            onRevealKey={revealModelKey}
+            onRevealWebKey={revealWebKey}
             onBridgeStatus={readBridgeStatus}
             onBridgeToggle={setBridgeRunning}
             onDelete={deleteModel}
@@ -2384,7 +2443,7 @@ function App() {
                   <i aria-hidden="true" />
                 </summary>
                 <div className="model-menu">
-                  {models.profiles.map(profile => (
+                  {models.profiles.filter(profile => profile.enabled).map(profile => (
                     <button
                       className={profile.id === info.model_profile ? 'active' : ''}
                       key={profile.id}
@@ -2435,7 +2494,7 @@ function App() {
                     <i aria-hidden="true" />
                   </summary>
                   <div className="permission-menu">
-                    {thinkingOptions.map(option => (
+                    {availableThinkingOptions.map(option => (
                       <button
                         className={option.value === info.thinking_effort ? 'active' : ''}
                         key={option.value}
@@ -2787,13 +2846,15 @@ function FolderIcon({ className = '', open }: { className?: string; open: boolea
   )
 }
 
-type ModelDraft = Omit<ModelProfile, 'api_key_configured' | 'vision'>
+type ModelDraft = Omit<ModelProfile, 'api_key_configured' | 'enabled' | 'vision'>
+type ModelTarget = { profile?: string; provider?: string }
 
 const PROVIDER_ICON_URLS: Readonly<Record<string, string>> = {
   anthropic: 'https://www.anthropic.com/favicon.ico',
   anysearch: 'https://www.anysearch.com/favicon.ico',
   deepseek: 'https://www.deepseek.com/favicon.ico',
   mimo: 'https://mimo.mi.com/favicon.png',
+  'opencode-go': 'https://opencode.ai/favicon.ico',
   openai: 'https://openai.com/favicon.ico',
   tavily: 'https://tavily.com/favicon.ico'
 }
@@ -2856,14 +2917,166 @@ const SETTINGS_SECTIONS: ReadonlyArray<{ hintKey: string; id: SettingsSection; l
   { hintKey: 'settings.docs.hint', id: 'docs', labelKey: 'settings.docs' }
 ]
 
-function ConfigBadge({ configured }: { configured: boolean }) {
+function ModelCredentialRow({
+  configured,
+  draft,
+  enabled,
+  label,
+  modelCount,
+  onClear,
+  onEdit,
+  onEnable,
+  onRefresh,
+  onReveal,
+  onSave,
+  provider,
+  subtitle,
+  target
+}: {
+  configured: boolean
+  draft: ModelDraft
+  enabled: boolean
+  label: string
+  modelCount: number
+  onClear: (target: ModelTarget) => Promise<ModelCatalog>
+  onEdit?: () => void
+  onEnable: (target: ModelTarget, enabled: boolean) => Promise<ModelCatalog>
+  onRefresh: (target: ModelTarget) => Promise<{ catalog: ModelCatalog; models: string[] }>
+  onReveal: (target: ModelTarget) => Promise<string>
+  onSave: (profile: ModelDraft, apiKey: string) => Promise<ModelCatalog>
+  provider: string
+  subtitle: string
+  target: ModelTarget
+}) {
+  const [apiKey, setApiKey] = useState('')
+  const [revealed, setRevealed] = useState(false)
+  const [available, setAvailable] = useState(modelCount)
+  const input = useRef<HTMLInputElement>(null)
+  const form = useSettingsSave()
+
+  useEffect(() => setAvailable(modelCount), [modelCount])
+
+  const save = (event: FormEvent) => {
+    event.preventDefault()
+    const value = apiKey.trim()
+    if (!value) {
+      input.current?.focus()
+      return
+    }
+    form.submit(onSave(draft, value), () => {
+      setApiKey('')
+      setRevealed(false)
+      return t('models.saved')
+    })
+  }
+
+  const reveal = () => {
+    if (revealed) {
+      setRevealed(false)
+      return
+    }
+    if (apiKey) {
+      setRevealed(true)
+      return
+    }
+    if (!configured) return
+    form.submit(onReveal(target), value => {
+      setApiKey(value)
+      setRevealed(true)
+      return ''
+    }, 'reveal')
+  }
+
+  const refresh = () => form.submit(onRefresh(target), result => {
+    setAvailable(result.models.length)
+    return t('models.refreshed').replace('{n}', String(result.models.length))
+  }, 'refresh')
+
+  const clear = () => form.submit(onClear(target), () => {
+    setApiKey('')
+    setRevealed(false)
+    return t('models.keyRemoved')
+  }, 'clear')
+
+  const toggle = (next: boolean) => {
+    if (next && !configured) {
+      input.current?.focus()
+      form.report({ failed: true, message: t('models.enableNeedsKey') })
+      return
+    }
+    form.submit(onEnable(target, next), () => next ? t('models.enabled') : t('models.disabled'), 'toggle')
+  }
+
+  const busy = Boolean(form.pending)
   return (
-    <span className={`config-badge ${configured ? 'on' : 'off'}`}>
-      <svg aria-hidden="true" fill="none" viewBox="0 0 10 10">
-        {configured ? <path d="M1.6 5.4 4 7.8 8.4 2.6" /> : <circle cx="5" cy="5" r="3.4" />}
-      </svg>
-      {configured ? t('badge.configured') : t('badge.unconfigured')}
-    </span>
+    <div className={`model-provider ${enabled ? 'enabled' : ''}`}>
+      <div className="model-provider-identity">
+        <ProviderIcon label={label} provider={provider} />
+        {onEdit ? (
+          <button className="model-provider-name model-provider-edit" onClick={onEdit} type="button">
+            <strong>{label}</strong>
+            <small>{subtitle}</small>
+          </button>
+        ) : (
+          <span className="model-provider-name">
+            <strong>{label}</strong>
+            <small>{subtitle}</small>
+          </span>
+        )}
+      </div>
+      <form className="credential-input" onSubmit={save}>
+        <input
+          aria-label={`${label} ${t('models.apiKey')}`}
+          autoComplete="off"
+          disabled={busy}
+          onChange={event => setApiKey(event.target.value)}
+          placeholder={configured ? '••••••••••••' : t('models.keyEmptyShort')}
+          ref={input}
+          spellCheck={false}
+          type={revealed ? 'text' : 'password'}
+          value={apiKey}
+        />
+        <div className="credential-actions">
+          <button
+            aria-label={revealed ? t('secret.hide') : t('secret.show')}
+            className="credential-icon"
+            disabled={busy || (!configured && !apiKey)}
+            onClick={reveal}
+            title={revealed ? t('secret.hide') : t('secret.show')}
+            type="button"
+          ><EyeIcon open={!revealed} /></button>
+          <button
+            aria-label={t('models.refresh')}
+            className={`credential-icon ${form.pending === 'refresh' ? 'spinning' : ''}`}
+            disabled={busy || !configured}
+            onClick={refresh}
+            title={t('models.refresh')}
+            type="button"
+          ><RefreshIcon /></button>
+          <button
+            aria-label={t('models.removeKey')}
+            className="credential-icon danger"
+            disabled={busy || !configured}
+            onClick={clear}
+            title={t('models.removeKey')}
+            type="button"
+          ><TrashIcon /></button>
+          <label className="settings-switch" title={enabled ? t('models.disable') : t('models.enable')}>
+            <input
+              checked={enabled}
+              disabled={busy}
+              onChange={event => toggle(event.target.checked)}
+              type="checkbox"
+            />
+            <span aria-hidden="true" />
+          </label>
+        </div>
+      </form>
+      <div className="model-provider-meta">
+        <span>{configured ? t('models.modelCount').replace('{n}', String(available)) : t('badge.unconfigured')}</span>
+        <SettingsMessage failed={form.failed} message={form.message} />
+      </div>
+    </div>
   )
 }
 
@@ -2873,11 +3086,17 @@ function SettingsPage({
   language,
   onBridgeStatus,
   onBridgeToggle,
+  onClearKey,
   onClose,
   onDelete,
+  onEnable,
   onLanguageChange,
   onLoad,
   onReadMemory,
+  onRefreshModels,
+  onRevealFeishuSecret,
+  onRevealKey,
+  onRevealWebKey,
   onSave,
   onSaveFeishu,
   onSaveMemory,
@@ -2889,12 +3108,18 @@ function SettingsPage({
   language: Language
   onBridgeStatus: () => Promise<BridgeStatus>
   onBridgeToggle: (running: boolean) => Promise<BridgeStatus>
+  onClearKey: (target: ModelTarget) => Promise<ModelCatalog>
   onClose: () => void
   onDelete: (profileId: string) => Promise<ModelCatalog>
+  onEnable: (target: ModelTarget, enabled: boolean) => Promise<ModelCatalog>
   onLanguageChange: (language: Language) => void
   onLoad: () => Promise<AppSettings>
   onReadMemory: (file: MemoryFileScope) => Promise<MemoryFileDetail>
-  onSave: (profile: ModelDraft, apiKey: string, clearApiKey: boolean) => Promise<ModelCatalog>
+  onRefreshModels: (target: ModelTarget) => Promise<{ catalog: ModelCatalog; models: string[] }>
+  onRevealFeishuSecret: () => Promise<string>
+  onRevealKey: (target: ModelTarget) => Promise<string>
+  onRevealWebKey: (provider: string) => Promise<string>
+  onSave: (profile: ModelDraft, apiKey: string) => Promise<ModelCatalog>
   onSaveFeishu: (value: Record<string, unknown>) => Promise<{ bridge: BridgeStatus; feishu: FeishuSettings }>
   onSaveMemory: (file: MemoryFileScope, content: string) => Promise<MemoryFileInfo>
   onSaveProfile: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
@@ -2905,7 +3130,6 @@ function SettingsPage({
   const [settingsError, setSettingsError] = useState('')
   const [draft, setDraft] = useState<ModelDraft | null>(null)
   const [apiKey, setApiKey] = useState('')
-  const [clearApiKey, setClearApiKey] = useState(false)
   const [expandedProvider, setExpandedProvider] = useState('')
   const [editingFile, setEditingFile] = useState<MemoryFileScope | null>(null)
   const modelForm = useSettingsSave()
@@ -2930,21 +3154,6 @@ function SettingsPage({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, editingFile])
 
-  const openProvider = (item: ModelProvider) => {
-    modelForm.clear()
-    if (expandedProvider === item.id) {
-      setExpandedProvider('')
-      return
-    }
-    const profile = catalog.profiles.find(entry => entry.provider === item.id)
-    setExpandedProvider(item.id)
-    // Built-in providers are key-only: an empty model tells the backend to
-    // discover the provider's models instead of saving one explicit model.
-    setDraft({ ...modelDraft(profile, item), name: item.label, model: '' })
-    setApiKey('')
-    setClearApiKey(false)
-  }
-
   const openCustom = (profile: ModelProfile | null) => {
     modelForm.clear()
     const key = profile?.id || CUSTOM_NEW
@@ -2958,7 +3167,6 @@ function SettingsPage({
       ? { ...modelDraft(profile, custom), name: profile.name }
       : { ...modelDraft(undefined, custom), name: '' })
     setApiKey('')
-    setClearApiKey(false)
   }
 
   const removeCustom = (profileId: string) => {
@@ -2971,10 +3179,10 @@ function SettingsPage({
   const save = (event: FormEvent) => {
     event.preventDefault()
     if (!draft) return
-    modelForm.submit(onSave(draft, apiKey, clearApiKey), () => {
+    modelForm.submit(onSave(draft, apiKey), () => {
       setApiKey('')
-      setClearApiKey(false)
-      return t('models.savedActive')
+      setExpandedProvider('')
+      return t('models.saved')
     })
   }
 
@@ -3052,168 +3260,106 @@ function SettingsPage({
           {section === 'models' && <div className="settings-section-wrap">
             <header className="settings-head">
               <h2>{t('models.title')}</h2>
-              <p>{t('models.desc')}</p>
             </header>
-            <div className="provider-list">
-              {catalog.providers.map(item => {
+            <div className="model-provider-list">
+              {catalog.providers.filter(item => item.builtin).map(item => {
                 const providerProfiles = catalog.profiles.filter(entry => entry.provider === item.id)
-                const configured = providerProfiles.some(entry => entry.api_key_configured)
-                const inUse = providerProfiles.some(entry => entry.id === catalog.active)
-                if (item.builtin) {
-                  const expanded = expandedProvider === item.id
-                  return (
-                    <div className={`provider-item ${expanded ? 'expanded' : ''}`} key={item.id}>
-                      <button
-                        aria-expanded={expanded}
-                        className="provider-row"
-                        onClick={() => openProvider(item)}
-                        type="button"
-                      >
-                        <span className="provider-id">
-                          <ProviderIcon label={item.label} provider={item.id} />
-                          <span className="provider-copy">
-                            <strong>{item.label}</strong>
-                            <small>{hostOf(item.base_url) || item.base_url}</small>
-                          </span>
-                        </span>
-                        <span className="provider-state">
-                          {inUse && <span className="provider-in-use">{t('models.inUse')}</span>}
-                          <ConfigBadge configured={configured} />
-                        </span>
-                      </button>
-                      <div className="provider-config" inert={!expanded}>
-                        <div className="provider-config-inner">
-                          {expanded && (
-                            <form className="settings-form" onSubmit={save}>
-                              <p className="settings-note">{t('models.builtinHint')}</p>
-                              <SecretField
-                                cleared={clearApiKey}
-                                configured={configured}
-                                label={t('models.apiKey')}
-                                onChange={setApiKey}
-                                onToggleClear={() => setClearApiKey(value => !value)}
-                                placeholderEmpty={t('models.keyEmpty')}
-                                placeholderSaved={t('models.keySaved')}
-                                removeArmedLabel={t('models.removeKeyArmed')}
-                                removeLabel={t('models.removeKey')}
-                                revealable
-                                value={apiKey}
-                              />
-                              {providerProfiles.length > 0 && (
-                                <p className="settings-note">{t('models.discoveredCount').replace('{n}', String(providerProfiles.length))}</p>
-                              )}
-                              {modelForm.failed && <div className="settings-error">{modelForm.message}</div>}
-                              <SaveFooter
-                                label={t('models.saveUse')}
-                                note={modelForm.failed ? '' : modelForm.message}
-                                saving={modelForm.pending === 'save'}
-                              />
-                            </form>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                }
-                const entries = [
-                  ...providerProfiles.map(profile => ({ id: profile.id, profile })),
-                  { id: CUSTOM_NEW, profile: null as ModelProfile | null }
-                ]
                 return (
-                  <div className="custom-provider" key={item.id}>
-                    <div className="provider-row custom-head">
-                      <span className="provider-id">
-                        <ProviderIcon label={item.label} provider={item.id} />
-                        <span className="provider-copy">
-                          <strong>{item.label}</strong>
-                          <small>{t('models.customHint')}</small>
-                        </span>
-                      </span>
-                    </div>
-                    {entries.map(entry => {
-                      const profile = entry.profile
-                      const isNew = !profile
-                      const expanded = expandedProvider === entry.id
-                      const entryConfigured = Boolean(profile?.api_key_configured)
-                      const entryInUse = Boolean(profile && profile.id === catalog.active)
-                      return (
-                        <div className={`provider-item ${expanded ? 'expanded' : ''}`} key={entry.id}>
-                          <button
-                            aria-expanded={expanded}
-                            className="provider-row"
-                            onClick={() => openCustom(profile)}
-                            type="button"
-                          >
-                            <span className="provider-id">
-                              <span className="provider-copy">
-                                <strong>{isNew ? t('models.addCustom') : profile.name}</strong>
-                                <small>{isNew ? t('models.addCustomHint') : `${hostOf(profile.base_url) || profile.base_url} · ${profile.model}`}</small>
-                              </span>
-                            </span>
-                            <span className="provider-state">
-                              {entryInUse && <span className="provider-in-use">{t('models.inUse')}</span>}
-                              {!isNew && <ConfigBadge configured={entryConfigured} />}
-                            </span>
-                          </button>
-                          <div className="provider-config" inert={!expanded}>
-                            <div className="provider-config-inner">
-                              {expanded && draft && (
-                                <form className="settings-form" onSubmit={save}>
-                                  <label className="line-field">
-                                    <span>{t('models.name')}</span>
-                                    <span className="field-line">
-                                      <input required value={draft.name} onChange={event => setDraft(current => current && { ...current, name: event.target.value })} />
-                                    </span>
-                                  </label>
-                                  <label className="line-field">
-                                    <span>{t('models.baseUrl')}</span>
-                                    <span className="field-line">
-                                      <input required type="url" value={draft.base_url} onChange={event => setDraft(current => current && { ...current, base_url: event.target.value })} />
-                                    </span>
-                                  </label>
-                                  <label className="line-field">
-                                    <span>{t('models.model')}</span>
-                                    <span className="field-line">
-                                      <input required value={draft.model} onChange={event => setDraft(current => current && { ...current, model: event.target.value })} />
-                                    </span>
-                                  </label>
-                                  <SecretField
-                                    cleared={clearApiKey}
-                                    configured={entryConfigured}
-                                    label={t('models.apiKey')}
-                                    onChange={setApiKey}
-                                    onToggleClear={() => setClearApiKey(value => !value)}
-                                    placeholderEmpty={t('models.keyEmpty')}
-                                    placeholderSaved={t('models.keySaved')}
-                                    removeArmedLabel={t('models.removeKeyArmed')}
-                                    removeLabel={t('models.removeKey')}
-                                    revealable
-                                    value={apiKey}
-                                  />
-                                  {modelForm.failed && <div className="settings-error">{modelForm.message}</div>}
-                                  <div className="settings-actions">
-                                    <SaveFooter
-                                      label={t('models.saveUse')}
-                                      note={modelForm.failed ? '' : modelForm.message}
-                                      saving={modelForm.pending === 'save'}
-                                    />
-                                    {!isNew && (
-                                      <button className="line-action remove-entry" onClick={() => removeCustom(profile.id)} type="button">
-                                        {t('models.removeEntry')}
-                                      </button>
-                                    )}
-                                  </div>
-                                </form>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
+                  <ModelCredentialRow
+                    configured={item.api_key_configured}
+                    draft={{ ...modelDraft(providerProfiles[0], item), id: providerProfiles[0]?.id || item.id, model: '', name: item.label }}
+                    enabled={item.enabled}
+                    key={item.id}
+                    label={item.label}
+                    modelCount={providerProfiles.length}
+                    onClear={onClearKey}
+                    onEnable={onEnable}
+                    onRefresh={onRefreshModels}
+                    onReveal={onRevealKey}
+                    onSave={onSave}
+                    provider={item.id}
+                    subtitle={hostOf(item.base_url) || item.base_url}
+                    target={{ provider: item.id }}
+                  />
                 )
               })}
             </div>
+            <section className="custom-models">
+              <header>
+                <div>
+                  <h3>{t('models.customTitle')}</h3>
+                  <p>{t('models.customBrief')}</p>
+                </div>
+                <button aria-label={t('models.addCustom')} className="custom-add" onClick={() => openCustom(null)} title={t('models.addCustom')} type="button">
+                  <PlusIcon />
+                  <span>{t('models.add')}</span>
+                </button>
+              </header>
+              {catalog.profiles.filter(profile => profile.provider === 'openai-compatible').map(profile => (
+                <div key={profile.id}>
+                  <ModelCredentialRow
+                    configured={profile.api_key_configured}
+                    draft={modelDraft(profile, catalog.providers.find(item => item.id === 'openai-compatible'))}
+                    enabled={profile.enabled}
+                    label={profile.name}
+                    modelCount={1}
+                    onClear={onClearKey}
+                    onEdit={() => openCustom(profile)}
+                    onEnable={onEnable}
+                    onRefresh={onRefreshModels}
+                    onReveal={onRevealKey}
+                    onSave={onSave}
+                    provider="openai-compatible"
+                    subtitle={`${hostOf(profile.base_url) || profile.base_url} · ${profile.model}`}
+                    target={{ profile: profile.id }}
+                  />
+                </div>
+              ))}
+              {expandedProvider && draft && (
+                <form className="custom-model-editor settings-form" onSubmit={save}>
+                  <label className="line-field">
+                    <span>{t('models.name')}</span>
+                    <span className="field-line">
+                      <input required value={draft.name} onChange={event => setDraft(current => current && { ...current, name: event.target.value })} />
+                    </span>
+                  </label>
+                  <label className="line-field">
+                    <span>{t('models.baseUrl')}</span>
+                    <span className="field-line">
+                      <input required type="url" value={draft.base_url} onChange={event => setDraft(current => current && { ...current, base_url: event.target.value })} />
+                    </span>
+                  </label>
+                  <label className="line-field">
+                    <span>{t('models.model')}</span>
+                    <span className="field-line">
+                      <input required value={draft.model} onChange={event => setDraft(current => current && { ...current, model: event.target.value })} />
+                    </span>
+                  </label>
+                  <label className="line-field">
+                    <span>{t('models.apiKey')}</span>
+                    <span className="field-line">
+                      <input
+                        autoComplete="off"
+                        onChange={event => setApiKey(event.target.value)}
+                        placeholder={expandedProvider === CUSTOM_NEW ? t('models.keyEmptyShort') : t('models.keyOptional')}
+                        required={expandedProvider === CUSTOM_NEW}
+                        type="password"
+                        value={apiKey}
+                      />
+                    </span>
+                  </label>
+                  <SettingsMessage failed={modelForm.failed} message={modelForm.message} />
+                  <div className="settings-actions">
+                    <SaveFooter label={t('settings.save')} saving={modelForm.pending === 'save'} />
+                    {expandedProvider !== CUSTOM_NEW && (
+                      <button className="line-action remove-entry" onClick={() => removeCustom(expandedProvider)} type="button">
+                        {t('models.removeEntry')}
+                      </button>
+                    )}
+                  </div>
+                </form>
+              )}
+            </section>
           </div>}
           {section === 'web' && (
             <div className="settings-section-wrap">
@@ -3222,7 +3368,7 @@ function SettingsPage({
                 <p>{t('web.desc')}</p>
               </header>
               {settings
-                ? <WebSearchSettings initial={settings.web_search} onSave={persistWeb} />
+                ? <WebSearchSettings initial={settings.web_search} onReveal={onRevealWebKey} onSave={persistWeb} />
                 : <SettingsLoading error={settingsError} />}
             </div>
           )}
@@ -3237,6 +3383,7 @@ function SettingsPage({
                     initial={settings.feishu}
                     initialStatus={settings.bridge}
                     onRefresh={onBridgeStatus}
+                    onRevealSecret={onRevealFeishuSecret}
                     onSave={persistFeishu}
                     onToggle={onBridgeToggle}
                   />
@@ -3421,78 +3568,120 @@ const WEB_PROVIDERS: ReadonlyArray<{
 
 function WebSearchSettings({
   initial,
+  onReveal,
   onSave
 }: {
   initial: WebSearchSettings
+  onReveal: (provider: string) => Promise<string>
   onSave: (value: Record<string, unknown>) => Promise<WebSearchSettings>
 }) {
   const [configured, setConfigured] = useState(initial)
-  const [expanded, setExpanded] = useState('')
-  const [key, setKey] = useState('')
-  const [clear, setClear] = useState(false)
+
+  return (
+    <div className="model-provider-list">
+      {WEB_PROVIDERS.map(provider => (
+        <WebCredentialRow
+          configured={configured[`${provider.id}_configured`]}
+          key={provider.id}
+          onReveal={onReveal}
+          onSave={value => onSave(value).then(result => {
+            setConfigured(result)
+            return result
+          })}
+          provider={provider}
+        />
+      ))}
+    </div>
+  )
+}
+
+function WebCredentialRow({
+  configured,
+  onReveal,
+  onSave,
+  provider
+}: {
+  configured: boolean
+  onReveal: (provider: string) => Promise<string>
+  onSave: (value: Record<string, unknown>) => Promise<WebSearchSettings>
+  provider: (typeof WEB_PROVIDERS)[number]
+}) {
+  const [apiKey, setApiKey] = useState('')
+  const [revealed, setRevealed] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
   const form = useSettingsSave()
+  const busy = Boolean(form.pending)
 
-  const open = (id: string) => {
-    setExpanded(current => (current === id ? '' : id))
-    setKey('')
-    setClear(false)
-    form.clear()
-  }
-
-  const save = (event: FormEvent, provider: (typeof WEB_PROVIDERS)[number]) => {
+  const save = (event: FormEvent) => {
     event.preventDefault()
-    form.submit(onSave({ [provider.keyField]: key || undefined, [provider.flag]: clear }), value => {
-      setConfigured(value)
-      setKey('')
-      setClear(false)
+    if (!apiKey.trim()) {
+      input.current?.focus()
+      return
+    }
+    form.submit(onSave({ [provider.keyField]: apiKey.trim() }), () => {
+      setApiKey('')
+      setRevealed(false)
       return t('web.saved')
     })
   }
 
+  const reveal = () => {
+    if (revealed) {
+      setRevealed(false)
+      return
+    }
+    if (apiKey) {
+      setRevealed(true)
+      return
+    }
+    if (!configured) return
+    form.submit(onReveal(provider.id), value => {
+      setApiKey(value)
+      setRevealed(true)
+      return ''
+    }, 'reveal')
+  }
+
+  const clear = () => form.submit(onSave({ [provider.flag]: true }), () => {
+    setApiKey('')
+    setRevealed(false)
+    return t('models.keyRemoved')
+  }, 'clear')
+
   return (
-    <div className="provider-list">
-      {WEB_PROVIDERS.map(provider => {
-        const isConfigured = configured[`${provider.id}_configured`]
-        const isExpanded = expanded === provider.id
-        return (
-          <div className={`provider-item ${isExpanded ? 'expanded' : ''}`} key={provider.id}>
-            <button aria-expanded={isExpanded} className="provider-row" onClick={() => open(provider.id)} type="button">
-              <span className="provider-id">
-                <ProviderIcon label={provider.label} provider={provider.id} />
-                <span className="provider-copy">
-                  <strong>{provider.label}</strong>
-                  <small>{provider.host}</small>
-                </span>
-              </span>
-              <span className="provider-state">
-                <ConfigBadge configured={isConfigured} />
-              </span>
-            </button>
-            <div className="provider-config" inert={!isExpanded}>
-              <div className="provider-config-inner">
-                {isExpanded && (
-                  <form className="settings-form" onSubmit={event => save(event, provider)}>
-                    <SecretField
-                      cleared={clear}
-                      configured={isConfigured}
-                      label={t('models.apiKey')}
-                      onChange={setKey}
-                      onToggleClear={() => setClear(value => !value)}
-                      placeholderEmpty={t('web.keyEmpty')}
-                      placeholderSaved={t('web.keySaved')}
-                      removeArmedLabel={t('web.removeKeyArmed', { name: provider.label })}
-                      removeLabel={t('web.removeKey', { name: provider.label })}
-                      value={key}
-                    />
-                    <SettingsMessage failed={form.failed} message={form.message} />
-                    <SaveFooter saving={form.pending === 'save'} />
-                  </form>
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })}
+    <div className="model-provider web-provider">
+      <div className="model-provider-identity">
+        <ProviderIcon label={provider.label} provider={provider.id} />
+        <span className="model-provider-name">
+          <strong>{provider.label}</strong>
+          <small>{provider.host}</small>
+        </span>
+      </div>
+      <form className="credential-input" onSubmit={save}>
+        <input
+          aria-label={`${provider.label} ${t('models.apiKey')}`}
+          autoComplete="off"
+          disabled={busy}
+          onChange={event => setApiKey(event.target.value)}
+          placeholder={configured ? '••••••••••••' : t('models.keyEmptyShort')}
+          ref={input}
+          spellCheck={false}
+          type={revealed ? 'text' : 'password'}
+          value={apiKey}
+        />
+        <div className="credential-actions">
+          <button aria-label={revealed ? t('secret.hide') : t('secret.show')} className="credential-icon" disabled={busy || (!configured && !apiKey)} onClick={reveal} title={revealed ? t('secret.hide') : t('secret.show')} type="button">
+            <EyeIcon open={!revealed} />
+          </button>
+          <button aria-label={t('models.removeKey')} className="credential-icon danger" disabled={busy || !configured} onClick={clear} title={t('models.removeKey')} type="button">
+            <TrashIcon />
+          </button>
+        </div>
+      </form>
+      <div className="model-provider-meta">
+        <span>{configured ? t('badge.configured') : t('badge.unconfigured')}</span>
+        <SettingsMessage failed={form.failed} message={form.message} />
+      </div>
     </div>
   )
 }

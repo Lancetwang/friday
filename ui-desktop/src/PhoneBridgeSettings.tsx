@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { t } from './i18n'
-import { SaveFooter, SecretField, SettingsMessage, useSettingsSave } from './SettingsForm'
+import { EyeIcon, TrashIcon } from './Icons'
+import { SaveFooter, SettingsMessage, useSettingsSave } from './SettingsForm'
 
 export type FeishuSettings = {
   allow_group: boolean
@@ -28,12 +29,14 @@ export function PhoneBridgeSettings({
   initial,
   initialStatus,
   onRefresh,
+  onRevealSecret,
   onSave,
   onToggle
 }: {
   initial: FeishuSettings
   initialStatus: BridgeStatus
   onRefresh: () => Promise<BridgeStatus>
+  onRevealSecret: () => Promise<string>
   onSave: (value: Record<string, unknown>) => Promise<FeishuSettings>
   onToggle: (running: boolean) => Promise<BridgeStatus>
 }) {
@@ -41,11 +44,13 @@ export function PhoneBridgeSettings({
   const [status, setStatus] = useState(initialStatus)
   const [appId, setAppId] = useState(initial.app_id)
   const [appSecret, setAppSecret] = useState('')
-  const [clearSecret, setClearSecret] = useState(false)
+  const [secretVisible, setSecretVisible] = useState(false)
   const [users, setUsers] = useState(initial.allowed_users.join('\n'))
   const [allowGroup, setAllowGroup] = useState(initial.allow_group)
+  const secretInput = useRef<HTMLInputElement>(null)
   const form = useSettingsSave()
-  const { report } = form
+  const secretForm = useSettingsSave()
+  const { report } = secretForm
 
   // The caller rebuilds these on every render of the page above, so the poll reads
   // the latest through a ref rather than restarting its timer for a new identity.
@@ -80,17 +85,13 @@ export function PhoneBridgeSettings({
     const write = onSave({
       allow_group: allowGroup,
       allowed_users: users,
-      app_id: appId,
-      app_secret: appSecret || undefined,
-      clear_app_secret: clearSecret
+      app_id: appId
     })
     form.submit(write, value => {
       setSaved(value)
       setAppId(value.app_id)
       setUsers(value.allowed_users.join('\n'))
       setAllowGroup(value.allow_group)
-      setAppSecret('')
-      setClearSecret(false)
       return t('phone.saved')
     })
   }
@@ -98,9 +99,8 @@ export function PhoneBridgeSettings({
   // A bridge that refuses to start explains itself in its own output, so the switch
   // reports the child's last line rather than a success of its own. Being switched
   // off is not a failure, whatever the SDK logged on its way out.
-  const toggle = () => {
-    const starting = !status.running
-    form.submit(
+  const toggle = (starting: boolean) => {
+    secretForm.submit(
       onToggle(starting),
       value => {
         setStatus(value)
@@ -111,24 +111,47 @@ export function PhoneBridgeSettings({
     )
   }
 
+  const saveSecret = () => {
+    const value = appSecret.trim()
+    if (!value) {
+      secretInput.current?.focus()
+      return
+    }
+    secretForm.submit(onSave({ app_id: appId, app_secret: value }), result => {
+      setSaved(result)
+      setAppId(result.app_id)
+      setAppSecret('')
+      setSecretVisible(false)
+      return t('phone.secretSaved')
+    })
+  }
+
+  const revealSecret = () => {
+    if (secretVisible) {
+      setSecretVisible(false)
+      return
+    }
+    if (appSecret) {
+      setSecretVisible(true)
+      return
+    }
+    if (!saved.app_secret_configured) return
+    secretForm.submit(onRevealSecret(), value => {
+      setAppSecret(value)
+      setSecretVisible(true)
+      return ''
+    }, 'reveal')
+  }
+
+  const removeSecret = () => secretForm.submit(onSave({ clear_app_secret: true }), result => {
+    setSaved(result)
+    setAppSecret('')
+    setSecretVisible(false)
+    return t('phone.secretRemoved')
+  }, 'clear')
+
   return (
     <div className="settings-form-stack">
-      <div className={`phone-switch ${status.running ? 'on' : ''}`}>
-        <div className="phone-switch-copy">
-          <strong>{status.running ? t('phone.on') : t('phone.off')}</strong>
-          <small>{status.running ? t('phone.onHint') : ready ? t('phone.offHint') : t('phone.needsSetup')}</small>
-        </div>
-        <button
-          aria-pressed={status.running}
-          className="phone-action"
-          disabled={form.pending !== '' || (!ready && !status.running)}
-          onClick={toggle}
-          type="button"
-        >
-          {form.pending === 'bridge' ? t('settings.saving') : status.running ? t('phone.stop') : t('phone.start')}
-        </button>
-      </div>
-
       {saved.allowed_users.length === 0 && (
         <div className="settings-message">{t('phone.pairing')}</div>
       )}
@@ -145,18 +168,45 @@ export function PhoneBridgeSettings({
             />
           </span>
         </label>
-        <SecretField
-          cleared={clearSecret}
-          configured={saved.app_secret_configured}
-          label={t('phone.appSecret')}
-          onChange={setAppSecret}
-          onToggleClear={() => setClearSecret(value => !value)}
-          placeholderEmpty={t('web.keyEmpty')}
-          placeholderSaved={t('web.keySaved')}
-          removeArmedLabel={t('phone.removeSecretArmed')}
-          removeLabel={t('phone.removeSecret')}
-          value={appSecret}
-        />
+        <div className="line-field phone-secret-field">
+          <span>{t('phone.appSecret')}</span>
+          <span className="credential-input">
+            <input
+              aria-label={t('phone.appSecret')}
+              autoComplete="off"
+              disabled={Boolean(secretForm.pending)}
+              onChange={event => setAppSecret(event.target.value)}
+              onKeyDown={event => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                saveSecret()
+              }}
+              placeholder={saved.app_secret_configured ? '••••••••••••' : t('phone.secretPlaceholder')}
+              ref={secretInput}
+              spellCheck={false}
+              type={secretVisible ? 'text' : 'password'}
+              value={appSecret}
+            />
+            <span className="credential-actions">
+              <button aria-label={secretVisible ? t('secret.hide') : t('secret.show')} className="credential-icon" disabled={Boolean(secretForm.pending) || (!saved.app_secret_configured && !appSecret)} onClick={revealSecret} title={secretVisible ? t('secret.hide') : t('secret.show')} type="button">
+                <EyeIcon open={!secretVisible} />
+              </button>
+              <button aria-label={t('phone.removeSecret')} className="credential-icon danger" disabled={Boolean(secretForm.pending) || !saved.app_secret_configured} onClick={removeSecret} title={t('phone.removeSecret')} type="button">
+                <TrashIcon />
+              </button>
+              <label className="settings-switch" title={status.running ? t('phone.stop') : t('phone.start')}>
+                <input
+                  checked={status.running}
+                  disabled={Boolean(secretForm.pending) || form.pending !== '' || (!ready && !status.running)}
+                  onChange={event => toggle(event.target.checked)}
+                  type="checkbox"
+                />
+                <span aria-hidden="true" />
+              </label>
+            </span>
+          </span>
+        </div>
+        <div className="phone-secret-message"><SettingsMessage failed={secretForm.failed} message={secretForm.message} /></div>
         <label className="line-field area">
           <span>{t('phone.allowedUsers')}</span>
           <span className="field-line">
@@ -169,17 +219,16 @@ export function PhoneBridgeSettings({
           </span>
         </label>
         <small className="settings-hint">{t('phone.allowedUsersHint')}</small>
-        <button
-          aria-pressed={allowGroup}
-          className={`phone-flag ${allowGroup ? 'on' : ''}`}
-          onClick={() => setAllowGroup(value => !value)}
-          type="button"
-        >
-          <svg aria-hidden="true" fill="none" viewBox="0 0 10 10">
-            {allowGroup ? <path d="M1.6 5.4 4 7.8 8.4 2.6" /> : <circle cx="5" cy="5" r="3.4" />}
-          </svg>
-          {allowGroup ? t('phone.groupOn') : t('phone.groupOff')}
-        </button>
+        <div className="phone-switch phone-group-setting">
+          <div className="phone-switch-copy">
+            <strong>{t('phone.groupChats')}</strong>
+            <small>{allowGroup ? t('phone.groupOn') : t('phone.groupOff')}</small>
+          </div>
+          <label className="settings-switch" title={t('phone.groupChats')}>
+            <input checked={allowGroup} onChange={event => setAllowGroup(event.target.checked)} type="checkbox" />
+            <span aria-hidden="true" />
+          </label>
+        </div>
         <SettingsMessage failed={form.failed} message={form.message} />
         <SaveFooter saving={form.pending === 'save'} />
       </form>

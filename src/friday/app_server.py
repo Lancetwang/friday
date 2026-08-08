@@ -15,15 +15,21 @@ from friday.app import ensure_user_home, resume_choices
 from friday.checkpoint import ARTIFACT_TYPES, checkpoint_choices
 from friday.child import cli_command
 from friday.config import (
+    clear_model_credential,
     delete_model_profile,
     load_feishu_settings,
     load_model_catalog,
     load_model_config,
     load_web_search_settings,
+    read_feishu_credential,
+    read_model_credential,
+    read_web_search_credential,
+    refresh_model_profiles,
     save_feishu_settings,
     save_model_profile,
     save_web_search_settings,
     select_model_profile,
+    set_model_enabled,
 )
 from friday.context import context_report
 from friday.im.bridge import phone_sessions
@@ -36,7 +42,7 @@ from friday.memory import (
     save_memory_file,
     save_user_profile_settings,
 )
-from friday.model_options import supports_thinking
+from friday.model_options import normalize_thinking_effort, thinking_options
 from friday.session import FridaySession
 from friday.skills import discover_skills, skill_body
 from friday.state import (
@@ -336,7 +342,50 @@ class Gateway:
                     clear_api_key=bool(params.get("clear_api_key")),
                     activate=bool(params.get("activate", True)),
                 )
-                if bool(params.get("activate", True)):
+                enabled = {profile["id"] for profile in catalog["profiles"] if profile.get("enabled")}
+                if bool(params.get("activate", True)) or self.session.model_profile not in enabled:
+                    self.session.select_model(catalog["active"])
+                self.ok(rid, {"catalog": catalog, "info": self.session_info()})
+            elif method == "model.key.get":
+                self.ok(
+                    rid,
+                    {
+                        "api_key": read_model_credential(
+                            Path.cwd().resolve(),
+                            provider_id=str(params.get("provider") or ""),
+                            profile_id=str(params.get("profile") or ""),
+                        )
+                    },
+                )
+            elif method == "model.key.clear":
+                catalog = clear_model_credential(
+                    Path.cwd().resolve(),
+                    provider_id=str(params.get("provider") or ""),
+                    profile_id=str(params.get("profile") or ""),
+                )
+                enabled = {profile["id"] for profile in catalog["profiles"] if profile.get("enabled")}
+                if self.session.model_profile not in enabled:
+                    self.session.select_model(catalog["active"])
+                self.ok(rid, {"catalog": catalog, "info": self.session_info()})
+            elif method == "model.refresh":
+                catalog, models = refresh_model_profiles(
+                    Path.cwd().resolve(),
+                    provider_id=str(params.get("provider") or ""),
+                    profile_id=str(params.get("profile") or ""),
+                )
+                enabled = {profile["id"] for profile in catalog["profiles"] if profile.get("enabled")}
+                if self.session.model_profile not in enabled:
+                    self.session.select_model(catalog["active"])
+                self.ok(rid, {"catalog": catalog, "info": self.session_info(), "models": models})
+            elif method == "model.enabled.set":
+                catalog = set_model_enabled(
+                    Path.cwd().resolve(),
+                    bool(params.get("enabled")),
+                    provider_id=str(params.get("provider") or ""),
+                    profile_id=str(params.get("profile") or ""),
+                )
+                enabled = {profile["id"] for profile in catalog["profiles"] if profile.get("enabled")}
+                if self.session.model_profile not in enabled:
                     self.session.select_model(catalog["active"])
                 self.ok(rid, {"catalog": catalog, "info": self.session_info()})
             elif method == "model.select":
@@ -346,7 +395,9 @@ class Gateway:
                 self.ok(rid, {"catalog": catalog, "info": self.session_info()})
             elif method == "model.delete":
                 catalog = delete_model_profile(Path.cwd().resolve(), str(params.get("id") or ""))
-                if self.session.model_profile not in {profile["id"] for profile in catalog["profiles"]}:
+                if self.session.model_profile not in {
+                    profile["id"] for profile in catalog["profiles"] if profile.get("enabled")
+                }:
                     self.session.select_model(catalog["active"])
                 self.ok(rid, {"catalog": catalog, "info": self.session_info()})
             elif method == "settings.get":
@@ -367,6 +418,13 @@ class Gateway:
                         "bridge": self.bridge.status(),
                     },
                 )
+            elif method == "settings.web.key.get":
+                self.ok(
+                    rid,
+                    {"api_key": read_web_search_credential(str(params.get("provider") or ""))},
+                )
+            elif method == "settings.feishu.key.get":
+                self.ok(rid, {"app_secret": read_feishu_credential()})
             elif method == "settings.memory.read":
                 self.ok(rid, read_memory_file(str(params.get("file") or "")))
             elif method == "settings.memory.save":
@@ -689,6 +747,10 @@ class Gateway:
             {},
         )
         session_id = self.session.session_id
+        options = thinking_options(config.provider, config.model)
+        effort = normalize_thinking_effort(
+            config.provider, config.model, self.session.thinking_effort
+        )
         return {
             "cwd": str(Path.cwd().resolve()),
             "model": f"{config.provider}/{config.model}",
@@ -696,8 +758,9 @@ class Gateway:
             "model_name": config.profile_name,
             "model_profile": config.profile_id,
             "model_vision": config.vision,
-            "thinking_effort": self.session.thinking_effort or "high",
-            "thinking_supported": supports_thinking(config.provider),
+            "thinking_effort": effort,
+            "thinking_options": list(options),
+            "thinking_supported": len(options) > 1,
             "permission_mode": self.session.effective_permission_mode(),
             "progress": self.session.progress(),
             "approval": pending_approval(session_id=session_id),

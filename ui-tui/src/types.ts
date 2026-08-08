@@ -41,7 +41,8 @@ export interface SessionInfo {
   model_profile?: string
   model_vision?: boolean
   permission_mode: 'auto' | 'bypass' | 'manual'
-  thinking_effort: 'high' | 'low' | 'max' | 'off'
+  thinking_effort: string
+  thinking_options?: string[]
   thinking_supported?: boolean
   progress?: ProgressState
   session_id?: string

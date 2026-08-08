@@ -37,7 +37,6 @@ const APPROVAL_OPTIONS = [
 ] as const
 
 type ApprovalDecision = typeof APPROVAL_OPTIONS[number]['id']
-const THINKING_EFFORTS = ['off', 'low', 'high', 'max'] as const
 
 const HELP_TEXT = `# Friday commands
 
@@ -47,7 +46,7 @@ const HELP_TEXT = `# Friday commands
 | \`/new\` | Start a new conversation in the current workspace. |
 | \`/memory [help]\` | Inspect or manage persistent memory. |
 | \`/model [id]\` | List configured models or switch the active model. |
-| \`/thinking [off|low|high|max]\` | Show or set model thinking effort. Tab cycles it. |
+| \`/thinking [level]\` | Show or set the selected model's supported thinking level. Tab cycles it. |
 | \`/context\` | Print current context usage. |
 | \`/progress\` | Show the current objective and plan. |
 | \`/trace\` | Open the local Trace Workbench. |
@@ -106,7 +105,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'reasoning.delta') {
         // Thinking effort "off" is a promise to hide reasoning: some providers
         // still stream it, so honor the choice here instead of rendering it.
-        if (infoRef.current?.thinking_effort === 'off') return
+        if (['off', 'none'].includes(infoRef.current?.thinking_effort || '')) return
         const id = event.payload.id || ''
         if (id && event.payload.text) {
           setMessages(items => upsertThinking(items, activeTurn.current, id, event.payload.text))
@@ -215,8 +214,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       return
     }
     if (key.tab && !busy && info?.thinking_supported) {
-      const current = THINKING_EFFORTS.indexOf(info.thinking_effort)
-      const effort = THINKING_EFFORTS[(current + 1) % THINKING_EFFORTS.length]!
+      const efforts = info.thinking_options || []
+      const current = efforts.indexOf(info.thinking_effort)
+      const effort = efforts[(current + 1) % efforts.length]
+      if (!effort) return
       void gateway.request<{ info: SessionInfo }>('thinking.set', { effort })
         .then(result => setInfo(result.info))
         .catch(error => setActivity(error.message))
@@ -238,8 +239,8 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   })
 
   const commandContext = useMemo(
-    () => ({ app, gateway, setApprovalPicker, setInfo, setMessages, setProgress, setResumePicker }),
-    [app, gateway]
+    () => ({ app, gateway, info, setApprovalPicker, setInfo, setMessages, setProgress, setResumePicker }),
+    [app, gateway, info]
   )
 
   const submit = (value: string) => {
@@ -354,6 +355,7 @@ function runCommand(
   {
     app,
     gateway,
+    info,
     setApprovalPicker,
     setInfo,
     setMessages,
@@ -362,6 +364,7 @@ function runCommand(
   }: {
     app: ReturnType<typeof useApp>
     gateway: GatewayClient
+    info: SessionInfo | null
     setApprovalPicker: React.Dispatch<React.SetStateAction<ApprovalPicker | null>>
     setInfo: React.Dispatch<React.SetStateAction<SessionInfo | null>>
     setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>
@@ -390,13 +393,15 @@ function runCommand(
   } else if (text.trim().toLowerCase() === '/model') {
     void gateway.request<{
       active: string
-      profiles: Array<{ api_key_configured: boolean; id: string; model: string; name: string; provider: string; vision: boolean }>
+      profiles: Array<{ api_key_configured: boolean; enabled: boolean; id: string; model: string; name: string; provider: string; vision: boolean }>
     }>('model.list').then(result => {
       const lines = result.profiles.map(profile => {
         const active = profile.id === result.active ? '*' : ' '
         const vision = profile.vision ? ' [vision]' : ''
-        const key = profile.api_key_configured ? 'key configured' : 'key missing'
-        return `${active} ${profile.id}: ${profile.name} (${profile.provider}/${profile.model})${vision} - ${key}`
+        const state = !profile.enabled && profile.api_key_configured
+          ? 'disabled'
+          : profile.api_key_configured ? 'key configured' : 'key missing'
+        return `${active} ${profile.id}: ${profile.name} (${profile.provider}/${profile.model})${vision} - ${state}`
       })
       setMessages(items => [...items, { role: 'system', text: lines.join('\n') }])
     })
@@ -408,13 +413,17 @@ function runCommand(
     })
   } else if (command === '/thinking') {
     const effort = text.slice('/thinking'.length).trim().toLowerCase()
-    if (!THINKING_EFFORTS.includes(effort as typeof THINKING_EFFORTS[number])) {
-      setMessages(items => [...items, { role: 'system', text: 'Usage: /thinking off|low|high|max' }])
+    if (!effort) {
+      const options = info?.thinking_options || []
+      const detail = options.length ? `Available: ${options.join(', ')}` : 'This model has no configurable thinking level.'
+      setMessages(items => [...items, { role: 'system', text: `Thinking: ${info?.thinking_effort || 'provider default'}\n${detail}` }])
     } else {
-      void gateway.request<{ info: SessionInfo }>('thinking.set', { effort }).then(result => {
-        setInfo(result.info)
-        setMessages(items => [...items, { role: 'system', text: `Thinking effort: ${result.info.thinking_effort}` }])
-      })
+      void gateway.request<{ info: SessionInfo }>('thinking.set', { effort })
+        .then(result => {
+          setInfo(result.info)
+          setMessages(items => [...items, { role: 'system', text: `Thinking effort: ${result.info.thinking_effort}` }])
+        })
+        .catch(error => setMessages(items => [...items, { role: 'system', text: error.message }]))
     }
   } else if (command.startsWith('/context')) {
     void gateway.request<{ text: string }>('context.get').then(result =>

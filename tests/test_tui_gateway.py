@@ -186,6 +186,16 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertEqual(ok.call_args.args[1]["feishu"], view)
         self.assertFalse(ok.call_args.args[1]["bridge"]["running"])
 
+    def test_gateway_reveals_feishu_secret_only_on_explicit_request(self) -> None:
+        gateway = Gateway()
+
+        with patch("friday.app_server.read_feishu_credential", return_value="s3cret") as read:
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle({"id": "1", "method": "settings.feishu.key.get"})
+
+        read.assert_called_once_with()
+        self.assertEqual(ok.call_args.args[1], {"app_secret": "s3cret"})
+
     def test_gateway_switches_the_bridge_on_and_off(self) -> None:
         gateway = Gateway()
         running = {"running": True, "pid": 7, "workspace": str(Path.cwd()), "exit_code": None, "log": []}
@@ -660,6 +670,20 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertNotIn("private-key", str(result))
         self.assertTrue(result["info"]["model_configured"])
         self.assertTrue(result["info"]["model_vision"])
+
+    def test_gateway_reveals_a_model_key_only_on_the_explicit_settings_action(self) -> None:
+        gateway = Gateway()
+        with patch("friday.app_server.read_model_credential", return_value="private-key"):
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle(
+                    {
+                        "id": "1",
+                        "method": "model.key.get",
+                        "params": {"provider": "deepseek"},
+                    }
+                )
+
+        ok.assert_called_once_with("1", {"api_key": "private-key"})
 
     def test_gateway_renames_and_deletes_saved_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

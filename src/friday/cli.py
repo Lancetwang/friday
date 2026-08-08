@@ -393,7 +393,7 @@ def _slash(text: str, session: FridaySession) -> None:
     raw_command = text[1:].strip()
     command = raw_command.lower()
     if command in {"help", "?"}:
-        print("/help, /new, /model [id], /thinking [off|low|high|max], /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|auto|bypass], /approve [session], /reject [guidance], /reset, /exit")
+        print("/help, /new, /model [id], /thinking [level], /memory [help], /context, /progress, /trace, /compact, /goal <text>, /resume, /session list|rename|delete, /undo [checkpoint], /permission [manual|auto|bypass], /approve [session], /reject [guidance], /reset, /exit")
     elif command == "new":
         session.new()
         print("started a new conversation")
@@ -580,8 +580,10 @@ def _format_models(catalog: dict) -> str:
     for profile in catalog["profiles"]:
         active = "*" if profile["id"] == catalog["active"] else " "
         vision = " [vision]" if profile["vision"] else ""
-        key = "key configured" if profile["api_key_configured"] else "key missing"
-        lines.append(f"{active} {profile['id']}: {profile['name']} ({profile['provider']}/{profile['model']}){vision} - {key}")
+        state = "disabled" if not profile.get("enabled") and profile["api_key_configured"] else (
+            "key configured" if profile["api_key_configured"] else "key missing"
+        )
+        lines.append(f"{active} {profile['id']}: {profile['name']} ({profile['provider']}/{profile['model']}){vision} - {state}")
     return "\n".join(lines)
 
 

@@ -6,10 +6,11 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from agent_core import ChatModel, LLM
 
+from friday.model_options import model_api_mode
 from friday.storage import friday_home, project_state_dir, write_json_atomic
 
 
@@ -92,6 +93,33 @@ PROVIDERS = (
             {"id": "claude-opus-4-20250514", "vision": True},
         ),
     },
+    {
+        "id": "opencode-go",
+        "label": "OpenCode Go",
+        "builtin": True,
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "models": (
+            {"id": "grok-4.5", "vision": True},
+            {"id": "gpt-5.6-luna", "vision": True},
+            {"id": "glm-5.2", "vision": False},
+            {"id": "glm-5.1", "vision": False},
+            {"id": "kimi-k3", "vision": True},
+            {"id": "kimi-k2.7-code", "vision": True},
+            {"id": "kimi-k2.6", "vision": True},
+            {"id": "deepseek-v4-pro", "vision": False},
+            {"id": "deepseek-v4-flash", "vision": False},
+            {"id": "mimo-v2.5", "vision": True},
+            {"id": "mimo-v2.5-pro", "vision": False},
+            {"id": "minimax-m3", "vision": True},
+            {"id": "minimax-m2.7", "vision": False},
+            {"id": "minimax-m2.5", "vision": False},
+            {"id": "qwen3.8-max", "vision": True},
+            {"id": "qwen3.7-max", "vision": False},
+            {"id": "qwen3.7-plus", "vision": True},
+            {"id": "qwen3.6-plus", "vision": True},
+            {"id": "hy3", "vision": False},
+        ),
+    },
     # Everything else: any service that speaks the OpenAI chat API. The user
     # supplies the base URL, the model id, and the API key.
     {
@@ -112,9 +140,11 @@ def load_model_config(
 ) -> ModelConfig:
     base = _load_base_config(workspace, home=home)
     catalog = load_model_catalog(workspace, home=home)
+    available = [profile for profile in catalog["profiles"] if profile.get("enabled")]
+    candidates = available or catalog["profiles"]
     selected = next(
-        (profile for profile in catalog["profiles"] if profile["id"] == (profile_id or catalog["active"])),
-        catalog["profiles"][0],
+        (profile for profile in candidates if profile["id"] == (profile_id or catalog["active"])),
+        candidates[0],
     )
     return ModelConfig(
         profile_id=selected["id"],
@@ -254,6 +284,43 @@ def _sync_builtin_profiles(
     return profiles, credentials
 
 
+def _stored_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in profile.items()
+        if key not in {"api_key_configured", "enabled"}
+    }
+
+
+def _disabled_targets(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {str(item) for item in value if isinstance(item, str) and item.strip()}
+
+
+def _profile_target(profile: Mapping[str, Any]) -> str:
+    if profile.get("provider") == "openai-compatible":
+        return f"profile:{profile['id']}"
+    return f"provider:{profile['provider']}"
+
+
+def _write_model_state(
+    user_dir: Path,
+    *,
+    active: str,
+    profiles: list[dict[str, Any]],
+    disabled: set[str],
+) -> None:
+    write_json_atomic(
+        user_dir / PROFILES_FILE,
+        {
+            "active": active,
+            "disabled": sorted(disabled),
+            "profiles": [_stored_profile(profile) for profile in profiles],
+        },
+    )
+
+
 def load_model_catalog(workspace: Path, *, home: Path | None = None) -> dict[str, Any]:
     base = _load_base_config(workspace, home=home)
     user_dir = friday_home(home)
@@ -270,24 +337,56 @@ def load_model_catalog(workspace: Path, *, home: Path | None = None) -> dict[str
             continue
     if not profiles:
         profiles = [_default_profile(base)]
-    active = str(data.get("active") or "")
-    if not any(profile["id"] == active for profile in profiles):
-        active = profiles[0]["id"]
+    disabled = _disabled_targets(data.get("disabled"))
     credentials = _read_credentials(home)
-    return {
-        "active": active,
-        "profiles": [
+    decorated: list[dict[str, Any]] = []
+    for profile in profiles:
+        configured = bool(
+            credentials.get(profile["id"])
+            or _provider_env(profile["provider"])
+            or _env_file_has_key(workspace, profile["provider"], home)
+        )
+        decorated.append(
             {
                 **profile,
-                "api_key_configured": bool(
-                    credentials.get(profile["id"])
-                    or _provider_env(profile["provider"])
-                    or _env_file_has_key(workspace, profile["provider"], home)
+                "api_key_configured": configured,
+                "enabled": configured and _profile_target(profile) not in disabled,
+            }
+        )
+    active = str(data.get("active") or "")
+    enabled_profiles = [profile for profile in decorated if profile["enabled"]]
+    if enabled_profiles and not any(profile["id"] == active and profile["enabled"] for profile in decorated):
+        active = enabled_profiles[0]["id"]
+    elif not any(profile["id"] == active for profile in decorated):
+        active = decorated[0]["id"]
+
+    providers = []
+    for provider in PROVIDERS:
+        provider_id = str(provider["id"])
+        provider_profiles = [profile for profile in decorated if profile["provider"] == provider_id]
+        configured = any(profile["api_key_configured"] for profile in provider_profiles)
+        if provider.get("builtin") and not configured:
+            configured = bool(
+                _provider_env(provider_id)
+                or _env_file_has_key(workspace, provider_id, home)
+            )
+        providers.append(
+            {
+                **provider,
+                "api_key_configured": configured,
+                "enabled": configured
+                and (
+                    f"provider:{provider_id}" not in disabled
+                    if provider.get("builtin")
+                    else any(profile["enabled"] for profile in provider_profiles)
                 ),
             }
-            for profile in profiles
-        ],
-        "providers": [dict(provider) for provider in PROVIDERS],
+        )
+    return {
+        "active": active,
+        "disabled": sorted(disabled),
+        "profiles": decorated,
+        "providers": providers,
     }
 
 def save_model_profile(
@@ -306,6 +405,7 @@ def save_model_profile(
     provider = _provider(profile["provider"])
     user_dir = friday_home(home)
     credentials = _read_credentials(home)
+    disabled = set(catalog.get("disabled") or [])
 
     new_key = api_key is not None and bool(api_key.strip()) and not clear_api_key
     fetched: list[str] | None = None
@@ -314,19 +414,15 @@ def save_model_profile(
         # the save before anything is written.
         fetched = _fetch_models(provider, api_key.strip())
 
-    profiles = [
-        profile
-        if current["id"] == profile_id
-        else {key: item for key, item in current.items() if key != "api_key_configured"}
-        for current in catalog["profiles"]
-    ]
+    profiles = [_stored_profile(current) for current in catalog["profiles"]]
     # An empty model marks a built-in provider save: the provider's profiles
     # come from the model list, not from one explicit model.
     explicit = bool(profile["model"])
-    if not explicit:
-        profiles = [current for current in profiles if current["id"] != profile_id]
-    elif not any(current["id"] == profile_id for current in profiles):
-        profiles.append(profile)
+    if explicit:
+        replaced = any(current["id"] == profile_id for current in profiles)
+        profiles = [profile if current["id"] == profile_id else current for current in profiles]
+        if not replaced:
+            profiles.append(profile)
 
     if provider.get("builtin"):
         if clear_api_key:
@@ -337,8 +433,16 @@ def save_model_profile(
             profiles, credentials = _sync_builtin_profiles(
                 provider, fetched, profiles, base, credentials, api_key.strip()
             )
+    elif clear_api_key:
+        credentials.pop(profile_id, None)
     elif new_key:
         credentials[profile_id] = api_key.strip()
+
+    target = _profile_target(profile)
+    if new_key:
+        disabled.discard(target)
+    elif clear_api_key:
+        disabled.add(target)
 
     # Drop credentials whose profile no longer exists (e.g. a provider removed
     # a model, or an entry was deleted elsewhere).
@@ -351,7 +455,7 @@ def save_model_profile(
         profiles = [_default_profile(base)]
 
     active = _active_after_save(catalog, profiles, profile, explicit, activate)
-    write_json_atomic(user_dir / PROFILES_FILE, {"active": active, "profiles": profiles})
+    _write_model_state(user_dir, active=active, profiles=profiles, disabled=disabled)
     write_json_atomic(user_dir / CREDENTIALS_FILE, credentials, private=True)
     return load_model_catalog(workspace, home=home)
 
@@ -375,21 +479,16 @@ def _active_after_save(
 
 def delete_model_profile(workspace: Path, profile_id: str, *, home: Path | None = None) -> dict[str, Any]:
     catalog = load_model_catalog(workspace, home=home)
+    removed = next((profile for profile in catalog["profiles"] if profile["id"] == profile_id), None)
     profiles = [profile for profile in catalog["profiles"] if profile["id"] != profile_id]
     if not profiles:
         raise ValueError("Friday needs at least one model configuration.")
     active = catalog["active"] if catalog["active"] != profile_id else profiles[0]["id"]
     user_dir = friday_home(home)
-    write_json_atomic(
-        user_dir / PROFILES_FILE,
-        {
-            "active": active,
-            "profiles": [
-                {key: value for key, value in profile.items() if key != "api_key_configured"}
-                for profile in profiles
-            ],
-        },
-    )
+    disabled = set(catalog.get("disabled") or [])
+    if removed and removed["provider"] == "openai-compatible":
+        disabled.discard(_profile_target(removed))
+    _write_model_state(user_dir, active=active, profiles=profiles, disabled=disabled)
     credentials = _read_credentials(home)
     credentials.pop(profile_id, None)
     write_json_atomic(user_dir / CREDENTIALS_FILE, credentials, private=True)
@@ -398,19 +497,183 @@ def delete_model_profile(workspace: Path, profile_id: str, *, home: Path | None 
 
 def select_model_profile(workspace: Path, profile_id: str, *, home: Path | None = None) -> dict[str, Any]:
     catalog = load_model_catalog(workspace, home=home)
-    if not any(profile["id"] == profile_id for profile in catalog["profiles"]):
+    selected = next((profile for profile in catalog["profiles"] if profile["id"] == profile_id), None)
+    if selected is None:
         raise ValueError(f"Unknown Friday model configuration: {profile_id}")
-    write_json_atomic(
-        friday_home(home) / PROFILES_FILE,
-        {
-            "active": profile_id,
-            "profiles": [
-                {key: value for key, value in profile.items() if key != "api_key_configured"}
-                for profile in catalog["profiles"]
-            ],
-        },
+    if not selected.get("enabled"):
+        raise ValueError("Enable this model provider before selecting it.")
+    _write_model_state(
+        friday_home(home),
+        active=profile_id,
+        profiles=catalog["profiles"],
+        disabled=set(catalog.get("disabled") or []),
     )
     return load_model_catalog(workspace, home=home)
+
+
+def read_model_credential(
+    workspace: Path,
+    *,
+    provider_id: str = "",
+    profile_id: str = "",
+    home: Path | None = None,
+) -> str:
+    catalog = load_model_catalog(workspace, home=home)
+    profiles = catalog["profiles"]
+    if profile_id:
+        profiles = [profile for profile in profiles if profile["id"] == profile_id]
+    elif provider_id:
+        profiles = [profile for profile in profiles if profile["provider"] == provider_id]
+    else:
+        raise ValueError("A model provider or profile is required.")
+    if profile_id and not profiles:
+        raise ValueError(f"Unknown Friday model configuration: {profile_id}")
+    credentials = _read_credentials(home)
+    stored = next((credentials.get(profile["id"]) for profile in profiles if credentials.get(profile["id"])), None)
+    provider = provider_id or (str(profiles[0]["provider"]) if profiles else "")
+    return str(stored or _provider_env(provider) or "")
+
+
+def clear_model_credential(
+    workspace: Path,
+    *,
+    provider_id: str = "",
+    profile_id: str = "",
+    home: Path | None = None,
+) -> dict[str, Any]:
+    catalog = load_model_catalog(workspace, home=home)
+    profiles = catalog["profiles"]
+    if profile_id:
+        targets = [profile for profile in profiles if profile["id"] == profile_id]
+    elif provider_id:
+        targets = [profile for profile in profiles if profile["provider"] == provider_id]
+    else:
+        raise ValueError("A model provider or profile is required.")
+    if profile_id and not targets:
+        raise ValueError(f"Unknown Friday model configuration: {profile_id}")
+
+    credentials = _read_credentials(home)
+    for profile in targets:
+        credentials.pop(profile["id"], None)
+    disabled = set(catalog.get("disabled") or [])
+    disabled.add(f"profile:{profile_id}" if profile_id else f"provider:{provider_id}")
+    target_ids = {profile["id"] for profile in targets}
+    active = catalog["active"]
+    remaining = [profile for profile in profiles if profile.get("enabled") and profile["id"] not in target_ids]
+    if active in target_ids and remaining:
+        active = remaining[0]["id"]
+    user_dir = friday_home(home)
+    _write_model_state(
+        user_dir,
+        active=active,
+        profiles=profiles,
+        disabled=disabled,
+    )
+    write_json_atomic(user_dir / CREDENTIALS_FILE, credentials, private=True)
+    return load_model_catalog(workspace, home=home)
+
+
+def set_model_enabled(
+    workspace: Path,
+    enabled: bool,
+    *,
+    provider_id: str = "",
+    profile_id: str = "",
+    home: Path | None = None,
+) -> dict[str, Any]:
+    catalog = load_model_catalog(workspace, home=home)
+    profiles = catalog["profiles"]
+    if profile_id:
+        targets = [profile for profile in profiles if profile["id"] == profile_id]
+        target = f"profile:{profile_id}"
+        configured = bool(targets and targets[0]["api_key_configured"])
+    elif provider_id:
+        provider = next((item for item in catalog["providers"] if item["id"] == provider_id), None)
+        if provider is None or not provider.get("builtin"):
+            raise ValueError(f"Unknown built-in model provider: {provider_id}")
+        targets = [profile for profile in profiles if profile["provider"] == provider_id]
+        target = f"provider:{provider_id}"
+        configured = bool(provider["api_key_configured"])
+    else:
+        raise ValueError("A model provider or profile is required.")
+    if profile_id and not targets:
+        raise ValueError(f"Unknown Friday model configuration: {profile_id}")
+    if enabled and not configured:
+        raise ValueError("Add an API key before enabling this provider.")
+
+    disabled = set(catalog.get("disabled") or [])
+    active = catalog["active"]
+    if enabled:
+        disabled.discard(target)
+    else:
+        target_ids = {profile["id"] for profile in targets}
+        remaining = [
+            profile
+            for profile in profiles
+            if profile.get("enabled") and profile["id"] not in target_ids
+        ]
+        if active in target_ids and not remaining:
+            raise ValueError("Enable another provider before disabling the active model.")
+        disabled.add(target)
+        if active in target_ids:
+            active = remaining[0]["id"]
+    _write_model_state(
+        friday_home(home),
+        active=active,
+        profiles=profiles,
+        disabled=disabled,
+    )
+    return load_model_catalog(workspace, home=home)
+
+
+def refresh_model_profiles(
+    workspace: Path,
+    *,
+    provider_id: str = "",
+    profile_id: str = "",
+    home: Path | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    catalog = load_model_catalog(workspace, home=home)
+    api_key = read_model_credential(
+        workspace,
+        provider_id=provider_id,
+        profile_id=profile_id,
+        home=home,
+    )
+    if not api_key:
+        raise ValueError("Add an API key before refreshing models.")
+
+    if profile_id:
+        profile = next((item for item in catalog["profiles"] if item["id"] == profile_id), None)
+        if profile is None:
+            raise ValueError(f"Unknown Friday model configuration: {profile_id}")
+        models = fetch_provider_models(profile["provider"], profile["base_url"], api_key)
+        return catalog, models
+
+    provider = _provider(provider_id)
+    if not provider.get("builtin"):
+        raise ValueError(f"Unknown built-in model provider: {provider_id}")
+    fetched = _fetch_models(provider, api_key)
+    models = fetched if fetched is not None else [str(item["id"]) for item in provider["models"]]
+    base = _load_base_config(workspace, home=home)
+    credentials = _read_credentials(home)
+    profiles, credentials = _sync_builtin_profiles(
+        provider,
+        models,
+        [_stored_profile(profile) for profile in catalog["profiles"]],
+        base,
+        credentials,
+        api_key,
+    )
+    user_dir = friday_home(home)
+    _write_model_state(
+        user_dir,
+        active=catalog["active"],
+        profiles=profiles,
+        disabled=set(catalog.get("disabled") or []),
+    )
+    write_json_atomic(user_dir / CREDENTIALS_FILE, credentials, private=True)
+    return load_model_catalog(workspace, home=home), models
 
 
 def model_api_key(config: ModelConfig, *, home: Path | None = None) -> str | None:
@@ -425,6 +688,13 @@ def load_web_search_settings(workspace: Path, *, home: Path | None = None) -> di
         )
         for provider, env_name in WEB_SEARCH_KEYS.items()
     }
+
+
+def read_web_search_credential(provider: str, *, home: Path | None = None) -> str:
+    env_name = WEB_SEARCH_KEYS.get(provider)
+    if not env_name:
+        raise ValueError(f"Unknown web search provider: {provider}")
+    return str(_read_web_credentials(home).get(env_name) or os.getenv(env_name) or "")
 
 
 def save_web_search_settings(
@@ -490,6 +760,11 @@ def feishu_credentials(*, home: Path | None = None) -> dict[str, Any]:
     }
 
 
+def read_feishu_credential(*, home: Path | None = None) -> str:
+    """Return the secret for an explicit reveal action in settings."""
+    return str(feishu_credentials(home=home)["app_secret"] or os.getenv("FRIDAY_FEISHU_APP_SECRET") or "")
+
+
 def save_feishu_settings(
     workspace: Path,
     *,
@@ -530,6 +805,8 @@ def _feishu_users(value: Any) -> list[str]:
 
 
 def output_token_limit(config: ModelConfig, value: int) -> dict[str, int]:
+    if model_api_mode(config.provider, config.model) == "responses":
+        return {"max_output_tokens": min(value, config.max_output_tokens)}
     key = "max_completion_tokens" if config.provider in {"mimo", "openai"} else "max_tokens"
     return {key: min(value, config.max_output_tokens)}
 
@@ -552,14 +829,22 @@ def build_model(config: ModelConfig) -> ChatModel:
             f"Model '{config.profile_name}' has no API key. Configure it in Friday Settings "
             "or run `friday model add --help`."
         )
-    if config.provider == "anthropic":
+    mode = model_api_mode(config.provider, config.model)
+    if mode == "messages":
         # Imported here, not at module scope: the Anthropic SDK pulls in ~1400
         # modules and ~41 MB of resident memory, and every Friday process imports
         # this module. The desktop runs one backend per open project, so that
         # baseline is paid per project -- by users on other providers too.
         from friday.providers import AnthropicModel
 
-        return AnthropicModel(api_key=api_key, base_url=config.base_url or None, model=config.model)
+        base_url = config.base_url or None
+        if config.provider == "opencode-go" and base_url:
+            base_url = base_url.removesuffix("/v1")
+        return AnthropicModel(api_key=api_key, base_url=base_url, model=config.model)
+    if mode == "responses":
+        from friday.providers import ResponsesModel
+
+        return ResponsesModel(api_key=api_key, base_url=config.base_url or None, model=config.model)
     return LLM(
         api_key=api_key,
         base_url=config.base_url or None,
@@ -728,6 +1013,7 @@ def _provider_env_names(provider: str) -> tuple[str, ...]:
         "DEEPSEEK_API_KEY" if provider == "deepseek" else "",
         "ANTHROPIC_API_KEY" if provider == "anthropic" else "",
         "MIMO_API_KEY" if provider == "mimo" else "",
+        "OPENCODE_API_KEY" if provider == "opencode-go" else "",
     )
 
 

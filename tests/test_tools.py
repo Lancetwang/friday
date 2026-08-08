@@ -18,11 +18,17 @@ import friday.tools as friday_tools
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _pinned_core_version, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
 from friday.compaction import COMPACT_TARGET_RATIO, LAST_COMPACTION, announce_compaction, clean_summary, compact_in_place, compaction_record, fit_recent_steps, fit_recent_turns, split_memory_section, summary_is_usable, transcript
-from friday.config import DEFAULT_MODEL_CONFIG, ModelConfig, build_model, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, save_model_profile, save_web_search_settings
+from friday.config import DEFAULT_MODEL_CONFIG, ModelConfig, build_model, clear_model_credential, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, read_model_credential, read_web_search_credential, refresh_model_profiles, save_model_profile, save_web_search_settings, set_model_enabled
 from friday.context import TOOL_COMPACT_AT, _context_text, compact_tool_results, context_ratio, context_report, context_window, should_compact_conversation, should_compact_tools, tool_compaction_gain
 from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
-from friday.model_options import supports_thinking, thinking_request_kwargs
+from friday.model_options import (
+    default_thinking_effort,
+    model_api_mode,
+    supports_thinking,
+    thinking_options,
+    thinking_request_kwargs,
+)
 from friday.prompts import goal_attempt_prompt, prompt_template, retry_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress, restore_progress, update_plan
 from friday.skills import discover_skills, skill_routing
@@ -1010,33 +1016,98 @@ class ResetTests(unittest.TestCase):
         )
         self.assertNotIn("run_token_budget", sources)
 
-    def test_deepseek_thinking_effort_maps_to_off_low_high_and_max(self) -> None:
+    def test_deepseek_exposes_only_its_real_thinking_controls(self) -> None:
         self.assertEqual(
-            thinking_request_kwargs(DEFAULT_MODEL_CONFIG.provider, "off"),
+            thinking_options(DEFAULT_MODEL_CONFIG.provider, DEFAULT_MODEL_CONFIG.model),
+            ("off", "high", "max"),
+        )
+        self.assertEqual(
+            thinking_request_kwargs(DEFAULT_MODEL_CONFIG.provider, DEFAULT_MODEL_CONFIG.model, "off"),
             {"extra_body": {"thinking": {"type": "disabled"}}},
         )
-        for effort in ("low", "high", "max"):
+        for effort in ("high", "max"):
             self.assertEqual(
-                thinking_request_kwargs(DEFAULT_MODEL_CONFIG.provider, effort),
+                thinking_request_kwargs(DEFAULT_MODEL_CONFIG.provider, DEFAULT_MODEL_CONFIG.model, effort),
                 {
                     "extra_body": {"thinking": {"type": "enabled"}},
                     "reasoning_effort": effort,
                 },
             )
 
-    def test_mimo_thinking_keeps_four_user_levels_over_a_binary_protocol(self) -> None:
-        self.assertTrue(supports_thinking("mimo"))
+    def test_thinking_options_follow_each_model_instead_of_a_global_scale(self) -> None:
+        self.assertTrue(supports_thinking("mimo", "mimo-v2.5"))
+        self.assertEqual(thinking_options("mimo", "mimo-v2.5"), ("off", "on"))
         self.assertEqual(
-            thinking_request_kwargs("mimo", "off"),
+            thinking_request_kwargs("mimo", "mimo-v2.5", "off"),
             {"extra_body": {"thinking": {"type": "disabled"}}},
         )
-        for effort in ("low", "high", "max"):
-            self.assertEqual(
-                thinking_request_kwargs("mimo", effort),
-                {"extra_body": {"thinking": {"type": "enabled"}}},
-            )
-        self.assertFalse(supports_thinking("openai"))
-        self.assertEqual(thinking_request_kwargs("openai", "max"), {})
+        self.assertEqual(
+            thinking_request_kwargs("mimo", "mimo-v2.5", "on"),
+            {"extra_body": {"thinking": {"type": "enabled"}}},
+        )
+        self.assertEqual(
+            thinking_options("openai", "gpt-5.6-luna"),
+            ("none", "low", "medium", "high", "xhigh", "max"),
+        )
+        self.assertEqual(default_thinking_effort("openai", "gpt-5.6-luna"), "medium")
+        self.assertFalse(supports_thinking("openai", "gpt-4.1"))
+        self.assertEqual(
+            thinking_options("anthropic", "claude-sonnet-4-6"),
+            ("low", "medium", "high", "max"),
+        )
+        self.assertEqual(
+            thinking_options("anthropic", "claude-opus-4-8"),
+            ("low", "medium", "high", "xhigh", "max"),
+        )
+        self.assertEqual(
+            thinking_request_kwargs("anthropic", "claude-sonnet-4-6", "max"),
+            {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}},
+        )
+        self.assertEqual(thinking_options("mimo", "mimo-v2-omni"), ())
+
+    def test_opencode_go_routes_models_to_their_documented_protocols(self) -> None:
+        self.assertEqual(model_api_mode("opencode-go", "gpt-5.6-luna"), "responses")
+        self.assertEqual(model_api_mode("opencode-go", "qwen3.8-max"), "messages")
+        self.assertEqual(model_api_mode("opencode-go", "deepseek-v4-pro"), "chat")
+        self.assertEqual(thinking_options("opencode-go", "grok-4.5"), ("low", "medium", "high"))
+        self.assertEqual(thinking_options("opencode-go", "kimi-k3"), ("low", "high", "max"))
+        self.assertEqual(thinking_options("opencode-go", "mimo-v2.5"), ("off", "on"))
+        self.assertEqual(
+            thinking_request_kwargs("opencode-go", "gpt-5.6-luna", "xhigh"),
+            {"reasoning": {"effort": "xhigh"}},
+        )
+
+    def test_opencode_go_builds_the_protocol_adapter_for_each_endpoint(self) -> None:
+        responses = ModelConfig(
+            profile_id="go-gpt",
+            profile_name="GPT 5.6 Luna",
+            provider="opencode-go",
+            model="gpt-5.6-luna",
+            base_url="https://opencode.ai/zen/go/v1",
+        )
+        messages = ModelConfig(
+            profile_id="go-qwen",
+            profile_name="Qwen",
+            provider="opencode-go",
+            model="qwen3.8-max",
+            base_url="https://opencode.ai/zen/go/v1",
+        )
+        with patch("friday.config.model_api_key", return_value="sk-go"):
+            with patch("friday.providers.ResponsesModel") as responses_model:
+                build_model(responses)
+            with patch("friday.providers.AnthropicModel") as messages_model:
+                build_model(messages)
+
+        responses_model.assert_called_once_with(
+            api_key="sk-go",
+            base_url="https://opencode.ai/zen/go/v1",
+            model="gpt-5.6-luna",
+        )
+        messages_model.assert_called_once_with(
+            api_key="sk-go",
+            base_url="https://opencode.ai/zen/go",
+            model="qwen3.8-max",
+        )
 
     def test_model_profiles_keep_credentials_out_of_the_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1086,6 +1157,100 @@ class ResetTests(unittest.TestCase):
             self.assertTrue(all(p["api_key_configured"] for p in deepseek))
             config = load_model_config(root, home=home, profile_id=catalog["active"])
             self.assertEqual(model_api_key(config, home=home), "sk-test")
+
+    def test_builtin_empty_save_keeps_key_and_refreshes_with_the_stored_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            with patch("friday.config.fetch_provider_models", return_value=["deepseek-v4-flash"]):
+                first = save_model_profile(
+                    root,
+                    {"id": "deepseek", "name": "DeepSeek", "provider": "deepseek", "model": ""},
+                    api_key="sk-test",
+                    home=home,
+                )
+
+            kept = save_model_profile(
+                root,
+                {"id": first["active"], "name": "DeepSeek", "provider": "deepseek", "model": ""},
+                activate=False,
+                home=home,
+            )
+            self.assertEqual(read_model_credential(root, provider_id="deepseek", home=home), "sk-test")
+            self.assertTrue(next(p for p in kept["profiles"] if p["provider"] == "deepseek")["enabled"])
+
+            with patch("friday.config.fetch_provider_models", return_value=["deepseek-v4-flash", "deepseek-v4-pro"]):
+                refreshed, models = refresh_model_profiles(root, provider_id="deepseek", home=home)
+            self.assertEqual(models, ["deepseek-v4-flash", "deepseek-v4-pro"])
+            self.assertEqual(
+                {profile["model"] for profile in refreshed["profiles"] if profile["provider"] == "deepseek"},
+                set(models),
+            )
+
+    def test_provider_toggle_hides_models_without_deleting_the_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            with patch("friday.config.fetch_provider_models", side_effect=[["deepseek-v4-flash"], ["mimo-v2.5"]]):
+                save_model_profile(
+                    root,
+                    {"id": "deepseek", "name": "DeepSeek", "provider": "deepseek", "model": ""},
+                    api_key="sk-deepseek",
+                    home=home,
+                )
+                save_model_profile(
+                    root,
+                    {"id": "mimo", "name": "MiMo", "provider": "mimo", "model": ""},
+                    api_key="sk-mimo",
+                    activate=False,
+                    home=home,
+                )
+
+            disabled = set_model_enabled(root, False, provider_id="deepseek", home=home)
+            self.assertFalse(next(p for p in disabled["providers"] if p["id"] == "deepseek")["enabled"])
+            self.assertTrue(all(not p["enabled"] for p in disabled["profiles"] if p["provider"] == "deepseek"))
+            self.assertEqual(read_model_credential(root, provider_id="deepseek", home=home), "sk-deepseek")
+
+            enabled = set_model_enabled(root, True, provider_id="deepseek", home=home)
+            self.assertTrue(next(p for p in enabled["providers"] if p["id"] == "deepseek")["enabled"])
+            clear_model_credential(root, provider_id="deepseek", home=home)
+            credentials = json.loads((home / ".friday" / "model-credentials.json").read_text(encoding="utf-8"))
+            self.assertNotIn("sk-deepseek", credentials.values())
+
+    def test_opencode_go_key_discovers_models_without_manual_profile_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            with patch(
+                "friday.config.fetch_provider_models",
+                return_value=["gpt-5.6-luna", "qwen3.8-max"],
+            ):
+                catalog = save_model_profile(
+                    root,
+                    {"name": "OpenCode Go", "provider": "opencode-go", "model": ""},
+                    api_key="sk-go",
+                    home=home,
+                )
+
+            profiles = [profile for profile in catalog["profiles"] if profile["provider"] == "opencode-go"]
+            self.assertEqual({profile["model"] for profile in profiles}, {"gpt-5.6-luna", "qwen3.8-max"})
+            self.assertTrue(all(profile["api_key_configured"] for profile in profiles))
+            self.assertTrue(all(profile["vision"] for profile in profiles))
+
+    def test_opencode_go_accepts_the_standard_opencode_environment_key(self) -> None:
+        config = ModelConfig(
+            profile_id="go-grok",
+            profile_name="Grok",
+            provider="opencode-go",
+            model="grok-4.5",
+            base_url="https://opencode.ai/zen/go/v1",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"OPENCODE_API_KEY": "sk-go"}, clear=True):
+                self.assertEqual(model_api_key(config, home=Path(tmp)), "sk-go")
 
     def test_builtin_save_drops_auto_profiles_for_removed_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1224,6 +1389,7 @@ class ResetTests(unittest.TestCase):
 
             self.assertEqual(status, {"tavily_configured": True, "anysearch_configured": True})
             self.assertNotIn("private", json.dumps(load_web_search_settings(root, home=home)))
+            self.assertEqual(read_web_search_credential("anysearch", home=home), "anysearch-private")
             os.environ.clear()
             load_model_environment(root, home=home)
             self.assertEqual(os.environ["TAVILY_API_KEY"], "tavily-private")

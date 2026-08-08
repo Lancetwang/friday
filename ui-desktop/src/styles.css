@@ -875,7 +875,6 @@ input[type="checkbox"] {
 .session-main small {
   overflow: hidden;
   color: var(--faint);
-  font-family: var(--font-mono);
   font-size: var(--text-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1294,7 +1293,6 @@ input[type="checkbox"] {
   max-width: min(54vw, 620px);
   margin: 3px 0 0;
   color: var(--faint);
-  font-family: var(--font-mono);
   font-size: var(--text-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1317,7 +1315,6 @@ input[type="checkbox"] {
 .skills-heading h1 {
   margin: 0;
   color: var(--ink);
-  font-family: var(--font-serif);
   font-size: var(--text-hero);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
@@ -1539,7 +1536,6 @@ input[type="checkbox"] {
 
 .skill-modal h2 {
   margin: 18px 0 6px;
-  font-family: var(--font-serif);
   font-size: var(--text-title);
   font-weight: var(--weight-semibold);
   overflow-wrap: anywhere;
@@ -1561,7 +1557,6 @@ input[type="checkbox"] {
 .skill-modal > small {
   margin-bottom: 16px;
   color: var(--faint);
-  font-family: var(--font-mono);
   font-size: var(--text-micro);
 }
 
@@ -1594,7 +1589,6 @@ input[type="checkbox"] {
 }
 
 .skill-content code {
-  font-family: var(--font-mono);
   font-size: var(--text-label);
 }
 
@@ -3175,7 +3169,6 @@ input[type="checkbox"] {
 .model-menu-copy small {
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--font-mono);
   font-size: var(--text-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3392,7 +3385,6 @@ input[type="checkbox"] {
 .settings-section small {
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--font-mono);
   font-size: var(--text-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3417,7 +3409,6 @@ input[type="checkbox"] {
 }
 
 .settings-head h2 {
-  font-family: var(--font-serif);
   font-size: var(--text-subtitle);
   font-weight: var(--weight-semibold);
 }
@@ -3554,7 +3545,6 @@ input[type="checkbox"] {
 }
 
 .memory-file-meta strong {
-  font-family: var(--font-mono);
   font-size: var(--text-label);
   font-weight: var(--weight-semibold);
 }
@@ -3629,7 +3619,6 @@ input[type="checkbox"] {
 
 .memory-editor h3 {
   margin: 0;
-  font-family: var(--font-mono);
   font-size: var(--text-body);
   font-weight: var(--weight-semibold);
 }
@@ -3637,7 +3626,6 @@ input[type="checkbox"] {
 .memory-editor > header p {
   margin: 4px 0 0;
   color: var(--faint);
-  font-family: var(--font-mono);
   font-size: var(--text-micro);
 }
 
@@ -3670,7 +3658,6 @@ input[type="checkbox"] {
   resize: none;
   color: var(--ink);
   background: transparent;
-  font-family: var(--font-mono);
   font-size: var(--text-label);
   line-height: var(--leading-body);
 }
@@ -3687,7 +3674,6 @@ input[type="checkbox"] {
 .memory-editor-count {
   margin-right: auto;
   color: var(--faint);
-  font-family: var(--font-mono);
   font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
 }
@@ -3732,7 +3718,6 @@ input[type="checkbox"] {
   left: 2px;
   color: var(--faint);
   content: counter(docs, decimal-leading-zero);
-  font-family: var(--font-mono);
   font-size: var(--text-caption);
 }
 
@@ -3744,7 +3729,6 @@ input[type="checkbox"] {
 }
 
 .docs-steps p {
-  max-width: 52ch;
   margin: 0 0 8px;
   color: var(--muted);
   font-size: var(--text-label);
@@ -3785,126 +3769,266 @@ input[type="checkbox"] {
   min-height: 18px;
 }
 
+/* Models — every provider is one direct credential control. */
+
+.model-provider-list {
+  display: grid;
+}
+
+.model-provider {
+  display: grid;
+  align-items: center;
+  gap: 6px 18px;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(280px, 1.4fr);
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.model-provider-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-provider-name {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.model-provider-name strong,
+.model-provider-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-provider-name strong {
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+}
+
+.model-provider-name small {
+  color: var(--faint);
+  font-size: var(--text-micro);
+}
+
+.model-provider-edit:hover strong {
+  color: var(--accent-ink);
+}
+
+.credential-input {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.credential-input > input {
+  min-width: 80px;
+  height: 32px;
+  flex: 1;
+  padding: 0 2px 5px;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: var(--text-caption);
+  transition: border-color var(--dur-1) ease-out;
+}
+
+.credential-input > input:focus {
+  border-color: var(--accent);
+}
+
+.credential-input > input::placeholder {
+  color: var(--faint);
+}
+
+.credential-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 1px;
+}
+
+.credential-icon {
+  --glyph-size: 14px;
+  display: inline-grid;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  transition:
+    color var(--dur-1) ease-out,
+    background-color var(--dur-1) ease-out,
+    transform var(--dur-1) ease-out;
+}
+
+.credential-icon:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--fill);
+}
+
+.credential-icon:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.credential-icon.danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.credential-icon:disabled {
+  cursor: default;
+  opacity: 0.28;
+}
+
+.credential-icon.spinning .glyph-icon {
+  animation: model-spin 800ms linear infinite;
+}
+
+@keyframes model-spin {
+  to { transform: rotate(360deg); }
+}
+
+.settings-switch {
+  position: relative;
+  display: inline-flex;
+  width: 32px;
+  height: 18px;
+  margin-left: 5px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.settings-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.settings-switch > span {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--fill-strong);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  transition: background-color 180ms ease-out;
+}
+
+.settings-switch > span::after {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 2px;
+  border-radius: 50%;
+  background: var(--canvas);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 18%, transparent);
+  content: "";
+  transition: transform 220ms var(--ease-out);
+}
+
+.settings-switch input:checked + span {
+  background: var(--ink);
+  box-shadow: none;
+}
+
+.settings-switch input:checked + span::after {
+  transform: translateX(14px);
+}
+
+.settings-switch input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-switch input:disabled + span {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.model-provider-meta {
+  display: flex;
+  min-width: 0;
+  min-height: 15px;
+  align-items: center;
+  justify-content: space-between;
+  grid-column: 2;
+  color: var(--faint);
+  font-size: var(--text-micro);
+}
+
+.model-provider-meta .settings-message {
+  min-height: 0;
+  font-size: var(--text-micro);
+}
+
+.custom-models {
+  margin-top: 28px;
+}
+
+.custom-models > header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 8px;
+}
+
+.custom-models h3 {
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+}
+
+.custom-models header p {
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: var(--text-caption);
+}
+
+.custom-add {
+  --glyph-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: var(--radius-m);
+  color: var(--muted);
+  background: transparent;
+  font-size: var(--text-caption);
+}
+
+.custom-add:hover {
+  color: var(--ink);
+  background: var(--fill);
+}
+
+.custom-model-editor {
+  margin-top: 10px;
+  padding: 14px 2px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
 .settings-page label > span {
   color: var(--muted);
   font-size: var(--text-caption);
   font-weight: var(--weight-medium);
   line-height: var(--leading-control);
-}
-
-/* Provider rows — one quiet line each, config unfolds inline */
-
-.provider-row {
-  display: flex;
-  width: 100%;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 2px;
-  border: 0;
-  color: var(--ink);
-  background: transparent;
-  text-align: left;
-  transition: transform 400ms cubic-bezier(0.3, 1.4, 0.5, 1);
-}
-
-.provider-row:hover {
-  transform: translateX(4px);
-}
-
-.provider-id {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 10px;
-}
-
-.provider-copy {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.provider-state {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 10px;
-}
-
-.provider-in-use {
-  color: var(--accent-ink);
-  font-family: var(--font-mono);
-  font-size: var(--text-micro);
-}
-
-.provider-row strong {
-  font-size: var(--text-control);
-  font-weight: var(--weight-medium);
-}
-
-.provider-row small {
-  overflow: hidden;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: var(--text-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: color var(--dur-1) ease-out;
-}
-
-.provider-item.expanded .provider-row strong {
-  color: var(--accent-ink);
-}
-
-.config-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: var(--text-micro);
-  line-height: 1;
-}
-
-.config-badge svg {
-  width: 9px;
-  height: 9px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-}
-
-.config-badge.on {
-  color: var(--success);
-}
-
-.config-badge.off {
-  color: var(--caution);
-}
-
-.provider-config {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows var(--dur-3) var(--ease),
-    opacity var(--dur-2) ease-out;
-}
-
-.provider-item.expanded .provider-config {
-  grid-template-rows: 1fr;
-  opacity: 1;
-}
-
-.provider-config-inner {
-  display: grid;
-  min-height: 0;
-  gap: 9px;
-  overflow: hidden;
-  padding: 4px 2px 12px;
 }
 
 /* Underline fields — label left, hairline right, accent sweep on focus */
@@ -3913,13 +4037,14 @@ input[type="checkbox"] {
   display: grid;
   align-items: baseline;
   column-gap: 12px;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 100px minmax(0, 1fr);
 }
 
 .line-field > span:first-child {
   color: var(--muted);
   font-size: var(--text-caption);
   font-weight: var(--weight-medium);
+  white-space: nowrap;
 }
 
 .field-line {
@@ -3988,7 +4113,6 @@ input[type="checkbox"] {
   border: 0;
   color: var(--muted);
   background: transparent;
-  font-family: var(--font-mono);
   font-size: var(--text-micro);
 }
 
@@ -4020,7 +4144,6 @@ input[type="checkbox"] {
 .vision-note {
   align-self: center;
   color: var(--faint);
-  font-family: var(--font-mono);
   font-size: var(--text-micro);
 }
 
@@ -4038,7 +4161,6 @@ input[type="checkbox"] {
 
 .remove-entry {
   color: var(--danger);
-  font-family: var(--font-sans);
   font-size: var(--text-caption);
   padding: 4px 6px;
 }
@@ -4053,7 +4175,7 @@ input[type="checkbox"] {
   font-size: var(--text-caption);
 }
 
-/* Phone bridge — one switch line, then the credentials it needs */
+/* Phone bridge */
 
 .settings-form-stack {
   display: grid;
@@ -4076,30 +4198,9 @@ input[type="checkbox"] {
 }
 
 .phone-switch-copy strong {
-  display: flex;
-  align-items: center;
-  gap: 7px;
   color: var(--muted);
   font-size: var(--text-label);
   font-weight: var(--weight-semibold);
-}
-
-.phone-switch-copy strong::before {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--faint);
-  content: "";
-  transition: background-color var(--dur-1) ease-out;
-}
-
-.phone-switch.on .phone-switch-copy strong {
-  color: var(--ink);
-}
-
-.phone-switch.on .phone-switch-copy strong::before {
-  background: var(--success);
 }
 
 .phone-switch-copy small {
@@ -4107,92 +4208,23 @@ input[type="checkbox"] {
   font-size: var(--text-caption);
 }
 
-.phone-action {
-  position: relative;
-  padding: 2px 0 5px;
-  border: 0;
-  color: var(--ink);
-  background: transparent;
-  font-size: var(--text-label);
-  font-weight: var(--weight-semibold);
-  transition: color var(--dur-1) ease-out;
-}
-
-.phone-action::after {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 1px;
-  background: var(--ink);
-  content: "";
-  transform: scaleX(0);
-  transform-origin: left center;
-  transition: transform var(--dur-2) var(--ease-out);
-}
-
-.phone-action:hover:not(:disabled)::after {
-  transform: scaleX(1);
-}
-
-.phone-action:disabled {
-  cursor: default;
-  color: var(--faint);
-}
-
-.phone-flag {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  justify-self: start;
-  padding: 2px 1px 5px;
-  border: 0;
-  color: var(--muted);
-  background: transparent;
-  font-size: var(--text-caption);
-  transition: color var(--dur-1) ease-out;
-}
-
-.phone-flag::after {
-  position: absolute;
-  right: 0;
-  bottom: 2px;
-  left: 0;
-  height: 1px;
-  background: var(--ink);
-  content: "";
-  transform: scaleX(0);
-  transform-origin: left center;
-  transition: transform var(--dur-2) var(--ease-out);
-}
-
-.phone-flag:hover {
-  color: var(--ink);
-}
-
-.phone-flag:hover::after {
-  transform: scaleX(1);
-}
-
-.phone-flag svg {
-  width: 9px;
-  height: 9px;
+.phone-switch .settings-switch {
   flex: 0 0 auto;
-  color: var(--faint);
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-  transition: color var(--dur-1) ease-out;
+  align-self: center;
 }
 
-.phone-flag.on {
-  color: var(--ink);
+.phone-secret-field {
+  align-items: center;
 }
 
-.phone-flag.on svg {
-  color: var(--success);
+.phone-secret-message {
+  min-height: 0;
+  padding-left: 112px;
+}
+
+.phone-group-setting {
+  margin-top: 4px;
+  padding-top: 14px;
 }
 
 .settings-hint {
@@ -4218,7 +4250,6 @@ input[type="checkbox"] {
   outline: 0;
   color: var(--ink);
   background: transparent;
-  font-family: var(--font-mono);
   font-size: var(--text-caption);
   line-height: var(--leading-body);
   resize: none;
@@ -4241,7 +4272,6 @@ input[type="checkbox"] {
   max-height: 180px;
   overflow: auto;
   color: var(--faint);
-  font-family: var(--font-mono);
   font-size: var(--text-micro);
   white-space: pre-wrap;
 }
@@ -4449,6 +4479,14 @@ html.scrolling *::-webkit-scrollbar-thumb:hover,
   .settings-content {
     padding-right: 24px;
     padding-left: 24px;
+  }
+
+  .model-provider {
+    grid-template-columns: 1fr;
+  }
+
+  .model-provider-meta {
+    grid-column: 1;
   }
 }
 

@@ -66,6 +66,33 @@ export function SearchIcon(props: IconProps) {
   )
 }
 
+export function EyeIcon({ className = '', open = true }: IconProps & { open?: boolean }) {
+  return (
+    <Glyph className={className}>
+      <path d="M3.2 12s3.2-5.2 8.8-5.2 8.8 5.2 8.8 5.2-3.2 5.2-8.8 5.2S3.2 12 3.2 12Z" />
+      <circle cx="12" cy="12" r="2.4" />
+      {!open && <path d="M4.5 4.5l15 15" />}
+    </Glyph>
+  )
+}
+
+export function RefreshIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M19 8.2A7.5 7.5 0 1 0 19.2 15" />
+      <path d="M19 3.8v4.6h-4.6" />
+    </Glyph>
+  )
+}
+
+export function TrashIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M5.5 7.5h13M9 4.5h6M7.5 7.5l.7 12h7.6l.7-12M10 10.5v5.8M14 10.5v5.8" />
+    </Glyph>
+  )
+}
+
 export function UndoIcon(props: IconProps) {
   return (
     <Glyph {...props}>

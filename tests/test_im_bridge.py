@@ -21,6 +21,7 @@ from friday.config import (
     FEISHU_FILE,
     IM_BRIDGE_ENV_NAMES,
     feishu_credentials,
+    read_feishu_credential,
     save_feishu_settings,
 )
 from friday.im.bridge import (
@@ -542,6 +543,7 @@ class FeishuSettingsTests(_IsolatedHome):
         self.assertTrue(view["app_secret_configured"])
         self.assertNotIn("app_secret", view)
         self.assertEqual(feishu_credentials()["app_secret"], "s3cret")
+        self.assertEqual(read_feishu_credential(), "s3cret")
 
     def test_saving_other_fields_keeps_the_secret(self) -> None:
         save_feishu_settings(self.workspace, app_id="cli_x", app_secret="s3cret")

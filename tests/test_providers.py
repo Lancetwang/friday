@@ -7,7 +7,12 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from friday.providers import _anthropic_messages, _anthropic_response
+from friday.providers import (
+    _anthropic_messages,
+    _anthropic_response,
+    _responses_input,
+    _responses_response,
+)
 
 
 class AnthropicProviderTests(unittest.TestCase):
@@ -44,6 +49,68 @@ class AnthropicProviderTests(unittest.TestCase):
 
         self.assertEqual(normalized["content"], "done")
         self.assertEqual(normalized["tool_calls"][0]["function"]["name"], "Read")
+        self.assertEqual(normalized["usage"], {"input_tokens": 12, "output_tokens": 4})
+
+    def test_anthropic_thinking_blocks_survive_a_tool_round_trip(self) -> None:
+        thinking = SimpleNamespace(
+            type="thinking",
+            thinking="checking",
+            signature="signed",
+            model_dump=lambda **_kwargs: {
+                "type": "thinking",
+                "thinking": "checking",
+                "signature": "signed",
+            },
+        )
+        response = SimpleNamespace(
+            content=[
+                thinking,
+                SimpleNamespace(type="tool_use", id="tool-1", name="Read", input={"path": "README.md"}),
+            ],
+            usage=SimpleNamespace(input_tokens=12, output_tokens=4),
+        )
+
+        normalized = _anthropic_response(response)
+        _system, messages = _anthropic_messages([normalized])
+
+        self.assertEqual(messages[0]["content"][0]["signature"], "signed")
+
+
+class ResponsesProviderTests(unittest.TestCase):
+    def test_chat_history_becomes_responses_items(self) -> None:
+        instructions, inputs = _responses_input(
+            [
+                {"role": "system", "content": "Friday rules"},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-1", "function": {"name": "Read", "arguments": '{"path":"README.md"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-1", "content": "hello"},
+            ]
+        )
+
+        self.assertEqual(instructions, "Friday rules")
+        self.assertEqual([item["type"] for item in inputs], ["function_call", "function_call_output"])
+
+    def test_responses_output_is_normalized_for_agent_core(self) -> None:
+        response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[SimpleNamespace(type="output_text", text="done")],
+                ),
+                SimpleNamespace(type="function_call", call_id="call-1", name="Read", arguments='{"path":"README.md"}'),
+            ],
+            usage=SimpleNamespace(
+                input_tokens=12,
+                output_tokens=4,
+                model_dump=lambda **_kwargs: {"input_tokens": 12, "output_tokens": 4},
+            ),
+        )
+
+        normalized = _responses_response(response)
+
+        self.assertEqual(normalized["content"], "done")
+        self.assertEqual(normalized["tool_calls"][0]["id"], "call-1")
         self.assertEqual(normalized["usage"], {"input_tokens": 12, "output_tokens": 4})
 
 

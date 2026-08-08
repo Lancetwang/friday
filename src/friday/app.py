@@ -106,7 +106,7 @@ def build_friday(
     *,
     stream: bool = True,
     profile_id: str | None = None,
-    thinking_effort: str = DEFAULT_THINKING_EFFORT,
+    thinking_effort: str | None = None,
     session_id: str | None = None,
 ) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
@@ -115,7 +115,7 @@ def build_friday(
     friday_dir = migrate_legacy_runtime(root)
     record_project(root)
     config = load_model_config(root, profile_id=profile_id)
-    thinking_effort = normalize_thinking_effort(thinking_effort)
+    thinking_effort = normalize_thinking_effort(config.provider, config.model, thinking_effort)
     instructions = build_instructions(root, friday_dir, config)
     tools = build_tools(root, friday_dir)
     agent = Agent(
@@ -125,7 +125,7 @@ def build_friday(
             chat_kwargs={
                 "stream": stream,
                 **output_token_limit(config, config.max_output_tokens),
-                **thinking_request_kwargs(config.provider, thinking_effort),
+                **thinking_request_kwargs(config.provider, config.model, thinking_effort),
                 "tool_choice": "auto",
             },
         ),
@@ -571,5 +571,4 @@ def _project_instruction_files(workspace: Path) -> list[str]:
                 if body:
                     documents.append(f"### {path}\n{body}")
     return documents
-
 
