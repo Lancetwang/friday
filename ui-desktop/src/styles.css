@@ -2560,6 +2560,40 @@ input[type="checkbox"] {
   overflow-y: auto;
 }
 
+/* One aggregated group per tool name inside an activity group; opening it
+   reveals the individual runs as compact rows. */
+.tool-group-sub {
+  margin: 2px 0;
+}
+
+.tool-group-sub > summary {
+  min-height: 26px;
+}
+
+.tool-group-count {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: var(--faint);
+  background: var(--fill);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-group-sub-list {
+  display: grid;
+  gap: 2px;
+  padding: 2px 0 6px 14px;
+}
+
+.tool-group-sub-list .tool-subrow > summary {
+  min-height: 24px;
+}
+
 .tool-group-list .thinking-row {
   margin: 0;
 }

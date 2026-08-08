@@ -4073,7 +4073,9 @@ function formatBytes(bytes: number) {
 }
 
 function ActivityGroup({ items, onOpenLink }: { items: TimelineItem[]; onOpenLink: (url: string) => void }) {
-  const thinkingActive = items.some(item => item.kind === 'reasoning' && item.thinking && item.thinking.ended == null)
+  const thinking = items.filter(item => item.kind === 'reasoning')
+  const tools = items.filter(item => item.kind === 'tool')
+  const thinkingActive = thinking.some(item => item.thinking && item.thinking.ended == null)
   const status: NonNullable<TimelineItem['status']> = items.some(item => item.status === 'approval')
     ? 'approval'
     : items.some(item => item.status === 'running') || thinkingActive
@@ -4089,6 +4091,30 @@ function ActivityGroup({ items, onOpenLink }: { items: TimelineItem[]; onOpenLin
     return () => window.clearInterval(timer)
   }, [thinkingActive])
 
+  // All reasoning of a turn reads as one block; tool runs aggregate by name,
+  // so a long turn stays a few rows until a group is asked to open.
+  const mergedThinking: TimelineItem | null = thinking.length
+    ? {
+        id: `${thinking[0]!.id}-merged`,
+        kind: 'reasoning',
+        text: thinking.map(item => item.text).filter(Boolean).join('\n\n'),
+        thinking: {
+          error: thinking.some(item => item.thinking?.error),
+          started: Math.min(...thinking.map(item => item.thinking?.started ?? Date.now())),
+          ...(thinkingActive
+            ? {}
+            : { ended: Math.max(...thinking.map(item => item.thinking?.ended ?? 0)) })
+        }
+      }
+    : null
+  const groups: Array<{ name: string; runs: TimelineItem[] }> = []
+  for (const tool of tools) {
+    const name = tool.name || 'Tool'
+    const last = groups.at(-1)
+    if (last && last.name === name) last.runs.push(tool)
+    else groups.push({ name, runs: [tool] })
+  }
+
   return (
     <details className={`tool-row tool-group ${status}`}>
       <summary>
@@ -4096,19 +4122,33 @@ function ActivityGroup({ items, onOpenLink }: { items: TimelineItem[]; onOpenLin
         <strong>{activityGroupLabel(items, status, now)}</strong>
       </summary>
       <div className="tool-group-list">
-        {items.map(item => item.kind === 'reasoning'
-          ? <ThinkingRow item={item} key={item.id} onOpenLink={onOpenLink} />
-          : (
-            <details className={`tool-subrow ${item.status}`} key={item.id}>
+        {mergedThinking && <ThinkingRow item={mergedThinking} key={mergedThinking.id} onOpenLink={onOpenLink} />}
+        {groups.map((group, groupIndex) => {
+          const total = group.runs.reduce((sum, run) => sum + (run.elapsed_ms ?? 0), 0)
+          return (
+            <details className="tool-subrow tool-group-sub" key={`${group.name}-${groupIndex}`}>
               <summary>
                 <span aria-hidden="true" className="tool-status" />
-                <strong>{toolActivityLabel(item)}</strong>
-                <small>{item.name}</small>
-                {item.elapsed_ms != null && <small className="tool-time">{formatThinkingDuration(item.elapsed_ms)}</small>}
+                <strong>{group.name}</strong>
+                <span className="tool-group-count">{group.runs.length}</span>
+                {total > 0 && <small className="tool-time">{formatThinkingDuration(total)}</small>}
               </summary>
-              <ToolDetails item={item} />
+              <div className="tool-group-sub-list">
+                {group.runs.map((run, index) => (
+                  <details className={`tool-subrow ${run.status}`} key={run.id}>
+                    <summary>
+                      <span aria-hidden="true" className="tool-status" />
+                      <strong>{toolActivityLabel(run)}</strong>
+                      <small>#{index + 1}</small>
+                      {run.elapsed_ms != null && <small className="tool-time">{formatThinkingDuration(run.elapsed_ms)}</small>}
+                    </summary>
+                    <ToolDetails item={run} />
+                  </details>
+                ))}
+              </div>
             </details>
-          ))}
+          )
+        })}
       </div>
     </details>
   )
@@ -4132,10 +4172,7 @@ function activityGroupLabel(items: TimelineItem[], status: NonNullable<TimelineI
     const duration = formatThinkingDuration(total)
     parts.push(errored ? t('thinking.interrupted', { duration }) : t('thinking.done', { duration }))
   }
-  if (tools.length) {
-    const label = tools.length === 1 ? toolActivityLabel(tools[0]!) : toolGroupLabel(tools, status)
-    parts.push(tools.length > 1 ? `${label} ×${tools.length}` : label)
-  }
+  if (tools.length) parts.push(tools.length === 1 ? toolActivityLabel(tools[0]!) : toolGroupLabel(tools, status))
   return parts.join(' · ')
 }
 
