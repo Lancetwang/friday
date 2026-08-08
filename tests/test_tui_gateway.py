@@ -487,6 +487,39 @@ class TuiGatewayTests(unittest.TestCase):
             self.assertEqual(read_session(session_path(root, fork["session_id"]))["fork_parent"], "root")
             self.assertCountEqual(delete_session_tree(root, "root"), ["root", fork["session_id"]])
 
+    def test_gateway_forks_from_latest_assistant_and_can_return_to_parent(self) -> None:
+        gateway = Gateway()
+        gateway.session.context = RunContext(metadata={"workspace": str(Path.cwd())})
+        gateway.session.context.add_message("user", "one")
+        gateway.session.context.add_message("assistant", "first")
+        gateway.session.context.add_message("user", "two")
+        gateway.session.context.add_message("assistant", "second")
+        source_id = gateway.session.session_id
+
+        with patch("friday.app_server.fork_session", return_value={"session_id": "forked"}) as fork:
+            with patch.object(gateway, "_resume_session", return_value=2), patch.object(
+                gateway, "session_info", return_value={"session_id": "forked"}
+            ), patch("friday.app_server.session_tree", return_value={"root": source_id, "nodes": []}), patch.object(
+                gateway, "ok"
+            ):
+                gateway.handle({"id": "fork", "method": "session.fork"})
+
+        self.assertEqual(fork.call_args.args[2], 3)
+
+        tree = {
+            "root": source_id,
+            "nodes": [{"id": "forked", "parent": source_id}, {"id": source_id, "parent": ""}],
+        }
+        gateway.session.session_id = "forked"
+        with patch("friday.app_server.session_tree", return_value=tree), patch.object(
+            gateway, "_resume_session", return_value=2
+        ) as resume, patch.object(gateway, "session_info", return_value={"session_id": source_id}), patch(
+            "friday.app_server.session_history", return_value=[]
+        ), patch.object(gateway, "ok"):
+            gateway.handle({"id": "back", "method": "session.backward"})
+
+        resume.assert_called_once_with(source_id)
+
     def test_gateway_correlates_tool_events_by_call_id(self) -> None:
         gateway = Gateway()
 
@@ -584,6 +617,15 @@ class TuiGatewayTests(unittest.TestCase):
 
         start.assert_called_once_with(port=0, open_browser=False)
         ok.assert_called_once_with("1", {"url": "http://127.0.0.1:3210"})
+
+    def test_gateway_stops_the_background_trace_server(self) -> None:
+        gateway = Gateway()
+        with patch("friday.app_server.stop_trace_server", return_value=True) as stop:
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle({"id": "1", "method": "trace.stop"})
+
+        stop.assert_called_once_with()
+        ok.assert_called_once_with("1", {"stopped": True})
 
     def test_gateway_reads_only_catalogued_skill_files(self) -> None:
         gateway = Gateway()
@@ -684,6 +726,25 @@ class TuiGatewayTests(unittest.TestCase):
                 )
 
         ok.assert_called_once_with("1", {"api_key": "private-key"})
+
+    def test_model_catalog_includes_each_models_real_thinking_choices(self) -> None:
+        gateway = Gateway()
+        catalog = {
+            "active": "deepseek-v4-flash",
+            "profiles": [
+                {
+                    "id": "deepseek-v4-flash",
+                    "model": "deepseek-v4-flash",
+                    "provider": "deepseek",
+                }
+            ],
+            "providers": [],
+        }
+        with patch("friday.app_server.load_model_catalog", return_value=catalog):
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle({"id": "1", "method": "model.list"})
+
+        self.assertEqual(ok.call_args.args[1]["profiles"][0]["thinking_options"], ["off", "high", "max"])
 
     def test_gateway_renames_and_deletes_saved_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

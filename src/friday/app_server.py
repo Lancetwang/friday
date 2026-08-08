@@ -61,7 +61,7 @@ from friday.state import (
 from friday.storage import close_project, friday_home, list_projects, record_project
 from friday.text import preview
 from friday.tools import build_tools, pending_approval
-from friday.trace_web import start_trace_server
+from friday.trace_web import start_trace_server, stop_trace_server
 from friday.turn import TurnCancelled
 
 _write_lock = threading.Lock()
@@ -113,8 +113,9 @@ def main() -> None:
                     continue
                 gateway.handle(message)
     finally:
-        # Closing the desktop is what makes the phone unreachable again.
+        # These servers belong to this client process, not to a conversation.
         gateway.bridge.stop()
+        stop_trace_server()
 
 
 def _install_cli_shim() -> Path:
@@ -240,6 +241,17 @@ class Gateway:
         with self._state:
             return self.sessions.get(session_id)
 
+    def _resume_session(self, session_id: str) -> int:
+        live = self._cached_session(session_id)
+        if live is not None and live.context is not None:
+            self.session = live
+            count = 0
+        else:
+            self.session = self._new_session(session_id or None)
+            count = self.session.resume(session_id or None)
+        self._track(self.session)
+        return count
+
     def _is_running(self, session_id: str) -> bool:
         with self._state:
             return session_id in self.runs
@@ -330,7 +342,17 @@ class Gateway:
                 effort = self.session.select_thinking(str(params.get("effort") or ""))
                 self.ok(rid, {"thinking_effort": effort, "info": self.session_info()})
             elif method == "model.list":
-                self.ok(rid, load_model_catalog(Path.cwd().resolve()))
+                catalog = load_model_catalog(Path.cwd().resolve())
+                catalog["profiles"] = [
+                    {
+                        **profile,
+                        "thinking_options": list(
+                            thinking_options(str(profile["provider"]), str(profile["model"]))
+                        ),
+                    }
+                    for profile in catalog["profiles"]
+                ]
+                self.ok(rid, catalog)
             elif method == "model.save":
                 profile = params.get("profile")
                 if not isinstance(profile, dict):
@@ -489,6 +511,8 @@ class Gateway:
                 # browser launched from here fails silently when it cannot find one.
                 _server, url = start_trace_server(port=0, open_browser=False)
                 self.ok(rid, {"url": url})
+            elif method == "trace.stop":
+                self.ok(rid, {"stopped": stop_trace_server()})
             elif method == "session.reset":
                 removed = self.session.reset(include_user=bool(params.get("global")))
                 self.ok(rid, {"removed": [str(path) for path in removed], "info": self.session_info()})
@@ -502,14 +526,7 @@ class Gateway:
                 self.ok(rid, {"text": self.session.compact()})
             elif method == "session.resume":
                 session_id = str(params.get("id") or "")
-                live = self._cached_session(session_id)
-                if live is not None and live.context is not None:
-                    self.session = live
-                    count = 0
-                else:
-                    self.session = self._new_session(session_id or None)
-                    count = self.session.resume(session_id or None)
-                self._track(self.session)
+                count = self._resume_session(session_id)
                 self.ok(
                     rid,
                     {
@@ -528,21 +545,53 @@ class Gateway:
                 if self._is_running(source_id):
                     raise RuntimeError("Stop the running request before forking this session.")
                 source = self._cached_session(source_id)
+                source_messages = transcript_messages(source.context) if source and source.context is not None else None
+                message_index = params.get("message_index")
+                if message_index is None:
+                    points = fork_points(source) if source is not None else []
+                    if not points:
+                        snapshot = read_session(session_path(Path.cwd().resolve(), source_id)) or {}
+                        body = conversation_body(snapshot.get("messages", []))
+                        points = [
+                            {"message_index": index}
+                            for index, message in enumerate(body)
+                            if message.get("role") == "assistant"
+                        ]
+                    if not points:
+                        raise ValueError("This conversation has no assistant response to fork from.")
+                    message_index = points[-1]["message_index"]
                 snapshot = fork_session(
                     Path.cwd().resolve(),
                     source_id,
-                    int(params.get("message_index", -1)),
+                    int(message_index),
                     # Fork points are indices into the transcript, so fork from it.
-                    messages=transcript_messages(source.context) if source and source.context is not None else None,
+                    messages=source_messages,
                 )
-                self.session = self._new_session(str(snapshot["session_id"]))
-                self.session.resume(str(snapshot["session_id"]))
-                self._track(self.session)
+                self._resume_session(str(snapshot["session_id"]))
                 self.ok(
                     rid,
                     {
                         "history": session_history(self.session),
                         "info": self.session_info(),
+                        "tree": session_tree(Path.cwd().resolve(), self.session.session_id),
+                    },
+                )
+            elif method == "session.backward":
+                tree = session_tree(Path.cwd().resolve(), self.session.session_id)
+                current = next(
+                    (node for node in tree.get("nodes", []) if node.get("id") == self.session.session_id),
+                    None,
+                )
+                parent = str(current.get("parent") or "") if isinstance(current, dict) else ""
+                if not parent:
+                    raise ValueError("This conversation is already at the root branch.")
+                self._resume_session(parent)
+                self.ok(
+                    rid,
+                    {
+                        "history": session_history(self.session),
+                        "info": self.session_info(),
+                        "progress": self.session.progress(),
                         "tree": session_tree(Path.cwd().resolve(), self.session.session_id),
                     },
                 )

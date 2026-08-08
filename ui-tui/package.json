@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx src/entry.tsx",
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/menu.test.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

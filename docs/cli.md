@@ -60,41 +60,43 @@ the fastest way to tell a Friday problem from a Feishu one. See
 [Phone Bridge](im-feishu.md).
 
 Top-level `friday reset` requires confirmation and clears global Friday state.
-Interactive `/reset` clears only the current project's sessions, checkpoints,
-tool artifacts, and traces.
 
 Top-level `goal`, `compact`, `context`, `progress`, `resume`, `approve`, and
-`reject` operate on persisted sessions, so they have the same behavior as their
-chat/TUI counterparts. Use `--session <id>` when the latest session is not the
-one you want.
+`reject` operate on persisted sessions. Use `--session <id>` when the latest
+session is not the one you want.
 
-Slash commands in chat and TUI:
+TUI slash commands:
 
 ```text
 /help
 /new
-/model [id]
-/thinking [level]
+/login
+/model
 /memory [help|status|list|search|add|update|remove|consolidate]
 /context
-/progress
-/trace
+/trace on|off
+/phone [on|off]
 /compact
+/clear
 /goal <task>
 /resume
-/session list|rename|delete
-/undo [checkpoint-id]
-/permission [manual|auto|bypass]
-/approve
-/approve session
-/reject
-/reject use another approach
-/reset
+/permission
+/fork
+/backward
 /exit
 ```
 
-`/phone [on|off]` switches the Feishu bridge from the TUI only; the plain CLI
-chat does not expose it. See [Phone Bridge](im-feishu.md).
+Typing `/` opens prefix-filtered command completion. `/login`, `/model`,
+`/resume`, and `/permission` use searchable Up/Down pickers; Enter confirms and
+Esc returns to the parent picker. `/model` selects the model first and then
+offers only the thinking levels that model actually supports. `/resume` can
+also delete a selected saved conversation. Press Esc twice while Friday is
+working to stop the current response.
+
+`/clear` deletes the current saved conversation and starts fresh. `/fork`
+creates a branch from the latest Friday response, while `/backward` returns to
+its parent. `/phone [on|off]` switches the Feishu bridge from the TUI only; the
+plain CLI chat does not expose it. See [Phone Bridge](im-feishu.md).
 
 Permission flags:
 

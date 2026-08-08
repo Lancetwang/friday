@@ -42,7 +42,8 @@ The audit surface emphasizes status, duration, provider token usage, cache
 usage, tool arguments, and tool results; message bodies stay collapsed as raw
 evidence instead of being rendered as a second chat transcript. Node and flow
 events remain on disk for evaluation but do not clutter the human view.
-`/trace` opens the same UI from chat or TUI.
+In the TUI, `/trace on` starts the same UI in the background and prints its
+local URL; `/trace off` stops it without interrupting the conversation.
 
 The analyst automatically receives the same bounded, redacted event projection
 that the Workbench exposes through **Load audit evidence**, including public

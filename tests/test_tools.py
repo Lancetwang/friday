@@ -998,10 +998,44 @@ class ResetTests(unittest.TestCase):
             self.assertEqual(config.context_window, 200000)
             self.assertEqual(config.max_output_tokens, 4096)
 
-    def test_default_model_budget_is_300k_with_64k_output(self) -> None:
+    def test_default_model_budget_is_1m_with_64k_output(self) -> None:
         self.assertEqual(DEFAULT_MODEL_CONFIG.context_window, 1_000_000)
         self.assertEqual(DEFAULT_MODEL_CONFIG.max_output_tokens, 65536)
         self.assertEqual(DEFAULT_MODEL_CONFIG.run_token_budget, 40000000)
+
+    def test_legacy_353k_model_configs_are_migrated_to_1m(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            home = Path(tmp) / "home"
+            user_dir = home / ".friday"
+            user_dir.mkdir(parents=True)
+            (user_dir / "config.json").write_text(
+                json.dumps({"context_window": 353000}), encoding="utf-8"
+            )
+            (user_dir / "models.json").write_text(
+                json.dumps(
+                    {
+                        "active": "legacy",
+                        "profiles": [
+                            {
+                                "id": "legacy",
+                                "name": "Legacy",
+                                "provider": "deepseek",
+                                "model": "deepseek-v4-flash",
+                                "base_url": "https://api.deepseek.com",
+                                "context_window": 353000,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            catalog = load_model_catalog(root, home=home)
+            config = load_model_config(root, home=home)
+
+        self.assertEqual(catalog["profiles"][0]["context_window"], 1_000_000)
+        self.assertEqual(config.context_window, 1_000_000)
 
     def test_no_guard_reads_the_run_token_budget(self) -> None:
         """The field survives for old config files; nothing may enforce it.

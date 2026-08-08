@@ -125,6 +125,15 @@ def start_trace_server(*, port: int = 8765, open_browser: bool = True) -> tuple[
     return server, url
 
 
+def stop_trace_server() -> bool:
+    with _SERVER_LOCK:
+        server = _SERVER
+    if server is None:
+        return False
+    _close_trace_server(server)
+    return True
+
+
 def serve_trace_ui(*, port: int = 8765, open_browser: bool = True) -> None:
     server, url = start_trace_server(port=port, open_browser=open_browser)
     print(f"Friday Trace Workbench: {url}")

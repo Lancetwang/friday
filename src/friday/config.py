@@ -32,6 +32,7 @@ class ModelConfig:
 
 
 DEFAULT_MODEL_CONFIG = ModelConfig()
+_LEGACY_CONTEXT_WINDOW = 353_000
 CONFIG_FIELDS = {
     "provider",
     "model",
@@ -819,6 +820,8 @@ def _load_base_config(workspace: Path, *, home: Path | None = None) -> ModelConf
         project_state_dir(workspace, home) / "config.json",
     ):
         values.update(_read_config(path))
+    if values.get("context_window") == _LEGACY_CONTEXT_WINDOW:
+        values["context_window"] = DEFAULT_MODEL_CONFIG.context_window
     return _validate(values)
 
 
@@ -959,6 +962,8 @@ def _validate_profile(value: dict[str, Any], base: ModelConfig) -> dict[str, Any
     numbers: dict[str, int] = {}
     for key in ("context_window", "max_output_tokens", "run_token_budget"):
         raw = value.get(key, getattr(base, key))
+        if key == "context_window" and raw == _LEGACY_CONTEXT_WINDOW:
+            raw = base.context_window
         if not isinstance(raw, int) or isinstance(raw, bool) or raw < 1:
             raise ValueError(f"Model configuration '{key}' must be a positive integer.")
         numbers[key] = raw

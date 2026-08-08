@@ -4,6 +4,18 @@ import TextInput from 'ink-text-input'
 
 import type { GatewayClient } from './gatewayClient.js'
 import { Markdown, type Theme } from './markdown.js'
+import {
+  COMMANDS,
+  CommandPalette,
+  PickerView,
+  commandChoices,
+  filteredOptions,
+  moveSelection,
+  selectedOption,
+  updateQuery,
+  type MenuOption,
+  type PickerMenu,
+} from './menu.js'
 import type { BridgeStatus, ContextCompaction, GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
 
 const theme: Theme = {
@@ -40,28 +52,59 @@ type ApprovalDecision = typeof APPROVAL_OPTIONS[number]['id']
 
 const HELP_TEXT = `# Friday commands
 
-| Command | What it does |
-| --- | --- |
-| \`/help\` | Show this command reference. |
-| \`/new\` | Start a new conversation in the current workspace. |
-| \`/memory [help]\` | Inspect or manage persistent memory. |
-| \`/model [id]\` | List configured models or switch the active model. |
-| \`/thinking [level]\` | Show or set the selected model's supported thinking level. Tab cycles it. |
-| \`/context\` | Print current context usage. |
-| \`/progress\` | Show the current objective and plan. |
-| \`/trace\` | Open the local Trace Workbench. |
-| \`/phone [on|off]\` | Show or switch whether Feishu can reach this workspace. |
-| \`/compact\` | Summarize the live conversation into a fresh context. |
-| \`/goal <text>\` | Loop until the verifier passes, blocks, needs approval, or is cancelled. |
-| \`/resume\` | Resume recent Friday session context. |
-| \`/session list|rename|delete\` | Manage saved conversations. |
-| \`/undo\` | Restore the workspace and conversation to before the latest Friday turn. |
-| \`/permission manual|auto|bypass\` | Choose how risky commands are reviewed. |
-| \`/approve\` | Open the pending approval choices. |
-| \`/reject\` | Open the pending approval choices with Reject selected. |
-| \`/reset\` | Clear Friday state for the current project. |
-| \`/exit\` | Close the TUI. \`/quit\` works too. |
-`
+${COMMANDS.map(command => `- \`${command.name}\` - ${command.detail}`).join('\n')}
+
+Type any command prefix after \`/\`, then use ↑/↓ and Enter.`
+
+type ModelProfile = {
+  api_key_configured: boolean
+  enabled: boolean
+  id: string
+  model: string
+  name: string
+  provider: string
+  thinking_options?: string[]
+  vision: boolean
+}
+
+type ModelProvider = {
+  api_key_configured: boolean
+  base_url: string
+  builtin: boolean
+  enabled: boolean
+  id: string
+  label: string
+}
+
+type ModelCatalog = {
+  active: string
+  profiles: ModelProfile[]
+  providers: ModelProvider[]
+}
+
+type HistoryItem = {
+  arguments?: unknown
+  kind: 'assistant' | 'tool' | 'user'
+  message_index?: number
+  metrics?: Message['metrics']
+  name?: string
+  status?: 'done' | 'failed' | 'running'
+  text: string
+  tool_call_id?: string
+}
+
+type SessionResult = {
+  count?: number
+  history: HistoryItem[]
+  info: SessionInfo
+  progress?: ProgressState
+}
+
+type CredentialInput = {
+  parent: PickerMenu
+  provider: ModelProvider
+  value: string
+}
 
 export function App({ gateway }: { gateway: GatewayClient }) {
   const app = useApp()
@@ -74,11 +117,14 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   infoRef.current = info
   const [progress, setProgress] = useState<ProgressState | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>([])
-  const [resumePicker, setResumePicker] = useState<ResumePicker | null>(null)
+  const [menu, setMenu] = useState<PickerMenu | null>(null)
+  const [credential, setCredential] = useState<CredentialInput | null>(null)
+  const [commandIndex, setCommandIndex] = useState(0)
   const [approvalPicker, setApprovalPicker] = useState<ApprovalPicker | null>(null)
   const [streaming, setStreaming] = useState('')
   const [activity, setActivity] = useState('')
   const [now, setNow] = useState(Date.now())
+  const lastEscape = useRef(0)
 
   useEffect(() => {
     const onEvent = (event: GatewayEvent) => {
@@ -87,6 +133,8 @@ export function App({ gateway }: { gateway: GatewayClient }) {
           setInfo(value)
           setProgress(value.progress ?? null)
         })
+      } else if (event.type === 'session.info') {
+        setInfo(event.payload)
       } else if (event.type === 'message.delta') {
         setStreaming(text => text + event.payload.text)
         setMessages(items => closeOpenThinking(items, activeTurn.current))
@@ -99,9 +147,19 @@ export function App({ gateway }: { gateway: GatewayClient }) {
           setMessages(items => [...items, { role: 'system', text: cutShort }])
         }
         activeTurn.current = null
+        lastEscape.current = 0
         setProgress(event.payload.progress ?? null)
         setStreaming('')
         setBusy(false)
+        setActivity('')
+      } else if (event.type === 'message.cancelled') {
+        const turnId = activeTurn.current
+        activeTurn.current = null
+        lastEscape.current = 0
+        setMessages(items => closeOpenThinking(items, turnId))
+        setStreaming('')
+        setBusy(false)
+        setActivity('Response stopped.')
       } else if (event.type === 'reasoning.delta') {
         // Thinking effort "off" is a promise to hide reasoning: some providers
         // still stream it, so honor the choice here instead of rendering it.
@@ -194,38 +252,69 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       }
       return
     }
-    if (resumePicker) {
-      if (key.upArrow || char === 'k') {
-        setResumePicker(picker => picker && { ...picker, index: Math.max(0, picker.index - 1) })
-      } else if (key.downArrow || char === 'j') {
-        setResumePicker(picker => picker && { ...picker, index: Math.min(picker.choices.length - 1, picker.index + 1) })
-      } else if (key.return) {
-        const choice = resumePicker.choices[resumePicker.index]
-        if (choice) {
-          setResumePicker(null)
-          void gateway.request<{ count: number; progress?: ProgressState }>('session.resume', { id: choice.id }).then(result => {
-            setProgress(result.progress ?? null)
-            setMessages(items => [...items, { role: 'system', text: `Resumed session (${result.count} turns): ${choice.objective || choice.user}` }])
-          })
-        }
-      } else if (key.escape) {
-        setResumePicker(null)
+    if (credential) {
+      if (key.escape) {
+        setCredential(null)
+        setMenu(credential.parent)
       }
       return
     }
-    if (key.tab && !busy && info?.thinking_supported) {
-      const efforts = info.thinking_options || []
-      const current = efforts.indexOf(info.thinking_effort)
-      const effort = efforts[(current + 1) % efforts.length]
-      if (!effort) return
-      void gateway.request<{ info: SessionInfo }>('thinking.set', { effort })
-        .then(result => setInfo(result.info))
-        .catch(error => setActivity(error.message))
+    if (menu) {
+      if (key.upArrow) {
+        setMenu(current => current && moveSelection(current, -1))
+      } else if (key.downArrow) {
+        setMenu(current => current && moveSelection(current, 1))
+      } else if (key.escape) {
+        setMenu(menu.parent ?? null)
+      } else if (menu.kind === 'resume' && ((key.ctrl && char.toLowerCase() === 'd') || (key.delete && !menu.query))) {
+        const choice = selectedOption(menu)?.data as ResumeChoice | undefined
+        if (choice) {
+          setMenu({
+            index: 1,
+            kind: 'resume-delete',
+            options: [
+              { data: choice, id: 'delete', label: `Delete ${resumeLabel(choice)}` },
+              { id: 'cancel', label: 'Cancel' },
+            ],
+            parent: menu,
+            query: '',
+            title: 'Delete conversation?',
+          })
+        }
+      }
       return
+    }
+    if (!busy && input.startsWith('/')) {
+      const choices = commandChoices(input)
+      if (key.upArrow && choices.length) {
+        setCommandIndex(index => (index - 1 + choices.length) % choices.length)
+        return
+      }
+      if (key.downArrow && choices.length) {
+        setCommandIndex(index => (index + 1) % choices.length)
+        return
+      }
     }
     if (key.ctrl && (char.toLowerCase() === 'o' || char === '\u000f')) {
       setToolsExpanded(value => !value)
       setTimeout(() => setInput(value => value.endsWith('o') ? value.slice(0, -1) : value), 0)
+      return
+    }
+    if (key.escape && busy) {
+      const pressed = Date.now()
+      if (pressed - lastEscape.current <= 750) {
+        lastEscape.current = 0
+        setActivity('Stopping...')
+        void gateway.request('chat.cancel').catch(error => setActivity(error.message))
+      } else {
+        lastEscape.current = pressed
+        setActivity('Press Esc again to stop the response.')
+      }
+      return
+    }
+    if (key.escape && input) {
+      setInput('')
+      setCommandIndex(0)
       return
     }
     if (key.ctrl && char.toLowerCase() === 'c') {
@@ -238,17 +327,29 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     }
   })
 
-  const commandContext = useMemo(
-    () => ({ app, gateway, info, setApprovalPicker, setInfo, setMessages, setProgress, setResumePicker }),
-    [app, gateway, info]
-  )
+  const suggestions = useMemo(() => commandChoices(input), [input])
 
   const submit = (value: string) => {
     const text = cleanInput(value)
     if (!text || busy) {
       return
     }
+    if (text.startsWith('/')) {
+      const head = text.split(/\s+/, 1)[0]!.toLowerCase()
+      if (!COMMANDS.some(command => command.name === head) && suggestions.length) {
+        const selected = suggestions[Math.min(commandIndex, suggestions.length - 1)]!
+        if (['/goal', '/memory', '/phone', '/trace'].includes(selected.name)) {
+          setInput(`${selected.name} `)
+          setCommandIndex(0)
+          return
+        }
+        setInput('')
+        executeCommand(selected.name)
+        return
+      }
+    }
     setInput('')
+    setCommandIndex(0)
     const goal = goalText(text)
     if (goal != null) {
       if (!goal) {
@@ -256,6 +357,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         return
       }
       setBusy(true)
+      lastEscape.current = 0
       setStreaming('')
       const turnId = `turn-${Date.now()}`
       activeTurn.current = turnId
@@ -268,11 +370,12 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       })
       return
     }
-    if (runCommand(text, commandContext)) {
+    if (executeCommand(text)) {
       return
     }
 
     setBusy(true)
+    lastEscape.current = 0
     setStreaming('')
     const turnId = `turn-${Date.now()}`
     activeTurn.current = turnId
@@ -292,16 +395,280 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         {messages.slice(-10).map((message, index) => <MessageLine toolsExpanded={toolsExpanded} key={index} message={message} now={now} />)}
         {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} /> : null}
       </Box>
-      {resumePicker ? <ResumePickerView picker={resumePicker} /> : null}
+      {menu ? (
+        <PickerView
+          menu={menu}
+          onQuery={query => setMenu(current => current && updateQuery(current, query))}
+          onSubmit={() => void chooseMenu(menu)}
+          theme={theme}
+        />
+      ) : null}
+      {credential ? (
+        <CredentialInputView
+          credential={credential}
+          onChange={value => setCredential(current => current && { ...current, value })}
+          onSubmit={() => void saveCredential(credential)}
+        />
+      ) : null}
       {approvalPicker ? (
         <ApprovalPickerView
           onInstructionChange={instruction => setApprovalPicker(picker => picker && { ...picker, instruction })}
           picker={approvalPicker}
         />
       ) : null}
-      <Composer busy={busy || Boolean(resumePicker) || Boolean(approvalPicker)} input={input} onChange={setInput} onSubmit={submit} />
+      {!menu && !credential && !approvalPicker ? (
+        <>
+          <Composer
+            busy={busy}
+            input={input}
+            onChange={value => {
+              setInput(value)
+              setCommandIndex(0)
+            }}
+            onSubmit={submit}
+          />
+          {!busy ? <CommandPalette choices={suggestions} index={commandIndex} theme={theme} /> : null}
+        </>
+      ) : null}
     </Box>
   )
+
+  function appendSystem(text: string) {
+    setMessages(items => [...items, { role: 'system', text }])
+  }
+
+  function requestError(error: unknown) {
+    const text = error instanceof Error ? error.message : String(error)
+    setActivity(text)
+    appendSystem(text)
+  }
+
+  function applySession(result: SessionResult) {
+    activeTurn.current = null
+    setInfo(result.info)
+    setProgress(result.progress ?? result.info.progress ?? null)
+    setMessages(historyToMessages(result.history ?? []))
+    setStreaming('')
+    setBusy(false)
+  }
+
+  function openLoginMenu() {
+    setActivity('Loading providers...')
+    void gateway.request<ModelCatalog>('model.list').then(catalog => {
+      setActivity('')
+      const providers = catalog.providers.filter(provider => provider.builtin)
+      setMenu({
+        index: 0,
+        kind: 'login',
+        options: providers.map(provider => ({
+          data: provider,
+          detail: provider.api_key_configured ? 'configured' : '',
+          id: provider.id,
+          keywords: provider.label,
+          label: provider.label,
+        })),
+        query: '',
+        title: 'Log in to a model provider',
+      })
+    }).catch(requestError)
+  }
+
+  function openModelMenu() {
+    setActivity('Loading models...')
+    void gateway.request<ModelCatalog>('model.list').then(catalog => {
+      setActivity('')
+      const profiles = catalog.profiles.filter(profile => profile.api_key_configured && profile.enabled)
+      if (!profiles.length) {
+        appendSystem('No configured models. Run /login first.')
+        return
+      }
+      setMenu({
+        index: Math.max(0, profiles.findIndex(profile => profile.id === catalog.active)),
+        kind: 'model',
+        options: profiles.map(profile => ({
+          data: profile,
+          detail: `${profile.provider}${profile.vision ? ' · vision' : ''}${profile.id === catalog.active ? ' · current' : ''}`,
+          id: profile.id,
+          keywords: `${profile.provider} ${profile.name}`,
+          label: `${profile.model} [${profile.provider}]`,
+        })),
+        query: '',
+        title: 'Choose a model',
+      })
+    }).catch(requestError)
+  }
+
+  function openResumeMenu() {
+    setActivity('Loading conversations...')
+    void gateway.request<{ choices: ResumeChoice[] }>('session.resume_choices').then(result => {
+      setActivity('')
+      if (!result.choices.length) {
+        appendSystem('No saved conversations to resume.')
+        setMenu(null)
+        return
+      }
+      setMenu(resumeMenu(result.choices, infoRef.current?.session_id))
+    }).catch(requestError)
+  }
+
+  function openPermissionMenu() {
+    const options: MenuOption[] = [
+      { detail: 'ask before risky commands', id: 'manual', label: 'Request approval' },
+      { detail: 'let Friday review risky commands', id: 'auto', label: 'Friday decides' },
+      { detail: 'run without approval', id: 'bypass', label: 'Full access' },
+    ]
+    setMenu({
+      index: Math.max(0, options.findIndex(option => option.id === info?.permission_mode)),
+      kind: 'permission',
+      options,
+      query: '',
+      title: 'Choose permission mode',
+    })
+  }
+
+  async function chooseMenu(current: PickerMenu) {
+    const option = selectedOption(current)
+    if (!option) return
+    try {
+      if (current.kind === 'login') {
+        setCredential({ parent: current, provider: option.data as ModelProvider, value: '' })
+        setMenu(null)
+      } else if (current.kind === 'model') {
+        const profile = option.data as ModelProfile
+        const efforts = profile.thinking_options ?? []
+        if (efforts.length) {
+          setMenu({
+            index: Math.max(0, efforts.indexOf(info?.thinking_effort || '')),
+            kind: 'thinking',
+            options: efforts.map(effort => ({ data: { effort, profile }, id: effort, label: thinkingLabel(effort) })),
+            parent: current,
+            query: '',
+            title: `Thinking for ${profile.model}`,
+          })
+        } else {
+          await selectModel(profile)
+        }
+      } else if (current.kind === 'thinking') {
+        const selection = option.data as { effort: string; profile: ModelProfile }
+        await selectModel(selection.profile, selection.effort)
+      } else if (current.kind === 'permission') {
+        const result = await gateway.request<{ permission_mode: SessionInfo['permission_mode'] }>('permission.set', { mode: option.id })
+        setInfo(value => value && { ...value, permission_mode: result.permission_mode })
+        setMenu(null)
+        appendSystem(`Permission mode: ${permissionLabel(result.permission_mode)}.`)
+      } else if (current.kind === 'resume') {
+        const choice = option.data as ResumeChoice
+        const result = await gateway.request<SessionResult>('session.resume', { id: choice.id })
+        setMenu(null)
+        applySession(result)
+      } else if (current.kind === 'resume-delete') {
+        if (option.id === 'cancel') {
+          setMenu(current.parent ?? null)
+          return
+        }
+        const choice = option.data as ResumeChoice
+        const result = await gateway.request<SessionResult>('session.delete', { id: choice.id })
+        applySession(result)
+        openResumeMenu()
+      }
+    } catch (error) {
+      requestError(error)
+    }
+  }
+
+  async function saveCredential(current: CredentialInput) {
+    const apiKey = current.value.trim()
+    if (!apiKey) return
+    setActivity(`Connecting to ${current.provider.label}...`)
+    try {
+      const result = await gateway.request<{ catalog: ModelCatalog; info: SessionInfo }>('model.save', {
+        activate: false,
+        api_key: apiKey,
+        profile: {
+          base_url: current.provider.base_url,
+          id: current.provider.id,
+          model: '',
+          name: current.provider.label,
+          provider: current.provider.id,
+        },
+      })
+      setInfo(result.info)
+      setCredential(null)
+      setActivity('')
+      appendSystem(`${current.provider.label} is configured. Use /model to choose a model.`)
+    } catch (error) {
+      requestError(error)
+    }
+  }
+
+  async function selectModel(profile: ModelProfile, effort?: string) {
+    setActivity(`Selecting ${profile.model}...`)
+    const selected = await gateway.request<{ info: SessionInfo }>('model.select', { id: profile.id })
+    let nextInfo = selected.info
+    if (effort) {
+      nextInfo = (await gateway.request<{ info: SessionInfo }>('thinking.set', { effort })).info
+    }
+    setInfo(nextInfo)
+    setMenu(null)
+    setActivity('')
+    appendSystem(`Model: ${nextInfo.model}${nextInfo.thinking_effort ? ` · thinking ${nextInfo.thinking_effort}` : ''}.`)
+  }
+
+  function executeCommand(text: string) {
+    if (!text.startsWith('/')) return false
+    const command = text.split(/\s+/, 1)[0]!.toLowerCase()
+    const argument = text.slice(command.length).trim()
+    if (command === '/exit') {
+      gateway.kill()
+      app.exit()
+    } else if (command === '/help') {
+      appendSystem(HELP_TEXT)
+    } else if (command === '/new') {
+      void gateway.request<SessionResult>('session.new').then(applySession).catch(requestError)
+    } else if (command === '/login') {
+      openLoginMenu()
+    } else if (command === '/model') {
+      openModelMenu()
+    } else if (command === '/memory') {
+      void gateway.request<{ text: string }>('memory.command', { command: argument }).then(result => appendSystem(result.text)).catch(requestError)
+    } else if (command === '/context') {
+      void gateway.request<{ text: string }>('context.get').then(result => appendSystem(result.text)).catch(requestError)
+    } else if (command === '/trace') {
+      const mode = argument.toLowerCase()
+      if (mode === 'on') {
+        void gateway.request<{ url: string }>('trace.serve').then(result => appendSystem(`Trace is running in the background: ${result.url}`)).catch(requestError)
+      } else if (mode === 'off') {
+        void gateway.request<{ stopped: boolean }>('trace.stop').then(result => appendSystem(result.stopped ? 'Trace stopped.' : 'Trace was not running.')).catch(requestError)
+      } else {
+        appendSystem('Usage: /trace on | /trace off')
+      }
+    } else if (command === '/phone') {
+      const mode = argument.toLowerCase()
+      const method = mode === '' ? 'bridge.status' : mode === 'on' ? 'bridge.start' : mode === 'off' ? 'bridge.stop' : ''
+      if (!method) appendSystem('Usage: /phone [on | off]')
+      else void gateway.request<BridgeStatus>(method).then(status => appendSystem(formatBridge(status))).catch(requestError)
+    } else if (command === '/compact') {
+      void gateway.request<{ text: string }>('session.compact').then(result => appendSystem(`Compacted conversation:\n\n${result.text}`)).catch(requestError)
+    } else if (command === '/clear') {
+      const id = info?.session_id
+      if (!id) appendSystem('No active conversation to clear.')
+      else void gateway.request<SessionResult>('session.delete', { id }).then(applySession).catch(requestError)
+    } else if (command === '/resume') {
+      openResumeMenu()
+    } else if (command === '/permission') {
+      openPermissionMenu()
+    } else if (command === '/fork') {
+      void gateway.request<SessionResult>('session.fork').then(result => {
+        applySession(result)
+        appendSystem('Forked from the latest Friday response.')
+      }).catch(requestError)
+    } else if (command === '/backward') {
+      void gateway.request<SessionResult>('session.backward').then(applySession).catch(requestError)
+    } else {
+      appendSystem(`Unknown command: ${command}. Try /help.`)
+    }
+    return true
+  }
 
   function handleApprovalResult(result: unknown, rejected: boolean) {
     if (isContinuedApproval(result)) {
@@ -350,178 +717,6 @@ function isContinuedApproval(result: unknown) {
   return Boolean(result && typeof result === 'object' && (result as { continued?: unknown }).continued)
 }
 
-function runCommand(
-  text: string,
-  {
-    app,
-    gateway,
-    info,
-    setApprovalPicker,
-    setInfo,
-    setMessages,
-    setProgress,
-    setResumePicker,
-  }: {
-    app: ReturnType<typeof useApp>
-    gateway: GatewayClient
-    info: SessionInfo | null
-    setApprovalPicker: React.Dispatch<React.SetStateAction<ApprovalPicker | null>>
-    setInfo: React.Dispatch<React.SetStateAction<SessionInfo | null>>
-    setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>
-    setProgress: React.Dispatch<React.SetStateAction<ProgressState | null>>
-    setResumePicker: React.Dispatch<React.SetStateAction<ResumePicker | null>>
-  }
-) {
-  if (!text.startsWith('/')) {
-    return false
-  }
-  const command = text.split(/\s+/, 1)[0].toLowerCase()
-  if (command.startsWith('/exit') || command.startsWith('/quit')) {
-    gateway.kill()
-    app.exit()
-  } else if (command.startsWith('/help')) {
-    setMessages(items => [...items, { role: 'system', text: HELP_TEXT }])
-  } else if (command === '/new') {
-    void gateway.request('session.new').then(() => {
-      setProgress(null)
-      setMessages([])
-    })
-  } else if (command.startsWith('/memory')) {
-    void gateway.request<{ text: string }>('memory.command', { command: text.slice('/memory'.length).trim() }).then(result =>
-      setMessages(items => [...items, { role: 'system', text: result.text }])
-    )
-  } else if (text.trim().toLowerCase() === '/model') {
-    void gateway.request<{
-      active: string
-      profiles: Array<{ api_key_configured: boolean; enabled: boolean; id: string; model: string; name: string; provider: string; vision: boolean }>
-    }>('model.list').then(result => {
-      const lines = result.profiles.map(profile => {
-        const active = profile.id === result.active ? '*' : ' '
-        const vision = profile.vision ? ' [vision]' : ''
-        const state = !profile.enabled && profile.api_key_configured
-          ? 'disabled'
-          : profile.api_key_configured ? 'key configured' : 'key missing'
-        return `${active} ${profile.id}: ${profile.name} (${profile.provider}/${profile.model})${vision} - ${state}`
-      })
-      setMessages(items => [...items, { role: 'system', text: lines.join('\n') }])
-    })
-  } else if (command === '/model') {
-    const id = text.slice('/model'.length).trim()
-    void gateway.request<{ info: SessionInfo }>('model.select', { id }).then(result => {
-      setInfo(result.info)
-      setMessages(items => [...items, { role: 'system', text: `Model: ${result.info.model}` }])
-    })
-  } else if (command === '/thinking') {
-    const effort = text.slice('/thinking'.length).trim().toLowerCase()
-    if (!effort) {
-      const options = info?.thinking_options || []
-      const detail = options.length ? `Available: ${options.join(', ')}` : 'This model has no configurable thinking level.'
-      setMessages(items => [...items, { role: 'system', text: `Thinking: ${info?.thinking_effort || 'provider default'}\n${detail}` }])
-    } else {
-      void gateway.request<{ info: SessionInfo }>('thinking.set', { effort })
-        .then(result => {
-          setInfo(result.info)
-          setMessages(items => [...items, { role: 'system', text: `Thinking effort: ${result.info.thinking_effort}` }])
-        })
-        .catch(error => setMessages(items => [...items, { role: 'system', text: error.message }]))
-    }
-  } else if (command.startsWith('/context')) {
-    void gateway.request<{ text: string }>('context.get').then(result =>
-      setMessages(items => [...items, { role: 'system', text: result.text }])
-    )
-  } else if (command.startsWith('/progress')) {
-    void gateway.request<{ progress: ProgressState }>('progress.get').then(result => {
-      setProgress(result.progress)
-      setMessages(items => [...items, { role: 'system', text: formatProgress(result.progress) }])
-    })
-  } else if (command.startsWith('/trace')) {
-    void gateway.request<{ url: string }>('trace.serve').then(result =>
-      setMessages(items => [...items, { role: 'system', text: `Trace Workbench: ${result.url}` }])
-    )
-  } else if (command === '/phone') {
-    const argument = text.slice('/phone'.length).trim().toLowerCase()
-    const method = argument === '' ? 'bridge.status' : argument === 'on' ? 'bridge.start' : argument === 'off' ? 'bridge.stop' : ''
-    if (!method) {
-      setMessages(items => [...items, { role: 'system', text: 'Usage: /phone [on|off]' }])
-    } else {
-      void gateway.request<BridgeStatus>(method).then(status =>
-        setMessages(items => [...items, { role: 'system', text: formatBridge(status) }])
-      )
-    }
-  } else if (command.startsWith('/compact')) {
-    void gateway.request<{ text: string }>('session.compact').then(result =>
-      setMessages(items => [...items, { role: 'system', text: `Compacted conversation:\n\n${result.text}` }])
-    )
-  } else if (command.startsWith('/resume')) {
-    void gateway.request<{ choices: ResumeChoice[] }>('session.resume_choices').then(result => {
-      if (result.choices.length) {
-        setResumePicker({ choices: result.choices, index: 0 })
-      } else {
-        setMessages(items => [...items, { role: 'system', text: 'No recent sessions to resume.' }])
-      }
-    })
-  } else if (command === '/session list') {
-    void gateway.request<{ choices: ResumeChoice[] }>('session.resume_choices').then(result => {
-      const lines = result.choices.map(choice =>
-        `${choice.id}\t${choice.title || choice.objective || choice.user || 'Conversation'}`
-      )
-      setMessages(items => [...items, { role: 'system', text: lines.length ? lines.join('\n') : 'No saved conversations.' }])
-    })
-  } else if (command.startsWith('/session rename ')) {
-    const parts = text.trim().split(/\s+/, 4)
-    const title = text.trim().split(/\s+/).slice(3).join(' ')
-    if (parts.length < 4 || !title) {
-      setMessages(items => [...items, { role: 'system', text: 'Usage: /session rename <id> <title>' }])
-    } else {
-      void gateway.request<{ title: string }>('session.rename', { id: parts[2], title }).then(result =>
-        setMessages(items => [...items, { role: 'system', text: `Renamed ${parts[2]}: ${result.title}` }])
-      )
-    }
-  } else if (command.startsWith('/session delete ')) {
-    const id = text.slice('/session delete '.length).trim()
-    void gateway.request('session.delete', { id }).then(() =>
-      setMessages(items => [...items, { role: 'system', text: `Deleted session ${id}.` }])
-    )
-  } else if (command.startsWith('/undo')) {
-    const id = text.slice('/undo'.length).trim() || undefined
-    void gateway.request<{ changed_paths: string[]; progress: ProgressState; user: string }>('checkpoint.undo', { id }).then(result => {
-      setProgress(result.progress)
-      setMessages(items => [
-        ...removeLastTurn(items),
-        {
-          role: 'system',
-          text: `Undid: ${result.user || 'latest Friday turn'}\nRestored ${result.changed_paths.length} workspace path${result.changed_paths.length === 1 ? '' : 's'}.`
-        }
-      ])
-    }).catch(error =>
-      setMessages(items => [...items, { role: 'system', text: error.message }])
-    )
-  } else if (command.startsWith('/permission')) {
-    const requested = text.slice('/permission'.length).trim().toLowerCase()
-    const mode = requested === 'full' ? 'bypass' : requested === 'ask' ? 'manual' : requested
-    if (!['manual', 'auto', 'bypass'].includes(mode)) {
-      setMessages(items => [...items, { role: 'system', text: 'Usage: /permission manual|auto|bypass' }])
-    } else {
-      void gateway.request<{ permission_mode: SessionInfo['permission_mode'] }>('permission.set', { mode }).then(result => {
-        setInfo(current => current && { ...current, permission_mode: result.permission_mode })
-        setMessages(items => [...items, { role: 'system', text: `Permission mode: ${result.permission_mode}` }])
-      })
-    }
-  } else if (command.startsWith('/approve')) {
-    openApprovalPicker(gateway, setApprovalPicker, setMessages, 'once')
-  } else if (command.startsWith('/reject')) {
-    openApprovalPicker(gateway, setApprovalPicker, setMessages, 'reject')
-  } else if (command.startsWith('/reset')) {
-    void gateway.request('session.reset').then(() => {
-      setProgress(null)
-      setMessages(items => [...items, { role: 'system', text: 'Reset Friday for this project.' }])
-    })
-  } else {
-    setMessages(items => [...items, { role: 'system', text: `Unknown command: ${command}. Try /help.` }])
-  }
-  return true
-}
-
 type UiMessage = Message & {
   thinking?: ThinkingBlock[]
   tools?: ToolRun[]
@@ -545,16 +740,12 @@ type ResumeChoice = {
   assistant: string
   id: string
   objective: string
+  running?: boolean
   status: string
   time: string
   title: string
   turns: string
   user: string
-}
-
-type ResumePicker = {
-  choices: ResumeChoice[]
-  index: number
 }
 
 type Approval = {
@@ -580,6 +771,78 @@ type ToolRun = {
   id: string
   name: string
   startMs: number
+}
+
+function historyToMessages(history: HistoryItem[]) {
+  const messages: UiMessage[] = []
+  let turnId = ''
+  for (const [index, item] of history.entries()) {
+    if (item.kind === 'user') {
+      turnId = `history-${item.message_index ?? index}`
+      messages.push({ role: 'user', text: item.text, turnId })
+    } else if (item.kind === 'tool') {
+      const owner = turnIndex(messages, turnId || null)
+      if (owner === -1) continue
+      const timestamp = Date.now()
+      const message = messages[owner]!
+      messages[owner] = {
+        ...message,
+        tools: [
+          ...(message.tools ?? []),
+          {
+            arguments: item.arguments,
+            content: item.text,
+            endMs: item.status === 'running' ? undefined : timestamp,
+            error: item.status === 'failed',
+            id: item.tool_call_id || `history-tool-${index}`,
+            name: item.name || 'Tool',
+            startMs: timestamp,
+          },
+        ],
+      }
+    } else {
+      messages.push({ metrics: item.metrics, role: 'assistant', text: item.text })
+    }
+  }
+  return messages
+}
+
+function resumeLabel(choice: ResumeChoice) {
+  return choice.title || choice.objective || choice.user || 'Conversation'
+}
+
+function resumeMenu(choices: ResumeChoice[], currentId?: string): PickerMenu {
+  return {
+    footer: 'Ctrl+D or Delete removes the selected conversation',
+    index: Math.max(0, choices.findIndex(choice => choice.id === currentId)),
+    kind: 'resume',
+    options: choices.map(choice => ({
+      data: choice,
+      detail: `${choice.time || 'recent'} · ${choice.turns} turns · ${choice.running ? 'running' : choice.status || 'saved'}${choice.id === currentId ? ' · current' : ''}`,
+      id: choice.id,
+      keywords: `${choice.title} ${choice.objective} ${choice.user}`,
+      label: resumeLabel(choice),
+    })),
+    query: '',
+    title: 'Resume conversation',
+  }
+}
+
+function thinkingLabel(effort: string) {
+  const labels: Record<string, string> = {
+    max: 'Maximum',
+    medium: 'Medium',
+    minimal: 'Minimal',
+    none: 'Off',
+    off: 'Off',
+    on: 'On',
+    xhigh: 'Extra high',
+  }
+  return labels[effort] || effort[0]!.toUpperCase() + effort.slice(1)
+}
+
+function permissionLabel(mode: SessionInfo['permission_mode']) {
+  return mode === 'bypass' ? 'Full access' : mode === 'auto' ? 'Friday decides' : 'Request approval'
 }
 
 function addToolRun(messages: UiMessage[], turnId: string | null, run: ToolRun) {
@@ -698,7 +961,7 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
       <Box>
         <Text color={theme.accent}>●</Text>
         <Text bold> Friday</Text>
-        <Text color={theme.dim}>  agent · /help commands · Ctrl+O tools{info?.thinking_supported ? ' · Tab thinking' : ''}</Text>
+        <Text color={theme.dim}>  agent · /help commands · Ctrl+O details · Esc Esc stop</Text>
       </Box>
       <Text color={theme.dim} wrap="truncate-end">{cwd}</Text>
       {progress?.objective ? <ProgressLine progress={progress} /> : null}
@@ -709,11 +972,6 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
       </Box>
     </Box>
   )
-}
-
-function removeLastTurn(messages: UiMessage[]) {
-  const index = turnIndex(messages, null)
-  return index === -1 ? messages : messages.slice(0, index)
 }
 
 function ProgressLine({ progress }: { progress: ProgressState }) {
@@ -830,29 +1088,6 @@ function ToolPanel({ toolsExpanded, now, runs }: { toolsExpanded: boolean; now: 
   )
 }
 
-function ResumePickerView({ picker }: { picker: ResumePicker }) {
-  return (
-    <Box borderColor={theme.dim} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
-      <Text>
-        <Text bold color={theme.accent}>Resume session</Text>
-        <Text color={theme.dim}>  ↑↓ choose · enter confirm · esc cancel</Text>
-      </Text>
-      {picker.choices.map((choice, index) => {
-        const selected = index === picker.index
-        return (
-          <Box flexDirection="column" key={choice.id}>
-            <Text wrap="truncate-end">
-              <Text color={selected ? theme.accent : theme.dim}>{selected ? '❯ ' : '  '}</Text>
-              <Text color={selected ? undefined : theme.dim}>{choice.time || choice.id} · {choice.turns} turns · {choice.status || 'unknown'} · {choice.title || choice.objective || choice.user}</Text>
-            </Text>
-            {selected && choice.assistant ? <Text color={theme.dim} wrap="truncate-end">    {choice.assistant}</Text> : null}
-          </Box>
-        )
-      })}
-    </Box>
-  )
-}
-
 function ApprovalPickerView({ onInstructionChange, picker }: { onInstructionChange: (value: string) => void; picker: ApprovalPicker }) {
   const decision = APPROVAL_OPTIONS[picker.index]?.id
   return (
@@ -878,6 +1113,36 @@ function ApprovalPickerView({ onInstructionChange, picker }: { onInstructionChan
             value={picker.instruction}
           />
         </Box>
+      </Box>
+    </Box>
+  )
+}
+
+function CredentialInputView({
+  credential,
+  onChange,
+  onSubmit,
+}: {
+  credential: CredentialInput
+  onChange: (value: string) => void
+  onSubmit: () => void
+}) {
+  return (
+    <Box borderColor={theme.dim} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
+      <Text>
+        <Text bold color={theme.accent}>{credential.provider.label} API key</Text>
+        <Text color={theme.dim}>  enter save · esc back</Text>
+      </Text>
+      <Box>
+        <Text color={theme.dim}>key › </Text>
+        <TextInput
+          focus
+          mask="•"
+          onChange={onChange}
+          onSubmit={onSubmit}
+          placeholder="paste API key"
+          value={credential.value}
+        />
       </Box>
     </Box>
   )
@@ -927,21 +1192,6 @@ function approvalFromContent(content?: string): Approval | null {
   } catch {
     return null
   }
-}
-
-function openApprovalPicker(
-  gateway: GatewayClient,
-  setApprovalPicker: React.Dispatch<React.SetStateAction<ApprovalPicker | null>>,
-  setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>,
-  decision: ApprovalDecision
-) {
-  void gateway.request<Approval>('approval.pending').then(approval => {
-    if (approval.pending) {
-      setApprovalPicker({ approval, index: approvalIndex(decision), instruction: '' })
-    } else {
-      setMessages(items => [...items, { role: 'system', text: approval.message || 'No pending approval.' }])
-    }
-  })
 }
 
 function shortText(value: string, max: number) {
@@ -995,21 +1245,6 @@ function formatBridge(status: BridgeStatus) {
   }
   const tail = status.log.length ? `\n${status.log[status.log.length - 1]}` : ''
   return `Feishu cannot reach this workspace. Turn it on with /phone on.${tail}`
-}
-
-function formatProgress(progress: ProgressState) {
-  if (!progress.objective) {
-    return 'No active session progress.'
-  }
-  const lines = [`[${progress.status ?? 'working'}] ${progress.objective}`]
-  for (const step of progress.steps ?? []) {
-    const mark = step.status === 'completed' ? '[x]' : step.status === 'in_progress' ? '[>]' : step.status === 'blocked' ? '[!]' : '[ ]'
-    lines.push(`${mark} ${step.step}`)
-  }
-  if (progress.next_action) {
-    lines.push(`next: ${progress.next_action}`)
-  }
-  return lines.join('\n')
 }
 
 function Composer({ busy, input, onChange, onSubmit }: { busy: boolean; input: string; onChange: (value: string) => void; onSubmit: (value: string) => void }) {
