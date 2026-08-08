@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { commandChoices, filteredOptions, moveSelection, selectedOption, type PickerMenu } from './menu.js'
+import { COMMANDS, commandChoices, filteredOptions, moveSelection, selectedOption, type PickerMenu } from './menu.js'
 
 test('slash completion and picker search use the typed prefix', () => {
+  assert.equal(commandChoices('/').length, COMMANDS.length)
   assert.deepEqual(commandChoices('/mo').map(command => command.name), ['/model'])
   assert.deepEqual(commandChoices('/goal '), [])
 

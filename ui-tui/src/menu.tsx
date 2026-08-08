@@ -50,7 +50,7 @@ export function commandChoices(input: string): CommandChoice[] {
   const value = input.trimStart()
   if (/\s/.test(value)) return []
   const head = value.toLowerCase()
-  return COMMANDS.filter(command => command.name.startsWith(head)).slice(0, 8)
+  return COMMANDS.filter(command => command.name.startsWith(head))
 }
 
 export function filteredOptions(menu: PickerMenu): MenuOption[] {
@@ -87,7 +87,7 @@ export function CommandPalette({ choices, index, theme }: { choices: CommandChoi
         const selected = itemIndex === Math.min(index, choices.length - 1)
         return (
           <Text key={choice.name} color={selected ? theme.accent : theme.dim} wrap="truncate-end">
-            {selected ? '[•]' : '[ ]'} <Text bold={selected}>{choice.name}</Text>  {choice.detail}
+            <Text bold={selected}>{choice.name}</Text>  {choice.detail}
           </Text>
         )
       })}

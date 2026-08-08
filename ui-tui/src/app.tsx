@@ -27,20 +27,6 @@ const theme: Theme = {
   warn: '#D29922'
 }
 
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-
-function useSpinner(active: boolean) {
-  const [frame, setFrame] = useState(0)
-  useEffect(() => {
-    if (!active) {
-      return
-    }
-    const timer = setInterval(() => setFrame(value => (value + 1) % SPINNER_FRAMES.length), 80)
-    return () => clearInterval(timer)
-  }, [active])
-  return active ? SPINNER_FRAMES[frame]! : ''
-}
-
 const APPROVAL_OPTIONS = [
   { id: 'once', label: 'Approve once' },
   { id: 'session', label: 'Approve for this session' },
@@ -487,7 +473,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         kind: 'model',
         options: profiles.map(profile => ({
           data: profile,
-          detail: `${profile.provider}${profile.vision ? ' · vision' : ''}${profile.id === catalog.active ? ' · current' : ''}`,
+          detail: [profile.vision ? 'vision' : '', profile.id === catalog.active ? 'current' : ''].filter(Boolean).join(' · '),
           id: profile.id,
           keywords: `${profile.provider} ${profile.name}`,
           label: `${profile.model} [${profile.provider}]`,
@@ -945,7 +931,6 @@ function turnIndex(messages: UiMessage[], turnId: string | null) {
 }
 
 function Header({ activity, busy, info, progress }: { activity: string; busy: boolean; info: SessionInfo | null; progress: ProgressState | null }) {
-  const spinner = useSpinner(busy)
   const cwd = info?.cwd ?? process.cwd()
   const status = activity || (busy ? 'thinking' : 'ready')
   const model = info?.model_name || info?.model || 'loading model'
@@ -966,7 +951,7 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
       <Text color={theme.dim} wrap="truncate-end">{cwd}</Text>
       {progress?.objective ? <ProgressLine progress={progress} /> : null}
       <Box>
-        {busy ? <Text color={theme.warn}>{spinner} </Text> : <Text color={theme.ok}>● </Text>}
+        <Text color={busy ? theme.warn : theme.ok}>● </Text>
         <Text color={busy ? theme.warn : theme.ok}>{status}</Text>
         <Text color={theme.dim}> · {shortModel(model)}{thinking} · {tools} tools · {permissions}</Text>
       </Box>
