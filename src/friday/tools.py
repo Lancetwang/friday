@@ -107,7 +107,7 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
             result["context"] = context
         return result
 
-    @tool(description="Read any local UTF-8 text file or load a local image.", name="Read")
+    @tool(description="Read any local UTF-8 text file or load a local image.", name="Read", parallel=True)
     def read_file(
         path: Annotated[str, "Absolute path, or a path relative to the workspace."],
         start_line: Annotated[int, "1-based line number to start reading from."] = 1,
@@ -204,7 +204,7 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
             return {**approval, "approval_required": True, "message": "Execution paused for human approval."}
         return _run_shell(workspace, command, timeout_seconds, max_chars, friday_dir)
 
-    @tool(description="Find files and directories by glob pattern inside the current workspace.", name="Glob")
+    @tool(description="Find files and directories by glob pattern inside the current workspace.", name="Glob", parallel=True)
     def glob_files(
         pattern: Annotated[str, "Glob pattern such as '**/*.py'."],
         max_results: Annotated[int, "Maximum paths to return."] = 200,
@@ -220,7 +220,7 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
                 break
         return with_context({"pattern": pattern, "count": len(matches), "paths": matches}, [workspace / path for path in matches])
 
-    @tool(description="Search UTF-8 text files by regular expression inside the current workspace.", name="Grep")
+    @tool(description="Search UTF-8 text files by regular expression inside the current workspace.", name="Grep", parallel=True)
     def grep_files(
         pattern: Annotated[str, "Python regular expression to search for."],
         path_glob: Annotated[str, "Files to search, for example '**/*.py'."] = "**/*",
@@ -260,7 +260,7 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
             [workspace / match["path"] for match in matches],
         )
 
-    @tool(description="Search the live web when current external information is needed.", name="WebSearch")
+    @tool(description="Search the live web when current external information is needed.", name="WebSearch", parallel=True)
     def web_search(
         query: Annotated[str, "Search query."],
         max_results: Annotated[int, "Maximum results to return, 1-10."] = 5,
@@ -271,7 +271,7 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
     ) -> dict:
         return _web_search(query, max_results, search_depth, topic, include_answer, time_range)
 
-    @tool(description="Fetch a specific URL as clean Markdown with Jina Reader.", name="WebFetch")
+    @tool(description="Fetch a specific URL as clean Markdown with Jina Reader.", name="WebFetch", parallel=True)
     def web_fetch(
         url: Annotated[str, "HTTP or HTTPS URL to fetch."],
         max_chars: Annotated[int, "Maximum characters to return."] = 8000,

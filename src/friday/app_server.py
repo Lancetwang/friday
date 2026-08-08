@@ -755,7 +755,13 @@ class Gateway:
             with self._state:
                 tool_name = self.tool_names.pop(f"{session.session_id}:{call_id}", "")
                 started = self.tool_started.pop(f"{session.session_id}:{call_id}", None)
-            elapsed_ms = int((time.monotonic() - started) * 1000) if started is not None else None
+            # Prefer the executor-measured time: it stays accurate when the
+            # batch runs concurrently, where the event gap includes waiting.
+            measured = event.data.get("elapsed_ms")
+            if isinstance(measured, (int, float)):
+                elapsed_ms = int(measured)
+            else:
+                elapsed_ms = int((time.monotonic() - started) * 1000) if started is not None else None
             self.session_event(
                 session,
                 "tool.complete",
