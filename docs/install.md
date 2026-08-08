@@ -63,6 +63,14 @@ uv tool install -e . --force --reinstall
 
 `uv tool install` creates an isolated Python environment and installs the exact `friday-agent-core` version pinned by the checkout. The editable install keeps the global `friday` command connected to the cloned Python and TUI source, so the checkout must remain on disk.
 
+On macOS and Linux the checkout also ships a POSIX launcher that matches `friday.cmd` on Windows — run `./friday` inside the checkout to start the TUI with the launching directory as the workspace, no install needed:
+
+```bash
+cd path\to\friday
+./friday
+./friday ask "summarize this project"
+```
+
 If `friday` is not found, run `uv tool update-shell`, reopen the terminal, and try `friday --help`.
 
 ### Configure The Source Installation

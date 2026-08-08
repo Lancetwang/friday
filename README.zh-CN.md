@@ -39,6 +39,8 @@ uv tool install -e . --force --reinstall
 
 源码安装会提供全局 `friday` CLI 与 TUI。源码目录需要保留，所有 Python 依赖，包括 [`friday-agent-core`](https://pypi.org/project/friday-agent-core/)，都会自动从 PyPI 解析。
 
+也可以不安装、直接在源码目录启动：macOS/Linux 用 `./friday`，Windows 用 `friday.cmd`，会把启动时所在目录作为工作区并启动 TUI，使用源码目录自带的 uv 环境。若 `uv tool install` 之后全局 `friday` 命令找不到，运行 `uv tool update-shell` 并重开终端。
+
 两种安装方式的环境要求、配置、升级与卸载步骤见[中文安装文档](docs/install.zh-CN.md)。
 
 ## 特性

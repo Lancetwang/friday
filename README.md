@@ -39,6 +39,8 @@ uv tool install -e . --force --reinstall
 
 The source installation provides the global `friday` CLI and TUI. The checkout stays on disk, and all Python dependencies, including [`friday-agent-core`](https://pypi.org/project/friday-agent-core/), resolve automatically from PyPI.
 
+From the checkout itself you can also launch without installing: `./friday` on macOS/Linux or `friday.cmd` on Windows starts the TUI with the launching directory as the workspace, using the checkout's own uv environment. If the global `friday` command is not found after `uv tool install`, run `uv tool update-shell` and reopen the terminal.
+
 See [Install](docs/install.md) for both installation paths, prerequisites, configuration, upgrades, and uninstall steps.
 
 ## Features
