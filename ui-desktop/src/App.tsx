@@ -288,6 +288,9 @@ type ThinkingState = {
   ended?: number
   error?: boolean
   started: number
+  /** Real accumulated thinking time; merged blocks carry this instead of the
+      started→ended span, which would count the tool time between rounds. */
+  duration?: number
 }
 
 type TimelineItem = {
@@ -4019,7 +4022,7 @@ const ThinkingRow = memo(function ThinkingRow({ item, onOpenLink }: { item: Time
     return () => window.clearInterval(timer)
   }, [done])
 
-  const elapsed = Math.max(0, (thinking.ended ?? now) - thinking.started)
+  const elapsed = thinking.duration ?? Math.max(0, (thinking.ended ?? now) - thinking.started)
   const duration = formatThinkingDuration(elapsed)
   const label = done
     ? thinking.error
@@ -4094,18 +4097,30 @@ function ActivityGroup({ items, onOpenLink }: { items: TimelineItem[]; onOpenLin
   // All reasoning of a turn reads as one block; tool runs aggregate by name,
   // so a long turn stays a few rows until a group is asked to open.
   const mergedThinking: TimelineItem | null = thinking.length
-    ? {
-        id: `${thinking[0]!.id}-merged`,
-        kind: 'reasoning',
-        text: thinking.map(item => item.text).filter(Boolean).join('\n\n'),
-        thinking: {
-          error: thinking.some(item => item.thinking?.error),
-          started: Math.min(...thinking.map(item => item.thinking?.started ?? Date.now())),
-          ...(thinkingActive
-            ? {}
-            : { ended: Math.max(...thinking.map(item => item.thinking?.ended ?? 0)) })
+    ? (() => {
+        const started = Math.min(...thinking.map(item => item.thinking?.started ?? Date.now()))
+        const nowMs = Date.now()
+        const ended = thinkingActive
+          ? undefined
+          : Math.max(...thinking.map(item => item.thinking?.ended ?? nowMs))
+        return {
+          id: `${thinking[0]!.id}-merged`,
+          kind: 'reasoning',
+          text: thinking.map(item => item.text).filter(Boolean).join('\n\n'),
+          thinking: {
+            error: thinking.some(item => item.thinking?.error),
+            started,
+            ended,
+            // The span between the first start and the last end includes the
+            // tool rounds in between; the real figure is the sum of the
+            // individual blocks' own times.
+            duration: thinking.reduce(
+              (sum, item) => sum + Math.max(0, (item.thinking?.ended ?? nowMs) - (item.thinking?.started ?? nowMs)),
+              0
+            )
+          }
         }
-      }
+      })()
     : null
   const groups: Array<{ name: string; runs: TimelineItem[] }> = []
   for (const tool of tools) {
