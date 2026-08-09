@@ -22,7 +22,7 @@ Every Bash call passes a code-level pre-execution policy. Destructive system ope
 
 Commands that send data off the machine (`curl`, `wget`, `scp`, `rsync`, `ssh`, `nc`, PowerShell's web cmdlets), install packages, read credential stores, rewrite history destructively, change file permissions, or install persistence all require approval. Reading a secret and piping it outward in one command is denied outright rather than offered for approval, because approving such a command is never the intent behind a legitimate request.
 
-Tool subprocesses do not inherit the API keys Friday loaded from its own credential stores or `.env` files. Keys that were already exported in the user's shell are passed through unchanged, since the user put them there.
+Friday-managed API keys are read directly by their owning services and are never added to tool subprocess environments. Keys already exported in the user's shell are passed through unchanged, since the user put them there.
 
 ## Threat model
 
@@ -35,11 +35,13 @@ The practical consequence: treat an egress approval as approving the *contents o
 
 After a completed turn, Friday compares its existing checkpoint trees and attaches changed Markdown, text, image, PDF, JSON, CSV, and HTML files to that assistant reply. The desktop reads previews only through workspace-relative paths, renders HTML as source text, and rejects unsupported, escaped, missing, or over-25-MB files.
 
-`WebSearch` uses Tavily first when `TAVILY_API_KEY` is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Set `ANYSEARCH_API_KEY` for higher AnySearch limits; anonymous fallback remains available. Keys can be configured through **Settings > Web Search**, the process environment, the workspace `.env`, or `~/.friday/.env`. Desktop-managed keys are stored privately in `~/.friday/web-credentials.json` and are never returned to the UI.
+`WebSearch` uses Tavily first when it is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Configure either key through **Settings > Web Search**, TUI `/search`, or an explicit process environment variable. Friday-managed keys are stored privately in `~/.friday/web-credentials.json` and are never returned to the UI.
 `WebFetch` works without a key through Jina Reader; set `JINA_API_KEY` for higher rate limits.
 They are Friday application tools, not part of `friday-agent-core`.
 
-Skill discovery and memory management are deliberately not model tools. Friday uses Bash with `friday skill list --json` or `friday memory ...`; the harness performs automatic memory capture and recall in code.
+`Read`, `Glob`, `Grep`, `WebSearch`, and `WebFetch` are read-only and may run concurrently when one model response requests several of them. `Write`, `Edit`, `Bash`, and `UpdatePlan` remain serial barriers. Agent Core uses at most four worker threads for each parallel batch and returns results in the model's original call order.
+
+Skill discovery and memory management are deliberately not model tools. Friday uses Bash with `friday skill --json` or `friday memory ...`; the harness performs automatic memory capture and recall in code.
 
 ## Web research contract
 

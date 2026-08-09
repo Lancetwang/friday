@@ -75,34 +75,9 @@ If `friday` is not found, run `uv tool update-shell`, reopen the terminal, and t
 
 ### Configure The Source Installation
 
-Create one global configuration so Friday works from every workspace:
+Start `friday`, then use `/login` to configure a model provider and `/search` to configure Tavily or AnySearch. The same credentials can be managed in the desktop **Settings** screen. Friday stores them privately under `~/.friday/`; it does not read `.env` files.
 
-```powershell
-New-Item -ItemType Directory -Force "$HOME\.friday" | Out-Null
-Copy-Item .env.example "$HOME\.friday\.env"
-Copy-Item config.example.json "$HOME\.friday\config.json"
-notepad "$HOME\.friday\.env"
-notepad "$HOME\.friday\config.json"
-```
-
-On macOS or Linux:
-
-```bash
-mkdir -p "$HOME/.friday"
-cp .env.example "$HOME/.friday/.env"
-cp config.example.json "$HOME/.friday/config.json"
-${EDITOR:-vi} "$HOME/.friday/.env"
-${EDITOR:-vi} "$HOME/.friday/config.json"
-```
-
-Store secrets in `.env`:
-
-```text
-LLM_API_KEY=your-key
-TAVILY_API_KEY=optional-web-search-key
-ANYSEARCH_API_KEY=optional-web-search-fallback-key
-JINA_API_KEY=optional-web-fetch-key
-```
+For headless runs, explicit process environment variables such as `DEEPSEEK_API_KEY`, `TAVILY_API_KEY`, and `ANYSEARCH_API_KEY` remain supported. Copy `config.example.json` to `~/.friday/config.json` only when you need to override token limits or other model defaults.
 
 See [Model Configuration](model-configuration.md) for provider profiles, token limits, configuration precedence, and desktop-managed credentials.
 

@@ -18,7 +18,6 @@ from friday.config import (
     build_model,
     default_config_text,
     load_model_config,
-    load_model_environment,
     output_token_limit,
 )
 from friday.compaction import (
@@ -110,7 +109,6 @@ def build_friday(
     session_id: str | None = None,
 ) -> tuple[Agent, RunContext]:
     root = (workspace or Path.cwd()).resolve()
-    load_model_environment(root)
     ensure_user_home()
     friday_dir = migrate_legacy_runtime(root)
     record_project(root)
@@ -571,4 +569,3 @@ def _project_instruction_files(workspace: Path) -> list[str]:
                 if body:
                     documents.append(f"### {path}\n{body}")
     return documents
-

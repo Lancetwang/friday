@@ -6,6 +6,7 @@ import { COMMANDS, commandChoices, filteredOptions, moveSelection, selectedOptio
 test('slash completion and picker search use the typed prefix', () => {
   assert.equal(commandChoices('/').length, COMMANDS.length)
   assert.deepEqual(commandChoices('/mo').map(command => command.name), ['/model'])
+  assert.deepEqual(commandChoices('/se').map(command => command.name), ['/search'])
   assert.deepEqual(commandChoices('/goal '), [])
 
   const menu: PickerMenu = {

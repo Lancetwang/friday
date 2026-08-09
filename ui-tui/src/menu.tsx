@@ -9,6 +9,7 @@ export const COMMANDS = [
   { name: '/new', detail: 'Start a new conversation' },
   { name: '/login', detail: 'Configure a model provider API key' },
   { name: '/model', detail: 'Choose a configured model and thinking level' },
+  { name: '/search', detail: 'Configure a Web Search provider API key' },
   { name: '/memory', detail: 'Inspect or manage persistent memory' },
   { name: '/context', detail: 'Show current context usage' },
   { name: '/trace', detail: 'Usage: /trace on | /trace off' },
@@ -25,7 +26,7 @@ export const COMMANDS = [
 
 export type CommandChoice = typeof COMMANDS[number]
 
-export type MenuKind = 'login' | 'model' | 'permission' | 'resume' | 'resume-delete' | 'thinking'
+export type MenuKind = 'login' | 'model' | 'permission' | 'resume' | 'resume-delete' | 'search' | 'thinking'
 
 export type MenuOption = {
   data?: unknown

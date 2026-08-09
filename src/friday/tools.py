@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from agent_core import RunContext, get_current_context, get_current_tool_call, tool
 
+from friday.config import read_web_search_credential
 from friday.progress import update_plan
 from friday.storage import migrate_legacy_runtime, project_state_dir, write_text_atomic
 from friday.text import clip, read_limited
@@ -103,6 +104,7 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
     workspace = workspace.resolve()
     friday_dir = (friday_dir or migrate_legacy_runtime(workspace)).resolve()
     loaded_context_files: set[Path] = set()
+    context_files_lock = threading.Lock()
 
     def resolved_path(path: str) -> Path:
         raw = Path(path)
@@ -117,7 +119,8 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
         return resolved
 
     def with_context(result: dict, paths: list[Path]) -> dict:
-        context = _context_for_paths(workspace, paths, loaded_context_files)
+        with context_files_lock:
+            context = _context_for_paths(workspace, paths, loaded_context_files)
         if context:
             result["context"] = context
         return result
@@ -377,7 +380,7 @@ def _web_search(query: str, max_results: int, search_depth: str, topic: str, inc
 
 
 def _tavily_search(query: str, max_results: int, search_depth: str, topic: str, include_answer: bool, time_range: str) -> dict:
-    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    api_key = read_web_search_credential("tavily").strip()
     if not api_key:
         return {"error": "TAVILY_API_KEY is not configured."}
     payload = {
@@ -434,7 +437,7 @@ def _anysearch_search(query: str, max_results: int) -> dict:
         },
     }
     headers = {"Content-Type": "application/json", "X-Anysearch-Client": "friday/0.1"}
-    api_key = os.getenv("ANYSEARCH_API_KEY", "").strip()
+    api_key = read_web_search_credential("anysearch").strip()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
@@ -787,7 +790,7 @@ def _run_shell(
     process = subprocess.Popen(
         cmd,
         cwd=workspace,
-        env=_child_environment(),
+        env=os.environ.copy(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
@@ -866,19 +869,6 @@ def _run_shell(
         timed_out=timed_out,
         friday_dir=friday_dir,
     )
-
-
-def _child_environment() -> dict[str, str]:
-    """Environment for tool subprocesses, minus the secrets Friday injected.
-
-    Variables the user already had in their own shell are preserved; only the
-    provider and web-search keys Friday loaded from its credential stores and
-    `.env` files are withheld, so a shell command cannot read them back out.
-    """
-    from friday.config import injected_env_names
-
-    withheld = injected_env_names()
-    return {key: value for key, value in os.environ.items() if key not in withheld}
 
 
 def _shell_result(

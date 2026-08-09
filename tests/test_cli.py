@@ -219,7 +219,7 @@ class CliTests(unittest.TestCase):
 
                 self.assertFalse((root / ".friday").exists())
 
-    def test_skill_list_json_does_not_build_agent(self) -> None:
+    def test_skill_catalog_json_does_not_build_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
             home = Path(tmp) / "home"
@@ -232,13 +232,19 @@ class CliTests(unittest.TestCase):
             output = StringIO()
             with patch("friday.cli.Path.cwd", return_value=root), patch("friday.cli.Path.home", return_value=home):
                 with patch.object(sys, "stdout", output), patch("friday.session.build_friday") as build_friday:
-                    cli.main(["skill", "list", "--json"])
+                    cli.main(["skill", "--json"])
 
             data = json.loads(output.getvalue())
             review = next(item for item in data["skills"] if item["name"] == "review")
             self.assertEqual(review["scope"], "project")
             self.assertEqual(Path(review["path"]), skill_dir / "SKILL.md")
             build_friday.assert_not_called()
+
+            legacy = StringIO()
+            with patch("friday.cli.Path.cwd", return_value=root), patch("friday.cli.Path.home", return_value=home):
+                with patch.object(sys, "stdout", legacy):
+                    cli.main(["skill", "list", "--json"])
+            self.assertEqual(json.loads(legacy.getvalue()), data)
 
     def test_memory_cli_manages_markdown_without_building_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

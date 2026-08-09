@@ -46,9 +46,6 @@ CREDENTIALS_FILE = "model-credentials.json"
 WEB_CREDENTIALS_FILE = "web-credentials.json"
 FEISHU_FILE = "im-feishu.json"
 WEB_SEARCH_KEYS = {"tavily": "TAVILY_API_KEY", "anysearch": "ANYSEARCH_API_KEY"}
-# Secrets Friday itself put into this process. Tool subprocesses must not inherit
-# them: the user never opted their shell into Friday's credential stores.
-_INJECTED_ENV_NAMES: set[str] = set()
 PROVIDERS = (
     {
         "id": "deepseek",
@@ -345,7 +342,6 @@ def load_model_catalog(workspace: Path, *, home: Path | None = None) -> dict[str
         configured = bool(
             credentials.get(profile["id"])
             or _provider_env(profile["provider"])
-            or _env_file_has_key(workspace, profile["provider"], home)
         )
         decorated.append(
             {
@@ -367,10 +363,7 @@ def load_model_catalog(workspace: Path, *, home: Path | None = None) -> dict[str
         provider_profiles = [profile for profile in decorated if profile["provider"] == provider_id]
         configured = any(profile["api_key_configured"] for profile in provider_profiles)
         if provider.get("builtin") and not configured:
-            configured = bool(
-                _provider_env(provider_id)
-                or _env_file_has_key(workspace, provider_id, home)
-            )
+            configured = bool(_provider_env(provider_id))
         providers.append(
             {
                 **provider,
@@ -681,12 +674,10 @@ def model_api_key(config: ModelConfig, *, home: Path | None = None) -> str | Non
     return _read_credentials(home).get(config.profile_id) or _provider_env(config.provider)
 
 
-def load_web_search_settings(workspace: Path, *, home: Path | None = None) -> dict[str, bool]:
+def load_web_search_settings(*, home: Path | None = None) -> dict[str, bool]:
     saved = _read_web_credentials(home)
     return {
-        f"{provider}_configured": bool(
-            saved.get(env_name) or os.getenv(env_name) or _env_files_have_names(workspace, {env_name}, home)
-        )
+        f"{provider}_configured": bool(saved.get(env_name) or os.getenv(env_name))
         for provider, env_name in WEB_SEARCH_KEYS.items()
     }
 
@@ -699,7 +690,6 @@ def read_web_search_credential(provider: str, *, home: Path | None = None) -> st
 
 
 def save_web_search_settings(
-    workspace: Path,
     *,
     tavily_api_key: str | None = None,
     anysearch_api_key: str | None = None,
@@ -708,43 +698,29 @@ def save_web_search_settings(
     home: Path | None = None,
 ) -> dict[str, bool]:
     saved = _read_web_credentials(home)
-    cleared: list[tuple[str, str | None]] = []
     for provider, value, clear in (
         ("tavily", tavily_api_key, clear_tavily),
         ("anysearch", anysearch_api_key, clear_anysearch),
     ):
         env_name = WEB_SEARCH_KEYS[provider]
-        previous = saved.get(env_name)
         if clear:
             saved.pop(env_name, None)
-            cleared.append((env_name, previous))
         elif value is not None and value.strip():
             secret = value.strip()
             if len(secret) > 4096 or "\n" in secret or "\r" in secret:
                 raise ValueError(f"Invalid {provider} API key.")
             saved[env_name] = secret
-            os.environ[env_name] = secret
-            _INJECTED_ENV_NAMES.add(env_name)
     write_json_atomic(friday_home(home) / WEB_CREDENTIALS_FILE, saved, private=True)
-    for env_name, previous in cleared:
-        if previous and os.getenv(env_name) == previous:
-            os.environ.pop(env_name, None)
-    if cleared:
-        load_model_environment(workspace, home=home)
-    return load_web_search_settings(workspace, home=home)
+    return load_web_search_settings(home=home)
 
 
-def load_feishu_settings(workspace: Path, *, home: Path | None = None) -> dict[str, Any]:
+def load_feishu_settings(*, home: Path | None = None) -> dict[str, Any]:
     """What the settings UI may see. The app secret is reported, never returned."""
     saved = _read_json_object(friday_home(home) / FEISHU_FILE)
     stored_secret = str(saved.get("app_secret") or "").strip()
     return {
         "app_id": str(saved.get("app_id") or os.getenv("FRIDAY_FEISHU_APP_ID") or "").strip(),
-        "app_secret_configured": bool(
-            stored_secret
-            or os.getenv("FRIDAY_FEISHU_APP_SECRET")
-            or _env_files_have_names(workspace, {"FRIDAY_FEISHU_APP_SECRET"}, home)
-        ),
+        "app_secret_configured": bool(stored_secret or os.getenv("FRIDAY_FEISHU_APP_SECRET")),
         "allowed_users": _feishu_users(saved.get("allowed_users")),
         "allow_group": bool(saved.get("allow_group")),
     }
@@ -767,7 +743,6 @@ def read_feishu_credential(*, home: Path | None = None) -> str:
 
 
 def save_feishu_settings(
-    workspace: Path,
     *,
     app_id: str | None = None,
     app_secret: str | None = None,
@@ -791,7 +766,7 @@ def save_feishu_settings(
     if allow_group is not None:
         saved["allow_group"] = bool(allow_group)
     write_json_atomic(friday_home(home) / FEISHU_FILE, saved, private=True)
-    return load_feishu_settings(workspace, home=home)
+    return load_feishu_settings(home=home)
 
 
 def _feishu_users(value: Any) -> list[str]:
@@ -861,40 +836,6 @@ IM_BRIDGE_ENV_NAMES = (
     "FRIDAY_FEISHU_APP_ID",
     "FRIDAY_FEISHU_APP_SECRET",
 )
-
-
-def load_model_environment(workspace: Path, *, home: Path | None = None) -> None:
-    allowed = {
-        "ANYSEARCH_API_KEY",
-        "JINA_API_KEY",
-        "TAVILY_API_KEY",
-        *IM_BRIDGE_ENV_NAMES,
-        *(name for provider in PROVIDERS for name in _provider_env_names(str(provider["id"])) if name),
-    }
-    for path in (workspace.resolve() / ".env", friday_home(home) / ".env"):
-        if not path.exists():
-            continue
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip().lstrip("\ufeff")
-            if key not in allowed or key in os.environ:
-                continue
-            value = value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-                value = value[1:-1]
-            os.environ[key] = value
-            _INJECTED_ENV_NAMES.add(key)
-    web_credentials = _read_web_credentials(home)
-    os.environ.update(web_credentials)
-    _INJECTED_ENV_NAMES.update(web_credentials)
-
-
-def injected_env_names() -> frozenset[str]:
-    """Credential variables Friday loaded from its own stores into this process."""
-    return frozenset(_INJECTED_ENV_NAMES)
 
 
 def default_config_text() -> str:
@@ -1022,24 +963,6 @@ def _provider_env_names(provider: str) -> tuple[str, ...]:
     )
 
 
-def _env_file_has_key(workspace: Path, provider: str, home: Path | None) -> bool:
-    return _env_files_have_names(workspace, set(filter(None, _provider_env_names(provider))), home)
-
-
-def _env_files_have_names(workspace: Path, names: set[str], home: Path | None) -> bool:
-    for path in (workspace.resolve() / ".env", friday_home(home) / ".env"):
-        if not path.exists():
-            continue
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            if key.strip().lstrip("\ufeff") in names and value.strip().strip("'\""):
-                return True
-    return False
-
-
 def _read_json_object(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -1058,7 +981,11 @@ def _read_credentials(home: Path | None = None) -> dict[str, str]:
 
 
 def _read_web_credentials(home: Path | None = None) -> dict[str, str]:
-    values = _read_json_object(friday_home(home) / WEB_CREDENTIALS_FILE)
+    try:
+        path = friday_home(home) / WEB_CREDENTIALS_FILE
+    except RuntimeError:
+        return {}
+    values = _read_json_object(path)
     return {
         key: str(values[key])
         for key in WEB_SEARCH_KEYS.values()

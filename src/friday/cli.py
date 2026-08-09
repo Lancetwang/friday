@@ -60,9 +60,7 @@ def main(argv: list[str] | None = None) -> None:
     doctor.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
     skill = sub.add_parser("skill", help="Inspect reusable Friday skills.", description="Inspect reusable Friday skills.")
-    skill_sub = skill.add_subparsers(dest="skill_command", required=True)
-    skill_list = skill_sub.add_parser("list", help="List skill metadata and SKILL.md paths.")
-    skill_list.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    skill.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
     model = sub.add_parser("model", help="Configure and select model providers.")
     model_sub = model.add_subparsers(dest="model_command", required=True)
@@ -359,6 +357,8 @@ def _configure_stdio() -> None:
 
 
 def _help_alias(argv: list[str]) -> list[str]:
+    if argv[:2] == ["skill", "list"]:
+        argv = ["skill", *argv[2:]]
     if argv == ["help"]:
         return ["--help"]
     if len(argv) == 2 and argv[1] == "help" and argv[0] in {"skill", "memory", "model", "session", "trace"}:

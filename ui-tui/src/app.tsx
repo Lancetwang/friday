@@ -68,6 +68,17 @@ type ModelCatalog = {
   providers: ModelProvider[]
 }
 
+type SearchProvider = {
+  configured: boolean
+  id: 'anysearch' | 'tavily'
+  label: string
+}
+
+type WebSearchSettings = {
+  anysearch_configured: boolean
+  tavily_configured: boolean
+}
+
 type HistoryItem = {
   arguments?: unknown
   kind: 'assistant' | 'tool' | 'user'
@@ -86,11 +97,9 @@ type SessionResult = {
   progress?: ProgressState
 }
 
-type CredentialInput = {
-  parent: PickerMenu
-  provider: ModelProvider
-  value: string
-}
+type CredentialInput =
+  | { kind: 'model'; parent: PickerMenu; provider: ModelProvider; value: string }
+  | { kind: 'search'; parent: PickerMenu; provider: SearchProvider; value: string }
 
 export function App({ gateway }: { gateway: GatewayClient }) {
   const app = useApp()
@@ -484,6 +493,29 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     }).catch(requestError)
   }
 
+  function openSearchMenu() {
+    setActivity('Loading search providers...')
+    void gateway.request<WebSearchSettings>('settings.web.get').then(settings => {
+      setActivity('')
+      const providers: SearchProvider[] = [
+        { configured: settings.tavily_configured, id: 'tavily', label: 'Tavily' },
+        { configured: settings.anysearch_configured, id: 'anysearch', label: 'AnySearch' },
+      ]
+      setMenu({
+        index: 0,
+        kind: 'search',
+        options: providers.map(provider => ({
+          data: provider,
+          detail: provider.configured ? 'configured' : '',
+          id: provider.id,
+          label: provider.label,
+        })),
+        query: '',
+        title: 'Configure Web Search',
+      })
+    }).catch(requestError)
+  }
+
   function openResumeMenu() {
     setActivity('Loading conversations...')
     void gateway.request<{ choices: ResumeChoice[] }>('session.resume_choices').then(result => {
@@ -517,7 +549,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     if (!option) return
     try {
       if (current.kind === 'login') {
-        setCredential({ parent: current, provider: option.data as ModelProvider, value: '' })
+        setCredential({ kind: 'model', parent: current, provider: option.data as ModelProvider, value: '' })
+        setMenu(null)
+      } else if (current.kind === 'search') {
+        setCredential({ kind: 'search', parent: current, provider: option.data as SearchProvider, value: '' })
         setMenu(null)
       } else if (current.kind === 'model') {
         const profile = option.data as ModelProfile
@@ -567,6 +602,15 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     if (!apiKey) return
     setActivity(`Connecting to ${current.provider.label}...`)
     try {
+      if (current.kind === 'search') {
+        await gateway.request<WebSearchSettings>('settings.web.save', {
+          [`${current.provider.id}_api_key`]: apiKey,
+        })
+        setCredential(null)
+        setActivity('')
+        appendSystem(`${current.provider.label} Web Search is configured.`)
+        return
+      }
       const result = await gateway.request<{ catalog: ModelCatalog; info: SessionInfo }>('model.save', {
         activate: false,
         api_key: apiKey,
@@ -615,6 +659,8 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       openLoginMenu()
     } else if (command === '/model') {
       openModelMenu()
+    } else if (command === '/search') {
+      openSearchMenu()
     } else if (command === '/memory') {
       void gateway.request<{ text: string }>('memory.command', { command: argument }).then(result => appendSystem(result.text)).catch(requestError)
     } else if (command === '/context') {

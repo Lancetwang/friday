@@ -537,7 +537,7 @@ class FeishuTargetTests(_IsolatedHome):
 
 class FeishuSettingsTests(_IsolatedHome):
     def test_a_saved_secret_is_reported_but_never_returned(self) -> None:
-        view = save_feishu_settings(self.workspace, app_id="cli_x", app_secret="s3cret")
+        view = save_feishu_settings(app_id="cli_x", app_secret="s3cret")
 
         self.assertEqual(view["app_id"], "cli_x")
         self.assertTrue(view["app_secret_configured"])
@@ -546,29 +546,29 @@ class FeishuSettingsTests(_IsolatedHome):
         self.assertEqual(read_feishu_credential(), "s3cret")
 
     def test_saving_other_fields_keeps_the_secret(self) -> None:
-        save_feishu_settings(self.workspace, app_id="cli_x", app_secret="s3cret")
+        save_feishu_settings(app_id="cli_x", app_secret="s3cret")
 
-        view = save_feishu_settings(self.workspace, allowed_users="ou_a, ou_b", allow_group=True)
+        view = save_feishu_settings(allowed_users="ou_a, ou_b", allow_group=True)
 
         self.assertTrue(view["app_secret_configured"])
         self.assertEqual(view["allowed_users"], ["ou_a", "ou_b"])
         self.assertTrue(view["allow_group"])
 
     def test_clearing_the_secret_leaves_the_app_id(self) -> None:
-        save_feishu_settings(self.workspace, app_id="cli_x", app_secret="s3cret")
+        save_feishu_settings(app_id="cli_x", app_secret="s3cret")
 
-        view = save_feishu_settings(self.workspace, clear_app_secret=True)
+        view = save_feishu_settings(clear_app_secret=True)
 
         self.assertEqual(view["app_id"], "cli_x")
         self.assertFalse(view["app_secret_configured"])
 
     def test_duplicate_and_blank_open_ids_are_dropped(self) -> None:
-        view = save_feishu_settings(self.workspace, allowed_users=["ou_a", " ou_a ", "", "ou_b"])
+        view = save_feishu_settings(allowed_users=["ou_a", " ou_a ", "", "ou_b"])
 
         self.assertEqual(view["allowed_users"], ["ou_a", "ou_b"])
 
     def test_the_secret_file_is_not_world_readable(self) -> None:
-        save_feishu_settings(self.workspace, app_secret="s3cret")
+        save_feishu_settings(app_secret="s3cret")
         path = Path(os.environ["FRIDAY_HOME"]) / FEISHU_FILE
 
         self.assertTrue(path.exists())
@@ -576,9 +576,7 @@ class FeishuSettingsTests(_IsolatedHome):
             self.assertEqual(path.stat().st_mode & 0o077, 0)
 
     def test_stored_settings_drive_the_bridge_when_the_env_is_quiet(self) -> None:
-        save_feishu_settings(
-            self.workspace, app_id="cli_x", app_secret="s3cret", allowed_users=["ou_a"], allow_group=True
-        )
+        save_feishu_settings(app_id="cli_x", app_secret="s3cret", allowed_users=["ou_a"], allow_group=True)
 
         with patch.dict(os.environ, {}, clear=False):
             for name in IM_BRIDGE_ENV_NAMES:
@@ -590,7 +588,7 @@ class FeishuSettingsTests(_IsolatedHome):
         self.assertTrue(config.allow_group)
 
     def test_the_environment_overrides_stored_settings(self) -> None:
-        save_feishu_settings(self.workspace, app_id="stored", app_secret="s3cret")
+        save_feishu_settings(app_id="stored", app_secret="s3cret")
 
         with patch.dict(os.environ, {"FRIDAY_FEISHU_APP_ID": "from-env"}):
             config = FeishuConfig.from_env(self.workspace)

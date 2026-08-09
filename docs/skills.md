@@ -9,22 +9,22 @@ Friday discovers skills from:
 ~/.friday/FridaySkills/<skill>/SKILL.md
 ```
 
-The startup prompt contains only one routing instruction. Run `friday skill list --json` through Bash to list each available skill's `name`, `description`, `scope`, and `SKILL.md` path. After selecting one, use Bash to read its `SKILL.md`, referenced files, or scripts as needed.
+The startup prompt contains only one routing instruction. Run `friday skill --json` through Bash to list each available skill's `name`, `description`, `scope`, and `SKILL.md` path. After selecting one, use Bash to read its `SKILL.md`, referenced files, or scripts as needed.
 
 For human-readable output:
 
 ```powershell
-friday skill list
+friday skill
 ```
 
-Project skills take precedence over same-named user skills. Friday also provisions a user-level `friday-cli` skill that explains how to inspect Friday's own commands and deterministic pipelines, including `friday skill ...` and `friday memory ...`.
+Project skills take precedence over same-named user skills. Friday also provisions a user-level `friday-cli` skill that explains how to inspect Friday's own commands and deterministic pipelines, including `friday skill` and `friday memory ...`.
 
 Friday's own commands use the same progressive help structure:
 
 ```powershell
-friday help
-friday skill help
-friday memory help
+friday --help
+friday skill --help
+friday memory --help
 friday memory search --help
 ```
 
@@ -54,7 +54,7 @@ Use when the user asks Friday to review code changes.
 - Do not rewrite code unless the user asks.
 ```
 
-The frontmatter routing fields are returned by `friday skill list --json`:
+The frontmatter routing fields are returned by `friday skill --json`:
 
 - `name`: stable skill id shown to the agent.
 - `description`: short routing text used before the full skill is loaded.

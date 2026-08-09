@@ -165,6 +165,16 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertNotIn("api_key", json.dumps(result))
         self.assertNotIn("app_secret\"", json.dumps(result))
 
+    def test_gateway_returns_only_web_search_status_for_tui_configuration(self) -> None:
+        gateway = Gateway()
+        status = {"tavily_configured": True, "anysearch_configured": False}
+
+        with patch("friday.app_server.load_web_search_settings", return_value=status):
+            with patch.object(gateway, "ok") as ok:
+                gateway.handle({"id": "1", "method": "settings.web.get"})
+
+        ok.assert_called_once_with("1", status)
+
     def test_gateway_saves_feishu_settings_and_reports_the_bridge(self) -> None:
         gateway = Gateway()
         view = {"app_id": "cli_x", "app_secret_configured": True, "allowed_users": [], "allow_group": False}
@@ -794,7 +804,7 @@ class TuiGatewayTests(unittest.TestCase):
                 {
                     "id": "call-1",
                     "type": "function",
-                    "function": {"name": "Bash", "arguments": '{"command":"friday skill list --json"}'},
+                    "function": {"name": "Bash", "arguments": '{"command":"friday skill --json"}'},
                 }
             ],
         )
@@ -807,7 +817,7 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertEqual([item["kind"] for item in history], ["user", "tool", "assistant"])
         self.assertEqual(history[1]["name"], "Bash")
         self.assertEqual(history[1]["status"], "done")
-        self.assertEqual(history[1]["arguments"]["command"], "friday skill list --json")
+        self.assertEqual(history[1]["arguments"]["command"], "friday skill --json")
         self.assertIn("No extra skills", history[2]["text"])
         self.assertEqual(history[0]["timestamp"], "2026-07-28T16:00:00+08:00")
         self.assertEqual(history[0]["images"], [image])

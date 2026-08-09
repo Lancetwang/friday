@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from friday.config import build_model, load_model_config, load_model_environment, output_token_limit
+from friday.config import build_model, load_model_config, output_token_limit
 from friday.prompts import MEMORY_CONSOLIDATE_PROMPT, SECURITY_NOTES
 from friday.storage import friday_home, project_state_dir, write_lock, write_text_atomic
 
@@ -403,7 +403,6 @@ def consolidate_memory(
 
 
 def _review_memory(workspace: Path, episodes: list[dict[str, Any]], home: Path | None) -> list[dict[str, Any]]:
-    load_model_environment(workspace, home=home)
     config = load_model_config(workspace, home=home)
     permanent = [record for record in _all_entries(workspace, "all", home) if record["scope"] != "episode"]
     payload = {

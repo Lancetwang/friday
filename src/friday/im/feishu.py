@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from friday.child import frozen
-from friday.config import IM_BRIDGE_ENV_NAMES, feishu_credentials, load_model_environment
+from friday.config import IM_BRIDGE_ENV_NAMES, feishu_credentials
 from friday.im.bridge import FridayBridge, Stream
 from friday.im.feishu_card import (
     DONE_EMOJI,
@@ -59,12 +59,11 @@ class FeishuConfig:
     def from_env(cls, workspace: Path) -> FeishuConfig:
         """Settings saved from the UI, overridable by the environment.
 
-        The stored file is what the settings screen writes; `.env` and real
-        environment variables still win so a terminal can point one run at a
+        The stored file is what the settings screen writes; process environment
+        variables still win so a terminal can point one run at a
         different app without touching saved state.
         """
         workspace = workspace.resolve()
-        load_model_environment(workspace)
         stored = feishu_credentials()
         app_id = (os.getenv("FRIDAY_FEISHU_APP_ID") or stored["app_id"]).strip()
         app_secret = (os.getenv("FRIDAY_FEISHU_APP_SECRET") or stored["app_secret"]).strip()

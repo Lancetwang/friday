@@ -75,7 +75,7 @@ Inspect context, skills, or memory:
 ```powershell
 friday context
 friday compact
-friday skill list --json
+friday skill --json
 friday memory status
 ```
 

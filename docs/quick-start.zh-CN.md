@@ -75,7 +75,7 @@ friday undo
 ```powershell
 friday context
 friday compact
-friday skill list --json
+friday skill --json
 friday memory status
 ```
 

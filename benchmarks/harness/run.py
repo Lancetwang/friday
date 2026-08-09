@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent
 CASES_PATH = ROOT / "cases.jsonl"
 RUNS_DIR = ROOT / "runs"
 SOURCE_HOME = Path(os.getenv("FRIDAY_HOME") or Path.home() / ".friday").expanduser().resolve()
-CONFIG_FILES = ("config.json", "models.json", "model-credentials.json", "web-credentials.json", ".env")
+CONFIG_FILES = ("config.json", "models.json", "model-credentials.json", "web-credentials.json")
 ACTIONS = {"chat", "goal", "approve", "reject", "assert_pending", "compact", "resume", "undo", "fork"}
 CHECKS = {
     "file_exists",

@@ -18,7 +18,7 @@ import friday.tools as friday_tools
 from friday.agent_flow import GUARD_STOP_REASON, begin_guarded_run, build_guarded_flow
 from friday.app import PROJECT_INSTRUCTIONS_LIMIT, _pinned_core_version, _require_runtime, build_friday, build_instructions, compact_friday, ensure_user_home, init_project, prepare_context_for_chat, reset_friday, resume_choices, resume_friday, save_session_state, save_turn
 from friday.compaction import COMPACT_TARGET_RATIO, LAST_COMPACTION, announce_compaction, clean_summary, compact_in_place, compaction_record, fit_recent_steps, fit_recent_turns, split_memory_section, summary_is_usable, transcript
-from friday.config import DEFAULT_MODEL_CONFIG, ModelConfig, build_model, clear_model_credential, load_model_catalog, load_model_config, load_model_environment, load_web_search_settings, model_api_key, read_model_credential, read_web_search_credential, refresh_model_profiles, save_model_profile, save_web_search_settings, set_model_enabled
+from friday.config import DEFAULT_MODEL_CONFIG, ModelConfig, build_model, clear_model_credential, load_model_catalog, load_model_config, load_web_search_settings, model_api_key, read_model_credential, read_web_search_credential, refresh_model_profiles, save_model_profile, save_web_search_settings, set_model_enabled
 from friday.context import TOOL_COMPACT_AT, _context_text, compact_tool_results, context_ratio, context_report, context_window, observe_context_usage, should_compact_conversation, should_compact_tools, token_measurement, tool_compaction_gain
 from friday.loop import AGENT_MAX_STEPS, goal_chat, run_loop, verified_chat
 from friday.memory import add_memory, list_memories, remove_memory, update_memory
@@ -39,6 +39,15 @@ from friday.verification import VERIFIER_MAX_STEPS, build_verifier, needs_verifi
 
 
 class ToolTests(unittest.TestCase):
+    def test_only_read_only_tools_are_parallel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = {item.name: item for item in build_tools(Path(tmp), Path(tmp) / ".friday")}
+
+        self.assertEqual(
+            {name for name, item in tools.items() if item.parallel},
+            {"Read", "Glob", "Grep", "WebSearch", "WebFetch"},
+        )
+
     def test_model_configuration_fails_with_an_actionable_missing_key_error(self) -> None:
         with patch("friday.config.model_api_key", return_value=None):
             with self.assertRaisesRegex(ValueError, "friday model add --help"):
@@ -410,7 +419,7 @@ class ToolTests(unittest.TestCase):
             friday_dir = Path(tmp) / ".friday"
 
             with patch.dict(os.environ, {"FRIDAY_PERMISSION_MODE": "manual"}, clear=False):
-                null_redirect = _permission_decision(friday_dir, "friday skill list --json 2>$null")
+                null_redirect = _permission_decision(friday_dir, "friday skill --json 2>$null")
                 stream_redirect = _permission_decision(friday_dir, "python task.py 2>&1")
                 file_redirect = _permission_decision(friday_dir, "python task.py > output.txt")
                 format_table = _permission_decision(friday_dir, "Get-ChildItem | Format-Table -AutoSize")
@@ -1406,32 +1415,27 @@ class ResetTests(unittest.TestCase):
             self.assertFalse((home / ".friday" / "models.json").exists())
             self.assertFalse((home / ".friday" / "model-credentials.json").exists())
 
-    def test_web_search_credentials_are_private_and_load_into_the_environment(self) -> None:
+    def test_web_search_credentials_are_private_and_read_without_environment_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True):
-            root = Path(tmp) / "workspace"
             home = Path(tmp) / "home"
-            root.mkdir()
             (home / ".friday").mkdir(parents=True)
-            (home / ".friday" / ".env").write_text("TAVILY_API_KEY=env-fallback\n", encoding="utf-8")
 
             status = save_web_search_settings(
-                root,
                 tavily_api_key="tavily-private",
                 anysearch_api_key="anysearch-private",
                 home=home,
             )
 
             self.assertEqual(status, {"tavily_configured": True, "anysearch_configured": True})
-            self.assertNotIn("private", json.dumps(load_web_search_settings(root, home=home)))
+            self.assertNotIn("private", json.dumps(load_web_search_settings(home=home)))
             self.assertEqual(read_web_search_credential("anysearch", home=home), "anysearch-private")
-            os.environ.clear()
-            load_model_environment(root, home=home)
-            self.assertEqual(os.environ["TAVILY_API_KEY"], "tavily-private")
-            self.assertEqual(os.environ["ANYSEARCH_API_KEY"], "anysearch-private")
+            self.assertNotIn("TAVILY_API_KEY", os.environ)
+            self.assertNotIn("ANYSEARCH_API_KEY", os.environ)
 
-            save_web_search_settings(root, clear_tavily=True, clear_anysearch=True, home=home)
-            self.assertEqual(os.environ["TAVILY_API_KEY"], "env-fallback")
-            self.assertEqual(load_web_search_settings(root, home=home), {"tavily_configured": True, "anysearch_configured": False})
+            save_web_search_settings(clear_tavily=True, clear_anysearch=True, home=home)
+            self.assertNotIn("TAVILY_API_KEY", os.environ)
+            self.assertNotIn("ANYSEARCH_API_KEY", os.environ)
+            self.assertEqual(load_web_search_settings(home=home), {"tavily_configured": False, "anysearch_configured": False})
 
     def test_build_friday_passes_configured_output_budget_to_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1602,55 +1606,28 @@ class PromptTests(unittest.TestCase):
             self.assertFalse((root / ".friday" / "STATE.md").exists())
             self.assertNotIn("\n## Short-Term State\n", "".join(str(m.get("content", "")) for m in context.get_messages()))
 
-    def test_build_friday_loads_project_env_without_overriding_shell(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / ".env").write_text(
-                "\ufeffDEEPSEEK_API_KEY=dummy\nTAVILY_API_KEY=from-file\nLLM_MODEL=from-file\n",
-                encoding="utf-8",
-            )
-
-            with patch.dict(os.environ, {"LLM_MODEL": "from-shell"}, clear=True):
-                with patch("friday.app.Path.home", return_value=root / "home"), patch("friday.tools.Path.home", return_value=root / "home"):
-                    build_friday(root, stream=False)
-                self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "dummy")
-                self.assertEqual(os.environ["TAVILY_API_KEY"], "from-file")
-                self.assertEqual(os.environ["LLM_MODEL"], "from-shell")
-
-    def test_project_env_cannot_change_friday_control_settings(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / ".env").write_text(
-                "FRIDAY_PERMISSION_MODE=bypass\nFRIDAY_HOME=other\nDEEPSEEK_API_KEY=dummy\n",
-                encoding="utf-8",
-            )
-
-            with patch.dict(os.environ, {}, clear=True):
-                with patch("friday.app.Path.home", return_value=root / "home"), patch(
-                    "friday.tools.Path.home", return_value=root / "home"
-                ):
-                    build_friday(root, stream=False)
-                self.assertNotIn("FRIDAY_PERMISSION_MODE", os.environ)
-                self.assertNotIn("FRIDAY_HOME", os.environ)
-                self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "dummy")
-
-    def test_build_friday_uses_global_env_as_project_fallback(self) -> None:
+    def test_build_friday_ignores_env_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
             home = Path(tmp) / "home"
             root.mkdir()
             (home / ".friday").mkdir(parents=True)
-            (root / ".env").write_text("DEEPSEEK_API_KEY=project-key\n", encoding="utf-8")
+            (root / ".env").write_text(
+                "\ufeffDEEPSEEK_API_KEY=project-key\nTAVILY_API_KEY=project-search\n",
+                encoding="utf-8",
+            )
             (home / ".friday" / ".env").write_text(
-                "LLM_API_KEY=dummy\nTAVILY_API_KEY=global-tavily\n",
+                "LLM_API_KEY=global-key\nANYSEARCH_API_KEY=global-search\n",
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {}, clear=True):
+            with patch.dict(os.environ, {"LLM_API_KEY": "shell-key"}, clear=True):
                 with patch("friday.app.Path.home", return_value=home), patch("friday.tools.Path.home", return_value=home):
                     build_friday(root, stream=False)
-                self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "project-key")
-                self.assertEqual(os.environ["TAVILY_API_KEY"], "global-tavily")
+                self.assertEqual(os.environ["LLM_API_KEY"], "shell-key")
+                self.assertNotIn("DEEPSEEK_API_KEY", os.environ)
+                self.assertNotIn("TAVILY_API_KEY", os.environ)
+                self.assertNotIn("ANYSEARCH_API_KEY", os.environ)
 
     def test_large_project_instructions_are_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1816,7 +1793,7 @@ class CompactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             context = RunContext()
-            context.add_message("system", "## Runtime\nrules\n\n## Skills\nfriday skill list --json")
+            context.add_message("system", "## Runtime\nrules\n\n## Skills\nfriday skill --json")
             context.add_message("user", "hello")
             context.metadata["friday.last_usage"] = {
                 "cached_tokens": 96,

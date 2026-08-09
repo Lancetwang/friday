@@ -434,9 +434,9 @@ class Gateway:
                             }
                             for scope in ("user", "global")
                         },
-                        "web_search": load_web_search_settings(Path.cwd().resolve()),
+                        "web_search": load_web_search_settings(),
                         "user_profile": load_user_profile_settings(),
-                        "feishu": load_feishu_settings(Path.cwd().resolve()),
+                        "feishu": load_feishu_settings(),
                         "bridge": self.bridge.status(),
                     },
                 )
@@ -445,6 +445,8 @@ class Gateway:
                     rid,
                     {"api_key": read_web_search_credential(str(params.get("provider") or ""))},
                 )
+            elif method == "settings.web.get":
+                self.ok(rid, load_web_search_settings())
             elif method == "settings.feishu.key.get":
                 self.ok(rid, {"app_secret": read_feishu_credential()})
             elif method == "settings.memory.read":
@@ -458,7 +460,6 @@ class Gateway:
                 self.ok(
                     rid,
                     save_web_search_settings(
-                        Path.cwd().resolve(),
                         tavily_api_key=(
                             params.get("tavily_api_key")
                             if isinstance(params.get("tavily_api_key"), str)
@@ -479,7 +480,6 @@ class Gateway:
                     rid,
                     {
                         "feishu": save_feishu_settings(
-                            Path.cwd().resolve(),
                             app_id=params.get("app_id") if isinstance(params.get("app_id"), str) else None,
                             app_secret=(
                                 params.get("app_secret") if isinstance(params.get("app_secret"), str) else None

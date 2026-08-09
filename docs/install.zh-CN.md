@@ -67,34 +67,9 @@ uv tool install -e . --force --reinstall
 
 ### 配置源码安装
 
-创建一份全局配置，让 Friday 可以在任意工作目录使用：
+启动 `friday` 后，使用 `/login` 配置模型供应商，使用 `/search` 配置 Tavily 或 AnySearch；桌面端 **设置** 页面管理的是同一份凭据。Friday 将密钥私密保存在 `~/.friday/`，不再读取 `.env` 文件。
 
-```powershell
-New-Item -ItemType Directory -Force "$HOME\.friday" | Out-Null
-Copy-Item .env.example "$HOME\.friday\.env"
-Copy-Item config.example.json "$HOME\.friday\config.json"
-notepad "$HOME\.friday\.env"
-notepad "$HOME\.friday\config.json"
-```
-
-macOS 或 Linux：
-
-```bash
-mkdir -p "$HOME/.friday"
-cp .env.example "$HOME/.friday/.env"
-cp config.example.json "$HOME/.friday/config.json"
-${EDITOR:-vi} "$HOME/.friday/.env"
-${EDITOR:-vi} "$HOME/.friday/config.json"
-```
-
-密钥写入 `.env`：
-
-```text
-LLM_API_KEY=your-key
-TAVILY_API_KEY=optional-web-search-key
-ANYSEARCH_API_KEY=optional-web-search-fallback-key
-JINA_API_KEY=optional-web-fetch-key
-```
+无界面运行时仍可显式设置 `DEEPSEEK_API_KEY`、`TAVILY_API_KEY`、`ANYSEARCH_API_KEY` 等进程环境变量。只有需要修改 Token 限制或其他模型默认值时，才需要把 `config.example.json` 复制为 `~/.friday/config.json`。
 
 供应商配置、Token 限制、配置优先级和桌面端密钥存储方式见[模型配置](model-configuration.md)。
 

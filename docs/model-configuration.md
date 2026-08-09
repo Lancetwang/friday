@@ -34,7 +34,7 @@ The global file is `~/.friday/config.json`. An optional `~/.friday/projects/<wor
 
 The window is the only resource that bounds a turn, and it is a level rather than a total: the conversation occupies part of it, compaction shrinks it, and it grows linearly as work accumulates. A turn's cumulative token usage is a different quantity — because an append-only conversation is re-sent on every step, it grows with the square of the step count and reaches many times the window on a long run. That total is the bill, so Friday reports it in the turn metrics next to window occupancy, and compares it against nothing. Enforcing it as a ceiling is what used to end long turns whose windows were still mostly empty.
 
-Desktop-managed model credentials stay in `~/.friday/model-credentials.json`. They are excluded from model catalogs, sessions, and traces; the local settings process reads one only when the user explicitly presses its reveal control. Environment-based credentials may instead live in the active process, `<workspace>/.env`, or `~/.friday/.env`. Friday reads only supported model and Web API key names from those files; control settings such as permission mode are ignored. The provider-specific key is preferred, then `LLM_API_KEY`, `OPENAI_API_KEY`, and `DEEPSEEK_API_KEY` are tried as fallbacks.
+Friday-managed model credentials stay in `~/.friday/model-credentials.json`. They are excluded from model catalogs, sessions, and traces; the local settings process reads one only when the user explicitly presses its reveal control. Configure them through desktop Settings, TUI `/login`, or `friday model add`. Headless runs may instead export process environment variables; Friday does not read `.env` files. The provider-specific key is preferred, then `LLM_API_KEY`, `OPENAI_API_KEY`, and `DEEPSEEK_API_KEY` are tried as fallbacks.
 
 ```text
 DEEPSEEK_API_KEY=your-key
@@ -44,6 +44,6 @@ ANYSEARCH_API_KEY=optional-web-search-fallback-key
 JINA_API_KEY=optional-web-fetch-key
 ```
 
-Friday exposes both config paths in the Environment prompt, so it can edit them when explicitly asked. Changes take effect after Friday starts a new session or rebuilds the context.
+Friday exposes the global and project model-config paths in the Environment prompt, so it can edit non-secret model limits when explicitly asked. Changes take effect after Friday starts a new session or rebuilds the context.
 
 The defaults use the model's full 1M-token window and a 64K per-call output budget. The window is the only bound on a run: compaction keeps the conversation inside it, and no budget stops a turn on spend (see [Verification](verification.md)). The output budget is deliberately configurable because provider limits differ; set it no higher than the selected model supports. Friday's verifier keeps its own smaller JSON response budget.

@@ -5,12 +5,12 @@ Top-level commands:
 ```powershell
 friday
 friday init
-friday help
+friday --help
 friday doctor [--json]
-friday skill list
-friday skill list --json
-friday skill help
-friday memory help
+friday skill
+friday skill --json
+friday skill --help
+friday memory --help
 friday memory status
 friday memory list [user|global|project|episode|all] [--json]
 friday memory search <query> [--scope <scope>] [--json]
@@ -72,6 +72,7 @@ TUI slash commands:
 /new
 /login
 /model
+/search
 /memory [help|status|list|search|add|update|remove|consolidate]
 /context
 /trace on|off
@@ -87,7 +88,7 @@ TUI slash commands:
 ```
 
 Typing `/` opens prefix-filtered command completion. `/login`, `/model`,
-`/resume`, and `/permission` use searchable Up/Down pickers; Enter confirms and
+`/search`, `/resume`, and `/permission` use searchable Up/Down pickers; Enter confirms and
 Esc returns to the parent picker. `/model` selects the model first and then
 offers only the thinking levels that model actually supports. `/resume` can
 also delete a selected saved conversation. Press Esc twice while Friday is

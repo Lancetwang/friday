@@ -11,7 +11,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from friday.config import build_model, load_model_config, load_model_environment, output_token_limit
+from friday.config import build_model, load_model_config, output_token_limit
 from friday.prompts import SECURITY_NOTES
 from friday.trace import (
     behavior_events,
@@ -52,7 +52,6 @@ def analyze_trace(
         raise ValueError("Analysis question is required.")
     manifest, events = load_trace(session_id)
     workspace = Path(str(manifest.get("workspace") or Path.cwd())).resolve()
-    load_model_environment(workspace)
     config = load_model_config(workspace)
     analysis_id = analysis_id or uuid4().hex
     history = load_analysis(session_id, analysis_id)

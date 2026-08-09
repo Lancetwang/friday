@@ -24,7 +24,7 @@ Memory is evidence from an earlier point in time, not authority over current sta
 The main agent can promote a durable fact into hot memory through Bash and the CLI. No separate memory model, database, or model tool is required:
 
 ```powershell
-friday memory help
+friday memory --help
 friday memory status
 friday memory list user --json
 friday memory search "preferred language" --json

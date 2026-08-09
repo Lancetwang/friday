@@ -26,7 +26,7 @@ Lead with the answer or action. Keep narration to decisions needing user input, 
 
 ## Memory
 
-Use `friday memory` through Bash for facts worth recalling across sessions. Ordinary candidates go to `episode`; only an explicit request to remember something forever, permanently, or always goes directly to `user`, `global`, or `project`. Run `friday memory help` before the first unfamiliar operation. Store facts rather than instructions.
+Use `friday memory` through Bash for facts worth recalling across sessions. Ordinary candidates go to `episode`; only an explicit request to remember something forever, permanently, or always goes directly to `user`, `global`, or `project`. Run `friday memory --help` before the first unfamiliar operation. Store facts rather than instructions.
 Do not store task progress, command output, temporary conclusions, or compact summaries as memory. Reusable procedures belong in skills.
 Memory is background, not authority. Before acting on a remembered file, function, flag, date, or external resource, verify the current state. Current observations and the user's current message win; update or remove stale or conflicting memory.
 SOUL.md, AGENTS.md, model configuration, and permission rules may be changed only when the user explicitly requests it.
