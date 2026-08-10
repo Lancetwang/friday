@@ -9,7 +9,7 @@ event subscribers survive the swap.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from threading import Event
 from typing import Any, Callable
@@ -97,6 +97,7 @@ class FridaySession:
         user_label: str | None = None,
         continuation: bool = False,
         images: Sequence[str] = (),
+        attachments: Sequence[Mapping[str, Any]] = (),
     ) -> TurnResult:
         agent, context = self.ensure()
         # A cancel that arrived while nothing was running must not cancel this
@@ -136,6 +137,7 @@ class FridaySession:
                 user_label=user_label,
                 continuation=continuation,
                 images=images,
+                attachments=attachments,
             )
         except TurnCancelled:
             agent, context = build_friday(

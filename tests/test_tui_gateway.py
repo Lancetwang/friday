@@ -17,6 +17,7 @@ from friday.session import FridaySession
 from friday.app_server import (
     Gateway,
     _install_cli_shim,
+    _local_attachments,
     _request_lines,
     artifact_detail,
     fork_points,
@@ -25,6 +26,7 @@ from friday.app_server import (
 )
 from friday.app_server import main as app_server_main
 from friday.im.supervisor import BridgeSupervisor
+from friday.prompts import goal_attempt_prompt
 from friday.state import (
     ARCHIVED_MESSAGES,
     delete_session_tree,
@@ -92,6 +94,65 @@ class TuiGatewayTests(unittest.TestCase):
                 )
 
         chat.assert_called_once_with("describe it", images=[image])
+
+    def test_gateway_validates_and_passes_local_attachments(self) -> None:
+        gateway = Gateway()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            document = root / "brief.pdf"
+            document.write_bytes(b"pdf")
+            folder = root / "references"
+            folder.mkdir()
+
+            with patch.object(gateway.session, "chat", return_value=_turn_result("seen")) as chat:
+                with patch.object(gateway, "ok"):
+                    gateway.handle(
+                        {
+                            "id": "1",
+                            "method": "chat.send",
+                            "params": {
+                                "text": "inspect these",
+                                "attachments": [{"path": str(document)}, {"path": str(folder)}],
+                            },
+                        }
+                    )
+
+        attachments = chat.call_args.kwargs["attachments"]
+        self.assertEqual([item["kind"] for item in attachments], ["file", "folder"])
+        self.assertEqual(attachments[0]["name"], "brief.pdf")
+        self.assertEqual(attachments[0]["size"], 3)
+        self.assertEqual(attachments[1]["name"], "references")
+
+    def test_gateway_goal_accepts_images_and_local_attachments(self) -> None:
+        gateway = Gateway()
+        image = "data:image/png;base64,aW1hZ2U="
+        with tempfile.TemporaryDirectory() as tmp:
+            document = Path(tmp) / "goal.md"
+            document.write_text("goal", encoding="utf-8")
+            with patch.object(gateway.session, "chat", return_value=_turn_result("done")) as chat:
+                with patch.object(gateway, "ok"):
+                    gateway.handle(
+                        {
+                            "id": "1",
+                            "method": "goal.run",
+                            "params": {
+                                "text": "finish this",
+                                "images": [image],
+                                "attachments": [{"path": str(document)}],
+                            },
+                        }
+                    )
+
+        self.assertTrue(chat.call_args.kwargs["goal"])
+        self.assertEqual(chat.call_args.kwargs["images"], [image])
+        self.assertEqual(chat.call_args.kwargs["attachments"][0]["path"], str(document.resolve()))
+
+    def test_local_attachments_reject_relative_and_missing_paths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            _local_attachments([{"path": "notes.md"}])
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                _local_attachments([{"path": str(Path(tmp) / "missing.md")}])
 
     def test_gateway_rejects_non_image_data_urls(self) -> None:
         gateway = Gateway()
@@ -317,6 +378,7 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertEqual([call.args[1]["id"] for call in event.call_args_list], [
             "reasoning-1", "reasoning-1", "reasoning-2", "reasoning-2"
         ])
+        self.assertTrue(all(isinstance(call.args[1].get("elapsed_ms"), int) for call in event.call_args_list[1::2]))
         self.assertTrue(all(call.args[1]["session_id"] == gateway.session.session_id for call in event.call_args_list))
 
     def test_message_complete_includes_final_verification(self) -> None:
@@ -824,6 +886,36 @@ class TuiGatewayTests(unittest.TestCase):
         self.assertNotIn("hidden prefix", str(history))
         self.assertEqual(fork_points(gateway.session), [{"kind": "assistant", "message_index": 3}])
 
+    def test_session_history_restores_attachment_metadata_and_goal_label(self) -> None:
+        gateway = Gateway()
+        path = str((Path.cwd() / "brief.pdf").resolve())
+        request = f'Finish the report\n\nAttached local items (inspect with available tools when relevant):\n- file: {json.dumps(path)}'
+        prompt = goal_attempt_prompt(request)
+        context = RunContext(
+            metadata={
+                "workspace": str(Path.cwd()),
+                "friday.user_message_times": [
+                    {
+                        "attachments": [{"kind": "file", "name": "brief.pdf", "path": path, "size": 3}],
+                        "display_text": "Finish the report",
+                        "goal": True,
+                        "text": prompt,
+                        "time": "2026-08-10T12:00:00+08:00",
+                    }
+                ],
+            }
+        )
+        context.add_message("user", prompt)
+        context.add_message("assistant", "Done.")
+        gateway.session.context = context
+
+        history = session_history(gateway.session)
+
+        self.assertEqual(history[0]["text"], "Finish the report")
+        self.assertTrue(history[0]["goal"])
+        self.assertEqual(history[0]["attachments"][0]["name"], "brief.pdf")
+        self.assertEqual(history[0]["timestamp"], "2026-08-10T12:00:00+08:00")
+
     def test_session_history_restores_persisted_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -891,6 +983,60 @@ class TuiGatewayTests(unittest.TestCase):
             replies = {item["text"]: item.get("metrics") for item in history if item["kind"] == "assistant"}
             self.assertEqual(replies["First answer."], first)
             self.assertEqual(replies["Second answer."], second)
+
+    def test_session_history_restores_reasoning_and_tool_durations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                gateway = Gateway()
+                context = RunContext(metadata={"workspace": str(root)})
+                context.add_message("user", "inspect")
+                context.add_message(
+                    "assistant",
+                    "",
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "Read", "arguments": '{"path":"README.md"}'},
+                        }
+                    ],
+                )
+                context.add_message("tool", "Friday", tool_call_id="call-1")
+                context.add_message("assistant", "Done.")
+                gateway.session.context = context
+                save_turn(
+                    root,
+                    "inspect",
+                    "Done.",
+                    gateway.session.session_id,
+                    context.get_messages(),
+                    activities=[
+                        {"kind": "reasoning", "text": "I should inspect it.", "elapsed_ms": 840},
+                        {"kind": "tool", "tool_call_id": "call-1", "elapsed_ms": 125, "status": "done"},
+                    ],
+                )
+                context.add_message("user", "summarize")
+                context.add_message("assistant", "Summary.")
+                save_turn(
+                    root,
+                    "summarize",
+                    "Summary.",
+                    gateway.session.session_id,
+                    context.get_messages(),
+                    activities=[{"kind": "reasoning", "text": "I should summarize it.", "elapsed_ms": 420}],
+                )
+                history = session_history(gateway.session)
+            finally:
+                os.chdir(cwd)
+
+        reasoning = [item for item in history if item["kind"] == "reasoning"]
+        tool = next(item for item in history if item["kind"] == "tool")
+        self.assertEqual([item["elapsed_ms"] for item in reasoning], [840, 420])
+        self.assertEqual([item["text"] for item in reasoning], ["I should inspect it.", "I should summarize it."])
+        self.assertEqual(tool["elapsed_ms"], 125)
 
     def test_metrics_survive_the_compaction_that_rewrites_the_prompt(self) -> None:
         # Records are written against the prompt and read back against the

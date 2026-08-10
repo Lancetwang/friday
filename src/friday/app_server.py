@@ -68,6 +68,7 @@ _write_lock = threading.Lock()
 _IMAGE_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,", "data:image/gif;base64,")
 _MAX_IMAGE_CHARS = 14_000_000
 _MAX_TOTAL_IMAGE_CHARS = 20_000_000
+_MAX_LOCAL_ATTACHMENTS = 8
 _MAX_ARTIFACT_BYTES = 25_000_000
 _ARTIFACT_MIMES = {
     ".gif": "image/gif",
@@ -191,6 +192,7 @@ class Gateway:
         self.output = output or sys.stdout
         self.background = background
         self.reasoning_ids: dict[str, str] = {}
+        self.reasoning_started: dict[str, float] = {}
         self.reasoning_seq = 0
         self.tool_names: dict[str, str] = {}
         self.tool_started: dict[str, float] = {}
@@ -271,11 +273,15 @@ class Gateway:
                 self.reasoning_seq += 1
                 reasoning_id = f"reasoning-{self.reasoning_seq}"
                 self.reasoning_ids[key] = reasoning_id
+                self.reasoning_started[key] = time.monotonic()
             return reasoning_id
 
-    def _pop_reasoning_id(self, key: str) -> str | None:
+    def _pop_reasoning_id(self, key: str) -> tuple[str | None, int | None]:
         with self._state:
-            return self.reasoning_ids.pop(key, None)
+            reasoning_id = self.reasoning_ids.pop(key, None)
+            started = self.reasoning_started.pop(key, None)
+        elapsed_ms = int((time.monotonic() - started) * 1000) if started is not None else None
+        return reasoning_id, elapsed_ms
 
     def handle(self, msg: dict[str, Any]) -> None:
         rid = msg.get("id")
@@ -295,9 +301,18 @@ class Gateway:
                 self.ok(rid, {"closed": bool(workspace)})
             elif method == "chat.send":
                 images = _image_urls(params.get("images"))
-                self.run_chat(rid, str(params.get("text") or ""), images=images)
+                attachments = _local_attachments(params.get("attachments"))
+                self.run_chat(rid, str(params.get("text") or ""), images=images, attachments=attachments)
             elif method == "goal.run":
-                self.run_chat(rid, str(params.get("text") or ""), goal=True)
+                images = _image_urls(params.get("images"))
+                attachments = _local_attachments(params.get("attachments"))
+                self.run_chat(
+                    rid,
+                    str(params.get("text") or ""),
+                    goal=True,
+                    images=images,
+                    attachments=attachments,
+                )
             elif method == "chat.cancel":
                 session_id = str(params.get("session_id") or self.session.session_id)
                 session = self._cached_session(session_id)
@@ -695,11 +710,20 @@ class Gateway:
             with self._state:
                 orphaned = list(self.reasoning_ids.values())
                 self.reasoning_ids.clear()
+                self.reasoning_started.clear()
             for reasoning_id in orphaned:
                 self.event("reasoning.complete", {"id": reasoning_id, "error": True})
             self.err(rid, str(exc))
 
-    def run_chat(self, rid: Any, text: str, *, goal: bool = False, images: list[str] | None = None) -> None:
+    def run_chat(
+        self,
+        rid: Any,
+        text: str,
+        *,
+        goal: bool = False,
+        images: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> None:
         session = self.session
         session_id = session.session_id
         with self._state:
@@ -711,6 +735,8 @@ class Gateway:
         def work() -> None:
             try:
                 kwargs: dict[str, Any] = {"images": images or []}
+                if attachments:
+                    kwargs["attachments"] = attachments
                 if goal:
                     kwargs["goal"] = True
                 result = session.chat(text, **kwargs)
@@ -829,9 +855,13 @@ class Gateway:
                 {"id": self._reasoning_id(reasoning_key), "text": str(event.data.get("content") or "")},
             )
         elif event.type == "model.response" and event.data.get("has_reasoning"):
-            reasoning_id = self._pop_reasoning_id(reasoning_key)
+            reasoning_id, elapsed_ms = self._pop_reasoning_id(reasoning_key)
             if reasoning_id is not None:
-                self.session_event(session, "reasoning.complete", {"id": reasoning_id})
+                self.session_event(
+                    session,
+                    "reasoning.complete",
+                    {"id": reasoning_id, "elapsed_ms": elapsed_ms},
+                )
         elif event.type == "verification.start":
             self.session_event(session, "verification.start", {})
         elif event.type == "context.compacted":
@@ -905,11 +935,23 @@ class Gateway:
         prefix = f"{session.session_id}:"
         with self._state:
             orphaned = [
-                self.reasoning_ids.pop(key)
+                (
+                    self.reasoning_ids.pop(key),
+                    self.reasoning_started.pop(key, None),
+                )
                 for key in [key for key in self.reasoning_ids if key.startswith(prefix)]
             ]
-        for reasoning_id in orphaned:
-            self.session_event(session, "reasoning.complete", {"id": reasoning_id, "error": error})
+        now = time.monotonic()
+        for reasoning_id, started in orphaned:
+            self.session_event(
+                session,
+                "reasoning.complete",
+                {
+                    "id": reasoning_id,
+                    "elapsed_ms": int((now - started) * 1000) if started is not None else None,
+                    "error": error,
+                },
+            )
 
     def _forget_tool_names(self, session: FridaySession) -> None:
         prefix = f"{session.session_id}:"
@@ -953,6 +995,39 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
     # What each reply cost, restored from disk. Held only in the live event it was
     # emitted with, it vanished the moment the conversation was reopened.
     metrics = records_by_message(snapshot.get("metrics"), transcript)
+    activities = records_by_message(snapshot.get("activities"), transcript)
+    tool_activity: dict[str, dict[str, Any]] = {}
+    for record in activities.values():
+        items = record.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict) or item.get("kind") != "tool":
+                continue
+            call_id = str(item.get("tool_call_id") or "")
+            if call_id:
+                tool_activity[call_id] = item
+    emitted_reasoning: set[int] = set()
+
+    def append_reasoning(message_index: int) -> None:
+        if message_index in emitted_reasoning:
+            return
+        emitted_reasoning.add(message_index)
+        items = activities.get(message_index, {}).get("items")
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict) or item.get("kind") != "reasoning":
+                continue
+            history.append(
+                {
+                    "elapsed_ms": item.get("elapsed_ms"),
+                    "kind": "reasoning",
+                    "message_index": message_index,
+                    "status": str(item.get("status") or "done"),
+                    "text": str(item.get("text") or ""),
+                }
+            )
 
     def flush_assistant() -> None:
         nonlocal assistant_index
@@ -976,6 +1051,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
             user_indexes.append(len(history))
             history.append(
                 {
+                    "attachments": [],
                     "images": _message_images(message.get("content")),
                     "kind": "user",
                     "message_index": message_index,
@@ -983,6 +1059,7 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                 }
             )
         elif role == "assistant" and not message.get("friday_progress"):
+            append_reasoning(message_index)
             for call in message.get("tool_calls") or []:
                 function = call.get("function") if isinstance(call, dict) else {}
                 function = function if isinstance(function, dict) else {}
@@ -994,17 +1071,20 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
                     except json.JSONDecodeError:
                         pass
                 tools[call_id] = len(history)
-                history.append(
-                    {
-                        "arguments": arguments,
-                        "kind": "tool",
-                        "message_index": message_index,
-                        "name": str(function.get("name") or "Tool"),
-                        "status": "running",
-                        "text": "",
-                        "tool_call_id": call_id,
-                    }
-                )
+                item = {
+                    "arguments": arguments,
+                    "kind": "tool",
+                    "message_index": message_index,
+                    "name": str(function.get("name") or "Tool"),
+                    "status": "running",
+                    "text": "",
+                    "tool_call_id": call_id,
+                }
+                timing = tool_activity.get(call_id)
+                if timing:
+                    item["elapsed_ms"] = timing.get("elapsed_ms")
+                    item["status"] = str(timing.get("status") or item["status"])
+                history.append(item)
             if content:
                 assistant_parts.append(content)
                 assistant_index = message_index
@@ -1012,15 +1092,22 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
             call_id = str(message.get("tool_call_id") or "")
             index = tools.get(call_id)
             if index is not None:
-                history[index].update(status="done", text=content)
+                timing = tool_activity.get(call_id, {})
+                history[index].update(
+                    elapsed_ms=timing.get("elapsed_ms"),
+                    status=str(timing.get("status") or "done"),
+                    text=content,
+                )
             else:
+                timing = tool_activity.get(call_id, {})
                 history.append(
                     {
                         "arguments": {},
+                        "elapsed_ms": timing.get("elapsed_ms"),
                         "kind": "tool",
                         "message_index": message_index,
                         "name": "Tool",
-                        "status": "done",
+                        "status": str(timing.get("status") or "done"),
                         "text": content,
                         "tool_call_id": call_id,
                     }
@@ -1044,6 +1131,14 @@ def session_history(session: FridaySession) -> list[dict[str, Any]]:
             record_index -= 1
             if record.get("text") == item["text"]:
                 item["timestamp"] = str(record.get("time") or "")
+                attachments = record.get("attachments")
+                if isinstance(attachments, list):
+                    item["attachments"] = [dict(value) for value in attachments if isinstance(value, dict)]
+                display_text = record.get("display_text")
+                if isinstance(display_text, str):
+                    item["text"] = display_text
+                if record.get("goal") is True:
+                    item["goal"] = True
                 break
     return history
 
@@ -1067,6 +1162,40 @@ def _image_urls(value: Any) -> list[str]:
     if sum(map(len, images)) > _MAX_TOTAL_IMAGE_CHARS:
         raise ValueError("Attached images are too large.")
     return images
+
+
+def _local_attachments(value: Any) -> list[dict[str, Any]]:
+    if value in (None, []):
+        return []
+    if not isinstance(value, list) or len(value) > _MAX_LOCAL_ATTACHMENTS:
+        raise ValueError(f"Attach at most {_MAX_LOCAL_ATTACHMENTS} local files or folders.")
+    attachments: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("Local attachments must be files or folders selected on this computer.")
+        raw = Path(str(item.get("path") or ""))
+        if not raw.is_absolute():
+            raise ValueError("Local attachment paths must be absolute.")
+        try:
+            path = raw.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"Attached item is unavailable: {raw}") from exc
+        if not path.is_file() and not path.is_dir():
+            raise ValueError(f"Attached item is not a file or folder: {path}")
+        key = os.path.normcase(str(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        attachment: dict[str, Any] = {
+            "kind": "folder" if path.is_dir() else "file",
+            "name": path.name or str(path),
+            "path": str(path),
+        }
+        if path.is_file():
+            attachment["size"] = path.stat().st_size
+        attachments.append(attachment)
+    return attachments
 
 
 def artifact_detail(workspace: Path, relative: str) -> dict[str, Any]:

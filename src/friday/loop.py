@@ -190,7 +190,7 @@ def _refresh_context(state: dict[str, Any]) -> None:
     new_context.on_observation = context.on_observation
     if notice:
         announce_compaction(new_context, compaction_record(new_context.metadata.get(LAST_COMPACTION)))
-    inherit_guarded_run(new_context, context)
+    inherit_guarded_run(new_context, context, preserve_loop_state=True)
     state["agent"] = agent
     state["context"] = new_context
     state["start_event"] = 0

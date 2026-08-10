@@ -50,6 +50,7 @@ APPROVAL_FILE = "pending_approval.json"
 PERMISSIONS_FILE = "permissions.json"
 SESSION_PERMISSIONS_ALLOWED = "friday.permissions_allowed"
 SESSION_PERMISSION_MODE = "friday.permission_mode"
+SHELL_PERMISSION_PREFLIGHT = "friday.shell_permission_preflight"
 PERMISSION_MODES = {"manual", "auto", "bypass"}
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 CREDENTIAL_PATH_PATTERN = (
@@ -183,11 +184,12 @@ def build_tools(workspace: Path, friday_dir: Path | None = None):
         command: Annotated[str, "Shell command to run."],
         timeout_seconds: Annotated[int, "Timeout in seconds."] = 60,
     ) -> dict:
-        decision, reason = _permission_decision(friday_dir, command)
+        preflight = _take_shell_permission_preflight(command)
+        decision, reason = preflight or preflight_shell_permission(friday_dir, command)
         if decision == "deny":
             return {"blocked": True, "message": f"Command blocked before execution: {reason}"}
         if decision == "approval":
-            approval = _write_approval(friday_dir, command, timeout_seconds, reason)
+            approval = create_pending_approval(friday_dir, command, timeout_seconds, reason)
             return {**approval, "approval_required": True, "message": "Execution paused for human approval."}
         return _run_shell(workspace, command, timeout_seconds, friday_dir)
 
@@ -1032,6 +1034,34 @@ class _NoContext:
 
 
 _NO_CONTEXT = _NoContext()
+
+
+def preflight_shell_permission(friday_dir: Path, command: str) -> tuple[str, str]:
+    """Evaluate one shell call without executing it or creating approval state."""
+    return _permission_decision(friday_dir, command)
+
+
+def create_pending_approval(friday_dir: Path, command: str, timeout_seconds: int, reason: str) -> dict:
+    """Persist the one command selected by a batch-level permission preflight."""
+    return _write_approval(friday_dir, command, timeout_seconds, reason)
+
+
+def _take_shell_permission_preflight(command: str) -> tuple[str, str] | None:
+    context = get_current_context()
+    call = get_current_tool_call()
+    if context is None or call is None:
+        return None
+    decisions = context.metadata.get(SHELL_PERMISSION_PREFLIGHT)
+    if not isinstance(decisions, dict):
+        return None
+    item = decisions.pop(call.id, None)
+    if not decisions:
+        context.metadata.pop(SHELL_PERMISSION_PREFLIGHT, None)
+    if not isinstance(item, dict) or item.get("command") != command:
+        return None
+    decision = str(item.get("decision") or "")
+    reason = str(item.get("reason") or "")
+    return (decision, reason) if decision in {"allow", "deny", "approval"} else None
 
 
 def _permission_decision(friday_dir: Path, command: str) -> tuple[str, str]:

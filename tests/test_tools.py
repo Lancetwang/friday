@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import Mock, patch
 
 from agent_core import Agent, RunContext, ToolCall, ToolExecutor, reset_current_context, set_current_context, tool
@@ -34,6 +35,7 @@ from friday.progress import append_progress_checkpoint, begin_progress, current_
 from friday.skills import discover_skills, skill_routing
 from friday.state import archived_messages, conversation_body, delete_session, hydrate, read_session, rename_session, session_path, state_from_snapshot, transcript_messages
 from friday.storage import project_state_dir, workspace_key
+from friday.tool_hooks import PreToolDecision
 from friday.tools import APPROVAL_FILE, MAX_TOOL_OUTPUT_BYTES, MAX_TOOL_OUTPUT_LINES, PERMISSIONS_FILE, SESSION_PERMISSIONS_ALLOWED, _dangerous_shell, _hard_denied_shell, _permission_decision, _read_response, allow_permissions_for_session, approve_pending, build_tools, pending_approval
 from friday.verification import VERIFIER_MAX_STEPS, build_verifier, needs_verification, parse_verification, verification_prompt, verify_friday
 
@@ -53,10 +55,11 @@ class ToolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "friday model add --help"):
                 build_model(DEFAULT_MODEL_CONFIG)
 
-    def test_read_attaches_workspace_image_to_a_vision_model(self) -> None:
+    def test_read_attaches_any_local_image_to_a_vision_model(self) -> None:
         class VisionModel:
-            def __init__(self) -> None:
+            def __init__(self, image_path: Path) -> None:
                 self.calls = 0
+                self.image_path = image_path
                 self.messages = []
 
             def chat_message(self, messages, **_kwargs):
@@ -70,7 +73,7 @@ class ToolTests(unittest.TestCase):
                             {
                                 "id": "image-1",
                                 "type": "function",
-                                "function": {"name": "Read", "arguments": '{"path":"sample.png"}'},
+                                "function": {"name": "Read", "arguments": json.dumps({"path": str(self.image_path)})},
                             }
                         ],
                         "usage": {"input_tokens": 10, "output_tokens": 1},
@@ -78,10 +81,12 @@ class ToolTests(unittest.TestCase):
                 return {"role": "assistant", "content": "I can see it.", "usage": {"input_tokens": 20, "output_tokens": 4}}
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "sample.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            image_path = Path(tmp) / "sample.png"
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
             read = build_tools(root, root / ".friday")[0]
-            model = VisionModel()
+            model = VisionModel(image_path)
             agent = Agent(flow=build_guarded_flow(model, [read], chat_kwargs={"stream": False}))
             context = agent.new_context()
             context.metadata.update(
@@ -2417,11 +2422,289 @@ class VerificationTests(unittest.TestCase):
         context = agent.new_context()
         begin_guarded_run(context, context.usage.snapshot())
 
-        answer = agent.chat("repeat", context=context, max_steps=20)
+        answer = agent.chat("repeat", context=context, max_steps=50)
 
         self.assertEqual(answer, "best supported answer")
-        self.assertEqual(model.tool_choices, ["auto", "auto", "none"])
+        self.assertEqual(model.tool_choices, ["auto", "auto", "auto", "auto", "none"])
         self.assertEqual(context.metadata[GUARD_STOP_REASON], "no_progress")
+
+    def test_inner_loop_detects_three_identical_calls_inside_one_batch(self) -> None:
+        executions = []
+
+        class BatchModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_message(self, _messages, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    return {"role": "assistant", "content": "changed approach", "usage": {"input_tokens": 10, "output_tokens": 2}}
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": f"same-{index}", "type": "function", "function": {"name": "echo", "arguments": '{"text":"same"}'}}
+                        for index in range(3)
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+
+        @tool(description="Echo text.")
+        def echo(text: str) -> str:
+            executions.append(text)
+            return f"{text}:{len(executions)}"
+
+        model = BatchModel()
+        agent = Agent(flow=build_guarded_flow(model, [echo], chat_kwargs={"stream": False, "tool_choice": "auto"}))
+        context = agent.new_context()
+        begin_guarded_run(context, context.usage.snapshot())
+
+        answer = agent.chat("repeat", context=context, max_steps=20)
+
+        decisions = [event for event in context.events if event.type == "hook.decision" and event.data.get("hook") == "no-progress"]
+        self.assertEqual(answer, "changed approach")
+        self.assertEqual(decisions[-1].action, "feedback")
+        self.assertEqual(decisions[-1].data["repeated_calls"][0]["scope"], "batch")
+
+    def test_no_progress_treats_different_tool_arguments_as_progress(self) -> None:
+        class PagingModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_message(self, _messages, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    return {"role": "assistant", "content": "read all pages", "usage": {"input_tokens": 10, "output_tokens": 2}}
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": f"page-{start_line}",
+                            "type": "function",
+                            "function": {"name": "Read", "arguments": json.dumps({"path": "notes.txt", "start_line": start_line})},
+                        }
+                        for start_line in (1, 2001, 4001)
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+
+        @tool(description="Read one page.", name="Read", parallel=True)
+        def read_page(path: str, start_line: int) -> str:
+            return f"{path}:{start_line}"
+
+        model = PagingModel()
+        agent = Agent(flow=build_guarded_flow(model, [read_page], chat_kwargs={"stream": False, "tool_choice": "auto"}))
+        context = agent.new_context()
+        begin_guarded_run(context, context.usage.snapshot())
+
+        answer = agent.chat("read it", context=context, max_steps=20)
+
+        self.assertEqual(answer, "read all pages")
+        self.assertFalse(any(event.type == "hook.decision" and event.data.get("hook") == "no-progress" for event in context.events))
+
+    def test_permission_preflight_suspends_the_whole_tool_batch(self) -> None:
+        calls = {"Read": 0, "Bash": 0}
+
+        @tool(description="Read data.", name="Read", parallel=True)
+        def read_data(path: str) -> str:
+            calls["Read"] += 1
+            return path
+
+        @tool(description="Run a command.", name="Bash")
+        def run_command(command: str) -> str:
+            calls["Bash"] += 1
+            return command
+
+        class MixedModel:
+            def chat_message(self, _messages, **_kwargs):
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "read", "type": "function", "function": {"name": "Read", "arguments": '{"path":"note.txt"}'}},
+                        {"id": "bash", "type": "function", "function": {"name": "Bash", "arguments": '{"command":"Remove-Item note.txt"}'}},
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home" / ".friday"), "FRIDAY_PERMISSION_MODE": "manual"}):
+                agent = Agent(flow=build_guarded_flow(MixedModel(), [read_data, run_command], chat_kwargs={"stream": False}))
+                context = agent.new_context()
+                context.metadata.update({"workspace": str(root), "session_id": "preflight"})
+                begin_guarded_run(context, context.usage.snapshot())
+
+                answer = agent.chat("delete it", context=context, max_steps=10)
+
+                self.assertEqual(answer, "")
+                self.assertEqual(calls, {"Read": 0, "Bash": 0})
+                self.assertTrue(pending_approval(root, session_id="preflight")["pending"])
+
+    def test_bash_consumes_the_batch_preflight_decision_once(self) -> None:
+        class BashModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_message(self, _messages, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    return {"role": "assistant", "content": "done", "usage": {"input_tokens": 10, "output_tokens": 2}}
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "bash",
+                            "type": "function",
+                            "function": {"name": "Bash", "arguments": '{"command":"Remove-Item note.txt"}'},
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                patch.dict(os.environ, {"FRIDAY_HOME": str(root / "home" / ".friday"), "FRIDAY_PERMISSION_MODE": "auto"}),
+                patch("friday.tools._review_shell_command", return_value=("allow", "matches request")) as review,
+                patch("friday.tools._run_shell", return_value={"exit_code": 0, "timed_out": False, "output": ""}) as execute,
+            ):
+                tools = build_tools(root, project_state_dir(root))
+                agent = Agent(flow=build_guarded_flow(BashModel(), tools, chat_kwargs={"stream": False}))
+                context = agent.new_context()
+                context.metadata.update({"workspace": str(root), "friday.user_request": "delete note.txt"})
+                begin_guarded_run(context, context.usage.snapshot())
+
+                answer = agent.chat("delete note.txt", context=context, max_steps=20)
+
+                self.assertEqual(answer, "done")
+                self.assertEqual(review.call_count, 1)
+                self.assertEqual(execute.call_count, 1)
+
+    def test_no_progress_only_considers_the_last_three_tool_rounds(self) -> None:
+        arguments = ["same", "same", "different", "same"]
+
+        class WindowModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_message(self, _messages, **_kwargs):
+                self.calls += 1
+                if self.calls > len(arguments):
+                    return {"role": "assistant", "content": "finished", "usage": {"input_tokens": 10, "output_tokens": 2}}
+                text = arguments[self.calls - 1]
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": f"echo-{self.calls}", "type": "function", "function": {"name": "echo", "arguments": json.dumps({"text": text})}}
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+
+        @tool(description="Echo text.")
+        def echo(text: str) -> str:
+            return text
+
+        agent = Agent(flow=build_guarded_flow(WindowModel(), [echo], chat_kwargs={"stream": False}))
+        context = agent.new_context()
+        begin_guarded_run(context, context.usage.snapshot())
+
+        answer = agent.chat("work", context=context, max_steps=40)
+
+        self.assertEqual(answer, "finished")
+        self.assertFalse(any(event.type == "hook.decision" and event.data.get("hook") == "no-progress" for event in context.events))
+
+    def test_tool_hooks_preserve_parallel_batch_execution(self) -> None:
+        barrier = Barrier(2)
+
+        @tool(description="First probe.", parallel=True)
+        def first_probe() -> str:
+            barrier.wait(timeout=2)
+            return "first"
+
+        @tool(description="Second probe.", parallel=True)
+        def second_probe() -> str:
+            barrier.wait(timeout=2)
+            return "second"
+
+        class ParallelModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_message(self, _messages, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    return {"role": "assistant", "content": "both done", "usage": {"input_tokens": 10, "output_tokens": 2}}
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "first", "type": "function", "function": {"name": "first_probe", "arguments": "{}"}},
+                        {"id": "second", "type": "function", "function": {"name": "second_probe", "arguments": "{}"}},
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+
+        agent = Agent(flow=build_guarded_flow(ParallelModel(), [first_probe, second_probe], chat_kwargs={"stream": False}))
+        context = agent.new_context()
+        begin_guarded_run(context, context.usage.snapshot())
+
+        answer = agent.chat("probe", context=context, max_steps=20)
+
+        self.assertEqual(answer, "both done")
+        results = [event for event in context.events if event.type == "tool.result"]
+        self.assertEqual(len(results), 2)
+        self.assertFalse(any(event.data.get("is_error") for event in results))
+
+    def test_custom_pre_tool_hook_can_short_circuit_execution(self) -> None:
+        executed = []
+
+        class BlockEcho:
+            name = "block-echo"
+            priority = 10
+
+            def before_tool_batch(self, _context, batch):
+                return PreToolDecision(action="deny", tool_call_id=batch.calls[0].id, reason="test policy")
+
+        class HookModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_message(self, _messages, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    return {"role": "assistant", "content": "replanned", "usage": {"input_tokens": 10, "output_tokens": 2}}
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "echo", "type": "function", "function": {"name": "echo", "arguments": '{"text":"x"}'}}],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+
+        @tool(description="Echo text.")
+        def echo(text: str) -> str:
+            executed.append(text)
+            return text
+
+        agent = Agent(
+            flow=build_guarded_flow(
+                HookModel(),
+                [echo],
+                chat_kwargs={"stream": False},
+                pre_tool_hooks=[BlockEcho()],
+            )
+        )
+        context = agent.new_context()
+        begin_guarded_run(context, context.usage.snapshot())
+
+        answer = agent.chat("echo", context=context, max_steps=20)
+
+        self.assertEqual(answer, "replanned")
+        self.assertEqual(executed, [])
+        self.assertTrue(any(event.type == "hook.decision" and event.data.get("hook") == "block-echo" for event in context.events))
 
     def test_resumed_loop_continues_without_adding_a_synthetic_user_message(self) -> None:
         class ResumeModel:
@@ -2490,7 +2773,7 @@ class VerificationTests(unittest.TestCase):
         context = agent.new_context()
         begin_guarded_run(context, context.usage.snapshot())
 
-        answer = agent.chat("work", context=context, max_steps=30)
+        answer = agent.chat("work", context=context, max_steps=50)
 
         self.assertEqual(answer, "finished the work")
         self.assertNotIn(GUARD_STOP_REASON, context.metadata)

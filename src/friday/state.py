@@ -63,7 +63,7 @@ class SessionState:
     archived: list[dict[str, Any]] = field(default_factory=list)
     progress: dict[str, Any] = field(default_factory=dict)
     last_usage: dict[str, Any] | None = None
-    user_message_times: list[dict[str, str]] = field(default_factory=list)
+    user_message_times: list[dict[str, Any]] = field(default_factory=list)
     thinking_effort: str = DEFAULT_THINKING_EFFORT
     turns: int = 0
 
@@ -173,11 +173,12 @@ def save_turn(
     messages: list[dict[str, Any]] | None = None,
     progress: dict[str, Any] | None = None,
     last_usage: dict[str, Any] | None = None,
-    user_message_times: list[dict[str, str]] | None = None,
+    user_message_times: list[dict[str, Any]] | None = None,
     thinking_effort: str = DEFAULT_THINKING_EFFORT,
     artifacts: list[dict[str, Any]] | None = None,
     archived: list[dict[str, Any]] | None = None,
     metrics: dict[str, Any] | None = None,
+    activities: list[dict[str, Any]] | None = None,
     continuation: bool = False,
 ) -> Path:
     """Persist one snapshot per session, overwritten in place (atomic).
@@ -212,6 +213,13 @@ def save_turn(
     metric_records = _carried_records(existing.get("metrics"), assistant_indexes)
     if isinstance(metrics, dict) and metrics:
         metric_records = _attached(metric_records, body, {"values": dict(metrics)})
+    activity_records = _carried_records(existing.get("activities"), assistant_indexes)
+    if activities:
+        activity_records = _attached(
+            activity_records,
+            body,
+            {"items": [dict(item) for item in activities if isinstance(item, dict)]},
+        )
     snapshot = {
         **{
             key: existing[key]
@@ -235,6 +243,7 @@ def save_turn(
         "thinking_effort": thinking_effort,
         "artifacts": artifact_records,
         "metrics": metric_records,
+        "activities": activity_records,
     }
     write_session(path, snapshot)
     return path
@@ -382,6 +391,7 @@ def fork_session(
         "thinking_effort": source.get("thinking_effort", DEFAULT_THINKING_EFFORT),
         "artifacts": _copied_records(source.get("artifacts"), message_index),
         "metrics": _copied_records(source.get("metrics"), message_index),
+        "activities": _copied_records(source.get("activities"), message_index),
         "fork_parent": source_session_id,
         "fork_root": source.get("fork_root") or source_session_id,
         "fork_message_index": message_index,
@@ -540,4 +550,3 @@ def records_by_message(records: Any, messages: Sequence[Mapping[str, Any]]) -> d
         taken[fingerprint] = seen + 1
         found[matches[seen]] = record
     return found
-

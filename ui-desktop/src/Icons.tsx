@@ -118,6 +118,34 @@ export function PlusIcon(props: IconProps) {
   )
 }
 
+export function FileIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M6.5 3.5h7l4 4v13h-11Z" />
+      <path d="M13.5 3.5v4h4" />
+    </Glyph>
+  )
+}
+
+export function FolderIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M3.5 6.5h6l2 2h9v10.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19Z" />
+      <path d="M3.5 9h17" />
+    </Glyph>
+  )
+}
+
+export function TargetIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <circle cx="12" cy="12" r="4.5" />
+      <circle cx="12" cy="12" r="1" />
+    </Glyph>
+  )
+}
+
 export function InfoIcon(props: IconProps) {
   return (
     <Glyph {...props}>

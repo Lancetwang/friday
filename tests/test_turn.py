@@ -11,7 +11,7 @@ from agent_core import Agent, RunContext
 
 from friday.loop import LoopResult
 from friday.trace import expand_event, load_trace
-from friday.turn import _replace_pending_tool_result, run_turn
+from friday.turn import _replace_pending_tool_result, _with_local_attachments, run_turn
 
 
 class TurnTests(unittest.TestCase):
@@ -56,6 +56,72 @@ class TurnTests(unittest.TestCase):
         save_turn.assert_called_once()
         self.assertEqual(save_turn.call_args.kwargs["user_message_times"][0]["text"], "hello")
         self.assertEqual(result.context.events, [])
+
+    def test_run_turn_persists_reasoning_and_tool_durations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = RunContext(metadata={"workspace": tmp, "session_id": "timed"})
+            agent = type("Agent", (), {"instructions": "test"})()
+
+            def chat(*args, **kwargs):
+                context.observe("model.request.payload", category="model", data={"messages": []})
+                context.emit("model.reasoning.delta", category="model", data={"content": "thinking"})
+                context.observe(
+                    "model.response.payload",
+                    category="model",
+                    data={"message": {"content": "", "reasoning_content": "consider the files"}},
+                )
+                context.emit(
+                    "tool.result",
+                    category="tool",
+                    data={"tool_call_id": "call-1", "content": "done", "elapsed_ms": 125.4},
+                )
+                context.add_message("assistant", "done")
+                return LoopResult(answer="done")
+
+            with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
+                with patch("friday.turn.build_tools", return_value=[]):
+                    with patch("friday.turn.run_loop", side_effect=chat):
+                        with patch("friday.turn.write_trace"):
+                            with patch("friday.turn.save_turn") as save_turn:
+                                run_turn(agent, context, "hello", stream=False)
+
+        activities = save_turn.call_args.kwargs["activities"]
+        self.assertEqual([item["kind"] for item in activities], ["reasoning", "tool"])
+        self.assertEqual(activities[0]["text"], "consider the files")
+        self.assertGreaterEqual(activities[0]["elapsed_ms"], 0)
+        self.assertEqual(activities[1]["elapsed_ms"], 125)
+
+    def test_local_attachments_are_indexed_without_loading_their_contents(self) -> None:
+        request = _with_local_attachments(
+            "Review this",
+            [
+                {"kind": "file", "path": "E:\\reports\\brief.pdf"},
+                {"kind": "folder", "path": "E:\\reports\\references"},
+            ],
+        )
+
+        self.assertIn('file: "E:\\\\reports\\\\brief.pdf"', request)
+        self.assertIn('folder: "E:\\\\reports\\\\references"', request)
+        self.assertNotIn("%PDF", request)
+
+    def test_run_turn_persists_attachment_display_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = RunContext(metadata={"workspace": tmp, "session_id": "attachments"})
+            agent = type("Agent", (), {"instructions": "test"})()
+            attachment = {"kind": "file", "name": "brief.pdf", "path": str(Path(tmp) / "brief.pdf"), "size": 3}
+
+            with patch("friday.turn.prepare_context_for_chat", return_value=(agent, context, "")):
+                with patch("friday.turn.build_tools", return_value=[]):
+                    with patch("friday.turn.run_loop", return_value=LoopResult(answer="done")) as run_loop:
+                        with patch("friday.turn.write_trace"), patch("friday.turn.save_turn") as save_turn:
+                            run_turn(agent, context, "Review this", stream=False, attachments=[attachment])
+
+        request = run_loop.call_args.args[2]
+        self.assertIn(json.dumps(str(Path(tmp) / "brief.pdf")), request)
+        record = save_turn.call_args.kwargs["user_message_times"][0]
+        self.assertEqual(record["display_text"], "Review this")
+        self.assertEqual(record["attachments"], [attachment])
+        self.assertFalse(record["goal"])
 
     def test_metrics_separate_window_occupancy_from_what_the_turn_cost(self) -> None:
         """Occupancy is a level; cost is a total. They must not be read as one number.

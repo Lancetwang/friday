@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +17,7 @@ from friday.compaction import LAST_COMPACTION, announce_compaction, compaction_r
 from friday.context import context_window, observe_context_usage, token_estimate, token_measurement
 from friday.loop import AGENT_MAX_STEPS, run_loop
 from friday.memory import capture_user_memory, relevant_memory
+from friday.prompts import goal_attempt_prompt
 from friday.progress import append_progress_checkpoint, begin_progress, current_progress, finish_progress
 from friday.state import USER_MESSAGE_TIMES_KEY, archived_messages, save_turn
 from friday.tools import build_tools, pending_approval
@@ -42,6 +43,47 @@ class TurnCancelled(RuntimeError):
     pass
 
 
+@dataclass
+class _ActivityRecorder:
+    """Small persisted view of model thinking and tool execution."""
+
+    items: list[dict[str, Any]] = field(default_factory=list)
+    requests: dict[tuple[str, int | None], float] = field(default_factory=dict)
+    reasoning: dict[tuple[str, int | None], float] = field(default_factory=dict)
+
+    def observe(self, event: Any) -> None:
+        key = (str(getattr(event, "run_id", "") or ""), getattr(event, "step", None))
+        timestamp = float(getattr(event, "timestamp", time.time()))
+        data = event.data if isinstance(getattr(event, "data", None), Mapping) else {}
+        if event.type == "model.request.payload":
+            self.requests[key] = timestamp
+        elif event.type == "model.reasoning.delta":
+            self.reasoning.setdefault(key, timestamp)
+        elif event.type == "model.response.payload":
+            message = data.get("message")
+            content = message.get("reasoning_content") if isinstance(message, Mapping) else None
+            if content:
+                started = self.reasoning.pop(key, self.requests.get(key, timestamp))
+                self.items.append(
+                    {
+                        "kind": "reasoning",
+                        "text": str(content),
+                        "elapsed_ms": max(0, round((timestamp - started) * 1000)),
+                    }
+                )
+            self.requests.pop(key, None)
+        elif event.type == "tool.result":
+            elapsed = data.get("elapsed_ms")
+            item: dict[str, Any] = {
+                "kind": "tool",
+                "tool_call_id": str(data.get("tool_call_id") or ""),
+                "status": "error" if data.get("is_error") else "done",
+            }
+            if isinstance(elapsed, (int, float)):
+                item["elapsed_ms"] = max(0, round(elapsed))
+            self.items.append(item)
+
+
 def run_turn(
     agent: Agent,
     context: RunContext,
@@ -57,12 +99,14 @@ def run_turn(
     user_label: str | None = None,
     continuation: bool = False,
     images: Sequence[str] = (),
+    attachments: Sequence[Mapping[str, Any]] = (),
 ) -> TurnResult:
     event_handler = context.on_event
     observation_handler = context.on_observation
     usage_start = context.usage.snapshot()
     workspace = Path(context.metadata["workspace"])
     user = user_label or (f"/goal {text}" if goal else text)
+    request = _with_local_attachments(text, attachments)
     mode = "goal" if goal else "chat"
     continued_turn_id = str(context.metadata.get(PENDING_TURN_ID) or "") if continuation else ""
     session_id = str(context.metadata.get("session_id") or "")
@@ -91,8 +135,10 @@ def run_turn(
     # Kept beside the turn rather than on the context because a mid-run
     # compaction swaps the context out, and cost has to keep accruing across it.
     cost = {"cached_tokens": 0}
+    activity = _ActivityRecorder()
 
     def on_observation(event: Any) -> None:
+        activity.observe(event)
         observe_context_usage(get_current_context() or context, event.type, event.data)
         if event.type == "model.request.payload":
             config = context.metadata.get("friday.model_config")
@@ -121,7 +167,7 @@ def run_turn(
         record_context_transition(live_path, turn_id, notice, context.get_messages())
         if notice:
             announce_compaction(context, compaction_record(context.metadata.get(LAST_COMPACTION)), on_context_notice)
-        begin_guarded_run(context, usage_start)
+        begin_guarded_run(context, usage_start, continuation=continuation)
         if approval_result is not None:
             tool_call_id = _replace_pending_tool_result(context, approval_result)
             context.observe(
@@ -165,20 +211,24 @@ def run_turn(
             user_message_times = []
             context.metadata[USER_MESSAGE_TIMES_KEY] = user_message_times
         if not continuation:
+            recorded_text = goal_attempt_prompt(request) if goal else request
             user_message_times.append(
                 {
-                    "text": text,
+                    "attachments": [dict(item) for item in attachments],
+                    "display_text": text,
+                    "goal": goal,
+                    "text": recorded_text,
                     "time": datetime.now().astimezone().isoformat(timespec="seconds"),
                 }
             )
         prompt_messages = [dict(message) for message in context.get_messages()]
         tools = build_tools(workspace)
-        input_estimate = token_estimate(context, tools) + _tokens(text)
+        input_estimate = token_estimate(context, tools) + _tokens(request)
         start = time.perf_counter()
         loop_result = run_loop(
             agent,
             context,
-            text,
+            request,
             force_verify=goal,
             max_attempts=None,
             max_steps=AGENT_MAX_STEPS,
@@ -295,6 +345,7 @@ def run_turn(
             artifacts=artifacts,
             archived=archived_messages(context),
             metrics=metrics,
+            activities=activity.items,
             continuation=continuation,
         )
         finish_live_trace(
@@ -310,6 +361,16 @@ def run_turn(
 
 def _tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
+
+
+def _with_local_attachments(text: str, attachments: Sequence[Mapping[str, Any]]) -> str:
+    if not attachments:
+        return text
+    lines = ["Attached local items (inspect with available tools when relevant):"]
+    for item in attachments:
+        kind = "folder" if item.get("kind") == "folder" else "file"
+        lines.append(f"- {kind}: {json.dumps(str(item.get('path') or ''), ensure_ascii=False)}")
+    return f"{text}\n\n" + "\n".join(lines)
 
 
 def _cached_tokens(data: Any) -> int:

@@ -1834,6 +1834,70 @@ input[type="checkbox"] {
   transform: scale(1.05);
 }
 
+.message-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.message-goal .glyph-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.message-attachments > span {
+  display: flex;
+  min-width: 0;
+  max-width: 260px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--fill);
+}
+
+.message-attachments .glyph-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.message-attachments > span > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.message-attachments strong,
+.message-attachments small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachments strong {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.message-attachments small {
+  color: var(--muted);
+  font-size: var(--text-micro);
+}
+
 .message-artifacts {
   display: flex;
   flex-wrap: wrap;
@@ -2926,19 +2990,76 @@ input[type="checkbox"] {
   box-shadow: 0 0 0 3px var(--fill), var(--shadow-2);
 }
 
-.composer-attachment {
-  position: relative;
-  width: 68px;
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 10px;
 }
 
-.composer-attachment img {
+.composer-attachment {
+  position: relative;
+}
+
+.composer-attachment.image img {
   display: block;
   width: 68px;
   height: 54px;
   object-fit: cover;
   border: 1px solid var(--line);
   border-radius: 10px;
+}
+
+.composer-attachment.file,
+.composer-attachment.folder {
+  display: flex;
+  width: min(230px, 42vw);
+  min-height: 54px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 28px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--fill);
+}
+
+.attachment-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.attachment-icon .glyph-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.attachment-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.attachment-copy strong,
+.attachment-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-copy strong {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.attachment-copy small {
+  color: var(--muted);
+  font-size: var(--text-micro);
 }
 
 .composer-attachment button {
@@ -2986,6 +3107,118 @@ input[type="checkbox"] {
   align-items: center;
   justify-content: space-between;
   min-height: 30px;
+}
+
+.composer-primary-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.attachment-picker {
+  position: relative;
+}
+
+.attachment-picker > summary {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--muted);
+  list-style: none;
+  cursor: pointer;
+  transition: color var(--dur-1) ease-out, background-color var(--dur-1) ease-out, transform var(--dur-1) ease-out;
+}
+
+.attachment-picker > summary::-webkit-details-marker {
+  display: none;
+}
+
+.attachment-picker > summary:hover,
+.attachment-picker[open] > summary {
+  color: var(--ink);
+  background: var(--fill);
+}
+
+.attachment-picker > summary:active {
+  transform: scale(0.9);
+}
+
+.attachment-picker > summary .glyph-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.attachment-picker.disabled {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+.attachment-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: grid;
+  width: 178px;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+.attachment-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-m);
+  color: var(--ink);
+  background: transparent;
+  font-size: var(--text-caption);
+  text-align: left;
+}
+
+.attachment-menu button:hover,
+.attachment-menu button.active {
+  background: var(--fill);
+}
+
+.attachment-menu .glyph-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.goal-mode-chip {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--radius-full);
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.goal-mode-chip .glyph-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.goal-mode-chip .glyph-icon:last-child {
+  width: 10px;
+  height: 10px;
+  opacity: 0.7;
 }
 
 .model-picker,
@@ -3099,7 +3332,7 @@ input[type="checkbox"] {
 }
 
 .model-menu,
-.composer-footer > .permission-picker > .permission-menu {
+.composer-primary-actions > .permission-picker > .permission-menu {
   left: 0;
   right: auto;
 }

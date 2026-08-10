@@ -18,12 +18,15 @@ import {
   CloseIcon,
   DiamondIcon,
   EyeIcon,
+  FileIcon,
+  FolderIcon as FileFolderIcon,
   InfoIcon,
   MinusIcon,
   PencilIcon,
   PlusIcon,
   RefreshIcon,
   SearchIcon,
+  TargetIcon,
   TrashIcon,
   UndoIcon
 } from './Icons'
@@ -268,8 +271,18 @@ type SkillDetail = {
 
 type ImageAttachment = {
   dataUrl: string
+  kind: 'image'
   name: string
 }
+
+type LocalAttachment = {
+  kind: 'file' | 'folder'
+  name: string
+  path: string
+  size?: number
+}
+
+type ComposerAttachment = ImageAttachment | LocalAttachment
 
 type ArtifactInfo = {
   kind: 'image' | 'markdown' | 'pdf' | 'text'
@@ -286,6 +299,9 @@ type ArtifactDetail = ArtifactInfo & {
 type HistoryItem = {
   arguments?: unknown
   artifacts?: ArtifactInfo[]
+  attachments?: LocalAttachment[]
+  elapsed_ms?: number
+  goal?: boolean
   images?: string[]
   kind: TimelineItem['kind']
   message_index?: number
@@ -309,10 +325,12 @@ type ThinkingState = {
 type TimelineItem = {
   arguments?: string
   artifacts?: ArtifactInfo[]
+  attachments?: LocalAttachment[]
   checkpointId?: string
   createdAt?: string
   id: string
   forkIndex?: number
+  goal?: boolean
   images?: string[]
   kind: 'assistant' | 'reasoning' | 'system' | 'tool' | 'user'
   metrics?: Metrics
@@ -341,12 +359,13 @@ type ForkTree = {
 
 type ProjectView = {
   activeSession: string
-  attachment: ImageAttachment | null
+  attachments: ComposerAttachment[]
   busy: boolean
   cancelling: boolean
   checkpoints: CheckpointChoice[]
   draft: string
   guidance: string
+  goalMode: boolean
   forkTree: ForkTree
   info: SessionInfo
   items: TimelineItem[]
@@ -400,6 +419,8 @@ type SidebarSection = 'phone' | 'projects' | 'recent'
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 520
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_LOCAL_ATTACHMENTS = 8
+const MAX_IMAGE_ATTACHMENTS = 4
 const WELCOME_MESSAGE_KEYS = ['welcome.0', 'welcome.1', 'welcome.2', 'welcome.3', 'welcome.4', 'welcome.5']
 
 // Picks the time-of-day greeting that prefixes the random welcome hint. The
@@ -495,12 +516,13 @@ function shortTokens(value: number) {
 function emptyView(path = ''): ProjectView {
   return {
     activeSession: '',
-    attachment: null,
+    attachments: [],
     busy: false,
     cancelling: false,
     checkpoints: [],
     draft: '',
     guidance: '',
+    goalMode: false,
     forkTree: { nodes: [], root: '' },
     info: { cwd: path, model: path ? 'loading' : '', permission_mode: 'manual', thinking_effort: 'high', tools: [] },
     items: [],
@@ -524,7 +546,7 @@ function readImage(file: File) {
     }
     const reader = new FileReader()
     reader.onerror = () => reject(new Error('Friday could not read the pasted image.'))
-    reader.onload = () => resolve({ dataUrl: String(reader.result || ''), name: file.name || 'Pasted image' })
+    reader.onload = () => resolve({ dataUrl: String(reader.result || ''), kind: 'image', name: file.name || 'Pasted image' })
     reader.readAsDataURL(file)
   })
 }
@@ -568,6 +590,12 @@ function plainPath(path: string) {
 
 function pathKey(path: string) {
   return plainPath(path).replace(/[\\/]+$/, '').replace(/\//g, '\\').toLocaleLowerCase()
+}
+
+function localAttachment(path: string, kind: LocalAttachment['kind']): LocalAttachment {
+  const clean = plainPath(path)
+  const parts = clean.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean)
+  return { kind, name: parts.at(-1) || clean, path: clean }
 }
 
 function samePath(left: string, right: string) {
@@ -655,6 +683,7 @@ function App() {
   // STREAM_FLUSH_MS. Keyed per workspace/session/stream so several projects can
   // stream at once without their deltas interleaving.
   const streamBuffers = useRef(new Map<string, { apply: (text: string) => void; text: string; timer: number }>())
+  const cancelledEventKeys = useRef(new Set<string>())
 
   const streamAppend = (key: string, text: string, apply: (text: string) => void) => {
     const existing = streamBuffers.current.get(key)
@@ -678,6 +707,13 @@ function App() {
     window.clearTimeout(entry.timer)
     entry.apply(entry.text)
   }
+
+  const dropStream = (key: string) => {
+    const entry = streamBuffers.current.get(key)
+    if (!entry) return
+    streamBuffers.current.delete(key)
+    window.clearTimeout(entry.timer)
+  }
   const sidebarDrag = useRef<{ startWidth: number; startX: number } | null>(null)
   // Keyed by pathKey; the value is the path itself, which the idle sweep needs to
   // name a backend it wants stopped.
@@ -698,7 +734,7 @@ function App() {
   const viewsRef = useRef<Record<string, ProjectView>>({})
 
   const view = views[activeProject] || emptyView(activeProject)
-  const { activeSession, attachment, busy, cancelling, checkpoints, draft, forkTree, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
+  const { activeSession, attachments, busy, cancelling, checkpoints, draft, forkTree, goalMode, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
   const isDefaultWorkspace = Boolean(defaultWorkspace && samePath(defaultWorkspace, activeProject))
 
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
@@ -975,6 +1011,14 @@ function App() {
         }
         return
       }
+      if (type === 'message.start') cancelledEventKeys.current.delete(eventKey)
+      if (cancelledEventKeys.current.has(eventKey) && (
+        type === 'message.delta' ||
+        type === 'reasoning.delta' ||
+        type === 'tool.start' ||
+        type === 'tool.update' ||
+        type === 'tool.complete'
+      )) return
 
       if (type === 'reasoning.delta') {
         // Thinking effort "off" is a promise to hide reasoning: some providers
@@ -1009,11 +1053,20 @@ function App() {
         flushStream(`${eventKey}\u0000thinking`)
         const itemId = `thinking-${String(payload.id || '')}`
         const error = Boolean(payload.error)
+        const duration = typeof payload.elapsed_ms === 'number' ? payload.elapsed_ms : undefined
         updateView(workspace, current => ({
           ...current,
           items: current.items.map(item =>
-            item.id === itemId && item.thinking && item.thinking.ended == null
-              ? { ...item, thinking: { ...item.thinking, ended: Date.now(), error: error || undefined } }
+            item.id === itemId && item.thinking
+              ? {
+                  ...item,
+                  thinking: {
+                    ...item.thinking,
+                    duration: duration ?? item.thinking.duration,
+                    ended: item.thinking.ended ?? Date.now(),
+                    error: error || item.thinking.error || undefined
+                  }
+                }
               : item)
         }))
       } else if (type === 'message.delta') {
@@ -1048,12 +1101,14 @@ function App() {
           })
         })
       } else if (type === 'message.suspended') {
+        cancelledEventKeys.current.delete(eventKey)
         updateView(workspace, current => ({
           ...current,
           busy: false,
           cancelling: false
         }))
       } else if (type === 'message.complete') {
+        cancelledEventKeys.current.delete(eventKey)
         flushStream(`${eventKey}\u0000assistant`)
         const text = String(payload.text || '')
         const metrics = (payload.metrics || {}) as Metrics
@@ -1099,6 +1154,7 @@ function App() {
           refreshTree(workspace, sessionId)
         ]).catch(() => undefined)
       } else if (type === 'message.cancelled') {
+        cancelledEventKeys.current.delete(eventKey)
         flushStream(`${eventKey}\u0000assistant`)
         activeAssistants.current.delete(eventKey)
         updateView(workspace, current => ({
@@ -1332,24 +1388,30 @@ function App() {
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault()
-    const text = draft.trim() || (attachment ? 'Please analyze the attached image.' : '')
+    const text = draft.trim() || (attachments.length ? t('composer.inspectAttachments') : '')
     if (!text || busy || pendingApproval || status !== 'ready') return
     const submittedSession = activeSession
+    const submittedGoal = goalMode
+    const imageAttachments = attachments.filter((item): item is ImageAttachment => item.kind === 'image')
+    const localAttachments = attachments.filter((item): item is LocalAttachment => item.kind !== 'image')
 
     followOutput.current = true
     const userItemId = nextId('user')
-    const imageUrls = attachment ? [attachment.dataUrl] : []
+    const imageUrls = imageAttachments.map(item => item.dataUrl)
     if (imageUrls.length) writeMessageImages(submittedSession, userItemId, imageUrls)
     updateView(activeProject, current => ({
       ...current,
-      attachment: null,
+      attachments: [],
       busy: true,
       cancelling: false,
       draft: '',
+      goalMode: false,
       items: [
         ...current.items,
         {
+          attachments: localAttachments,
           createdAt: new Date().toISOString(),
+          goal: submittedGoal,
           id: userItemId,
           images: imageUrls.map((_, index) => imageCacheKey(submittedSession, userItemId, index)),
           kind: 'user',
@@ -1358,7 +1420,11 @@ function App() {
       ]
     }))
     try {
-      await sendGateway(activeProject, 'chat.send', { images: attachment ? [attachment.dataUrl] : [], text })
+      await sendGateway(activeProject, submittedGoal ? 'goal.run' : 'chat.send', {
+        attachments: localAttachments.map(item => ({ path: item.path })),
+        images: imageUrls,
+        text
+      })
     } catch (error) {
       updateView(activeProject, current => current.activeSession !== submittedSession ? current : ({
           ...current,
@@ -1371,13 +1437,28 @@ function App() {
 
   const cancelRequest = () => {
     if (!busy || cancelling || !activeSession) return
-    updateView(activeProject, current => ({ ...current, cancelling: true }))
+    const eventKey = sessionEventKey(activeProject, activeSession)
+    const now = Date.now()
+    cancelledEventKeys.current.add(eventKey)
+    dropStream(`${eventKey}\u0000assistant`)
+    dropStream(`${eventKey}\u0000thinking`)
+    updateView(activeProject, current => ({
+      ...current,
+      cancelling: true,
+      items: current.items.map(item => item.kind === 'reasoning' && item.thinking?.ended == null
+        ? { ...item, thinking: { ...item.thinking, started: item.thinking!.started, ended: now, error: true } }
+        : item.kind === 'assistant' && item.streaming
+          ? { ...item, streaming: false }
+          : item)
+    }))
     void sendGateway<{ cancelled: boolean }>(activeProject, 'chat.cancel', { session_id: activeSession })
       .then(result => {
         if (result.cancelled) return
+        cancelledEventKeys.current.delete(eventKey)
         updateView(activeProject, current => ({ ...current, busy: false, cancelling: false }))
       })
       .catch(error => {
+        cancelledEventKeys.current.delete(eventKey)
         updateView(activeProject, current => ({
           ...current,
           cancelling: false,
@@ -1551,10 +1632,12 @@ function App() {
       updateView(workspace, value => ({
         ...value,
         activeSession: result.info.session_id || '',
+        attachments: [],
         busy: false,
         cancelling: false,
         checkpoints: [],
         forkTree: { nodes: [], root: '' },
+        goalMode: false,
         info: result.info,
         items: timelineFromHistory(result.history, result.info.session_id || ''),
         pendingApproval: null
@@ -1716,6 +1799,44 @@ function App() {
     await selectProject(selected)
   }
 
+  const addLocalAttachments = (paths: string[], kind: LocalAttachment['kind']) => {
+    updateView(activeProject, current => {
+      const existing = new Set(
+        current.attachments
+          .filter((item): item is LocalAttachment => item.kind !== 'image')
+          .map(item => pathKey(item.path))
+      )
+      const added = paths
+        .map(path => localAttachment(path, kind))
+        .filter(item => {
+          const key = pathKey(item.path)
+          if (existing.has(key)) return false
+          existing.add(key)
+          return true
+        })
+      const slots = MAX_LOCAL_ATTACHMENTS - current.attachments.filter(item => item.kind !== 'image').length
+      return {
+        ...current,
+        attachments: [...current.attachments, ...added.slice(0, Math.max(0, slots))],
+        items: added.length > slots
+          ? [...current.items, { id: nextId('attachment'), kind: 'system', text: t('composer.attachmentLimit') }]
+          : current.items
+      }
+    })
+  }
+
+  const chooseFiles = async () => {
+    const selected = await open({ directory: false, multiple: true, title: t('composer.addFiles') })
+    if (!selected) return
+    addLocalAttachments(Array.isArray(selected) ? selected : [selected], 'file')
+  }
+
+  const chooseFolder = async () => {
+    const selected = await open({ directory: true, multiple: false, title: t('composer.addFolder') })
+    if (!selected || Array.isArray(selected)) return
+    addLocalAttachments([selected], 'folder')
+  }
+
   /** Take a project out of this window, and say where the user ended up. */
   const dropProject = async (workspace: string, reason = 'Project closed.') => {
     const key = pathKey(workspace)
@@ -1817,7 +1938,8 @@ function App() {
           ? {
               ...current,
               activeSession: result.info.session_id || '',
-              attachment: null,
+              attachments: [],
+              goalMode: false,
               checkpoints: [],
               info: result.info,
               items: timelineFromHistory(result.history, result.info.session_id || ''),
@@ -2351,17 +2473,34 @@ function App() {
         </section>
 
         <form className="composer" onSubmit={submit}>
-          {attachment && (
-            <div className="composer-attachment">
-              <img alt={attachment.name} src={attachment.dataUrl} />
-              <button
-                aria-label={t('composer.removeAttachment')}
-                onClick={() => updateView(activeProject, current => ({ ...current, attachment: null }))}
-                title={t('composer.removeAttachment')}
-                type="button"
-              >
-                <CloseIcon />
-              </button>
+          {attachments.length > 0 && (
+            <div className="composer-attachments">
+              {attachments.map((item, index) => (
+                <div className={`composer-attachment ${item.kind}`} key={`${item.kind}-${item.name}-${index}`}>
+                  {item.kind === 'image' ? (
+                    <img alt={item.name} src={item.dataUrl} />
+                  ) : (
+                    <>
+                      <span className="attachment-icon">{item.kind === 'folder' ? <FileFolderIcon /> : <FileIcon />}</span>
+                      <span className="attachment-copy">
+                        <strong>{item.name}</strong>
+                        <small>{t(`composer.${item.kind}`)}</small>
+                      </span>
+                    </>
+                  )}
+                  <button
+                    aria-label={t('composer.removeAttachment')}
+                    onClick={() => updateView(activeProject, current => ({
+                      ...current,
+                      attachments: current.attachments.filter((_, itemIndex) => itemIndex !== index)
+                    }))}
+                    title={t('composer.removeAttachment')}
+                    type="button"
+                  >
+                    <CloseIcon />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
           <textarea
@@ -2381,7 +2520,16 @@ function App() {
                 return
               }
               void readImage(image).then(value => {
-                updateView(activeProject, current => ({ ...current, attachment: value }))
+                updateView(activeProject, current => {
+                  const imageCount = current.attachments.filter(item => item.kind === 'image').length
+                  if (imageCount >= MAX_IMAGE_ATTACHMENTS) {
+                    return {
+                      ...current,
+                      items: [...current.items, { id: nextId('image'), kind: 'system', text: t('composer.imageLimit') }]
+                    }
+                  }
+                  return { ...current, attachments: [...current.attachments, value] }
+                })
               }).catch(error => {
                 updateView(activeProject, current => ({
                   ...current,
@@ -2395,43 +2543,95 @@ function App() {
             value={draft}
           />
           <div className="composer-footer">
-            <MenuDetails
-              className={`permission-picker ${busy ? 'disabled' : ''}`}
-              key={`${activeProject}-permissions`}
-            >
-              <summary
-                aria-disabled={busy}
-                aria-label="Permission mode"
-                onClick={event => {
-                  if (busy) event.preventDefault()
-                }}
-                tabIndex={busy ? -1 : 0}
-                title={t('permission.title')}
-              >
-                <span aria-hidden="true" className={`permission-indicator mode-${info.permission_mode}`} />
-                <span>{t(permission.labelKey)}</span>
-                <i aria-hidden="true" />
-              </summary>
-              <div className="permission-menu">
-                {permissionOptions.map(option => (
+            <div className="composer-primary-actions">
+              <MenuDetails className={`attachment-picker ${busy ? 'disabled' : ''}`} key={`${activeProject}-attachments`}>
+                <summary
+                  aria-disabled={busy}
+                  aria-label={t('composer.add')}
+                  onClick={event => busy && event.preventDefault()}
+                  tabIndex={busy ? -1 : 0}
+                  title={t('composer.add')}
+                >
+                  <PlusIcon />
+                </summary>
+                <div className="attachment-menu">
+                  <button onClick={event => {
+                    event.currentTarget.closest('details')?.removeAttribute('open')
+                    void chooseFiles()
+                  }} type="button">
+                    <FileIcon />
+                    <span>{t('composer.addFiles')}</span>
+                  </button>
+                  <button onClick={event => {
+                    event.currentTarget.closest('details')?.removeAttribute('open')
+                    void chooseFolder()
+                  }} type="button">
+                    <FileFolderIcon />
+                    <span>{t('composer.addFolder')}</span>
+                  </button>
                   <button
-                    className={option.value === info.permission_mode ? 'active' : ''}
-                    key={option.value}
+                    className={goalMode ? 'active' : ''}
                     onClick={event => {
                       event.currentTarget.closest('details')?.removeAttribute('open')
-                      changePermission(option.value)
+                      updateView(activeProject, current => ({ ...current, goalMode: !current.goalMode }))
                     }}
                     type="button"
                   >
-                    <span className={`permission-indicator mode-${option.value}`} />
-                    <span>
-                      <strong>{t(option.labelKey)}</strong>
-                      <small>{t(option.descriptionKey)}</small>
-                    </span>
+                    <TargetIcon />
+                    <span>{t('composer.setGoal')}</span>
                   </button>
-                ))}
-              </div>
-            </MenuDetails>
+                </div>
+              </MenuDetails>
+              {goalMode && (
+                <button
+                  className="goal-mode-chip"
+                  onClick={() => updateView(activeProject, current => ({ ...current, goalMode: false }))}
+                  title={t('composer.clearGoal')}
+                  type="button"
+                >
+                  <TargetIcon />
+                  <span>{t('composer.goal')}</span>
+                  <CloseIcon />
+                </button>
+              )}
+              <MenuDetails
+                className={`permission-picker ${busy ? 'disabled' : ''}`}
+                key={`${activeProject}-permissions`}
+              >
+                <summary
+                  aria-disabled={busy}
+                  aria-label="Permission mode"
+                  onClick={event => {
+                    if (busy) event.preventDefault()
+                  }}
+                  tabIndex={busy ? -1 : 0}
+                  title={t('permission.title')}
+                >
+                  <span aria-hidden="true" className={`permission-indicator mode-${info.permission_mode}`} />
+                  <span>{t(permission.labelKey)}</span>
+                  <i aria-hidden="true" />
+                </summary>
+                <div className="permission-menu">
+                  {permissionOptions.map(option => (
+                    <button
+                      className={option.value === info.permission_mode ? 'active' : ''}
+                      key={option.value}
+                      onClick={event => {
+                        event.currentTarget.closest('details')?.removeAttribute('open')
+                        changePermission(option.value)
+                      }}
+                      type="button"
+                    >
+                      <span className={`permission-indicator mode-${option.value}`} />
+                      <span>
+                        <strong>{t(option.labelKey)}</strong>
+                        <small>{t(option.descriptionKey)}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </MenuDetails>
+            </div>
             <div className="composer-actions">
               <MenuDetails
                 className={`model-picker ${busy ? 'disabled' : ''}`}
@@ -2517,7 +2717,7 @@ function App() {
               <button
                 aria-label={busy ? t('composer.stop') : t('composer.send')}
                 className={`send-button ${busy ? 'stop' : ''}`}
-                disabled={cancelling || (!busy && ((!draft.trim() && !attachment) || Boolean(pendingApproval) || status !== 'ready'))}
+                disabled={cancelling || (!busy && ((!draft.trim() && !attachments.length) || Boolean(pendingApproval) || status !== 'ready'))}
                 onClick={busy ? event => { event.preventDefault(); cancelRequest() } : undefined}
                 title={busy ? t('composer.stop') : t('composer.send')}
                 type={busy ? 'button' : 'submit'}
@@ -3945,8 +4145,10 @@ function timelineFromHistory(history: HistoryItem[], sessionId: string) {
     return {
       arguments: item.arguments == null ? undefined : capText(JSON.stringify(item.arguments, null, 2), MAX_TOOL_TEXT),
       artifacts: item.artifacts,
+      attachments: item.attachments,
       id,
       forkIndex: item.kind === 'assistant' ? item.message_index : undefined,
+      goal: item.goal,
       images: images.map((_, imageIndex) => imageCacheKey(sessionId, id, imageIndex)),
       kind: item.kind,
       // Saved with the reply, so reopening a conversation keeps the figures that
@@ -3955,7 +4157,16 @@ function timelineFromHistory(history: HistoryItem[], sessionId: string) {
       name: item.name,
       status: item.status,
       text: capText(item.text, item.kind === 'tool' ? MAX_TOOL_TEXT : MAX_MESSAGE_TEXT),
+      thinking: item.kind === 'reasoning'
+        ? {
+            duration: item.elapsed_ms ?? 0,
+            ended: item.elapsed_ms ?? 0,
+            error: item.status === 'error' || undefined,
+            started: 0
+          }
+        : undefined,
       createdAt: item.timestamp,
+      elapsed_ms: item.elapsed_ms,
       toolCallId: item.tool_call_id
     }
   })
@@ -4084,6 +4295,9 @@ const TimelineRow = memo(function TimelineRow({
   return (
     <article className={`message ${item.kind}`}>
       <div className="message-body">
+        {item.kind === 'user' && item.goal && (
+          <span className="message-goal"><TargetIcon /> {t('composer.goal')}</span>
+        )}
         <div className="message-text">
           {item.streaming ? (
             // While the answer is in flight the text renders as-is: markdown
@@ -4111,6 +4325,22 @@ const TimelineRow = memo(function TimelineRow({
                 </button>
               )
             })}
+          </div>
+        ) : null}
+        {item.attachments?.length ? (
+          <div className="message-attachments">
+            {item.attachments.map(attachment => (
+              <span key={`${item.id}-${attachment.path}`} title={attachment.path}>
+                {attachment.kind === 'folder' ? <FileFolderIcon /> : <FileIcon />}
+                <span>
+                  <strong>{attachment.name}</strong>
+                  <small>
+                    {t(`composer.${attachment.kind}`)}
+                    {attachment.size != null ? ` · ${formatBytes(attachment.size)}` : ''}
+                  </small>
+                </span>
+              </span>
+            ))}
           </div>
         ) : null}
         {item.artifacts?.length ? (
