@@ -94,7 +94,6 @@ flowchart TD
 - [Phone Bridge](docs/im-feishu.md)
 - [Observability](docs/observability.md)
 - [Checkpoints](docs/checkpoints.md)
-- [Evaluation Results](docs/evaluation-results.md)
 
 ## Validate
 

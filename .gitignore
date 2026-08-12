@@ -12,6 +12,8 @@ ui-desktop/src-tauri/gen/
 ui-desktop/.dev-*.log
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
 .friday/
 /eval/
-/benchmarks/harness/runs/
+/dist/

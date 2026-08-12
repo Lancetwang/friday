@@ -92,7 +92,6 @@ flowchart TD
 - [手机接入（飞书）](docs/im-feishu.md)
 - [可观测性](docs/observability.md)
 - [检查点与撤回](docs/checkpoints.md)
-- [评估结果](docs/evaluation-results.md)
 
 ## 验证
 

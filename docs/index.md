@@ -11,7 +11,6 @@ Start here:
 - [Quick Start](quick-start.md)
 - [Architecture](architecture.md)
 - [Model Configuration](model-configuration.md)
-- [Evaluation Results](evaluation-results.md)
 - [CLI Commands](cli.md)
 - [Tools](tools.md)
 - [Memory](memory.md)
