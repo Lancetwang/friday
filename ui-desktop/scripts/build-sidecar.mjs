@@ -46,6 +46,8 @@ const result = spawnSync(
     join(root, "src"),
     "--collect-data",
     "friday",
+    "--copy-metadata",
+    "friday-agent",
     "--distpath",
     binaries,
     "--workpath",

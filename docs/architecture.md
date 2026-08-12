@@ -57,7 +57,7 @@ flowchart TD
     Outer --> Inner["Guarded flow (agent_flow.py)<br/>model -> router -> tools -> guard"]
 ```
 
-- **Guarded flow** — the inner agent loop. The guard node checks, after every tool round: pending approval (explicit suspend node ends the run), repeated no-progress cycles, the run token budget, and context-window pressure. Window pressure is relieved losslessly first (tool-result compaction; full outputs stay on disk) and only forces a final answer when the window is nearly full.
+- **Guarded flow** — the inner agent loop. Before execution, a permission hook rejects, reviews, or suspends risky calls. After every tool round, post-tool hooks handle pending approval, attach tool-produced images, and compare exact tool name/argument signatures across a three-round sliding window. The guard then handles context-window pressure. It probes lossless tool-result compaction first (full outputs stay on disk) and only forces a final answer when neither compaction pass can bring the prompt below the threshold.
 - **Verify / goal loop** — runs attempts and independent verification. Between repair attempts it may compact the conversation, which rebuilds the agent/context pair; it therefore returns the final pair and callers continue with it.
 - **Turn pipeline** — wraps one user turn with checkpointing, compaction checks, memory recall/capture, tracing, and persistence.
 - **Session facade** — [`session.py`](../src/friday/session.py) is the single owner of the live agent/context and the approve / reject / continue-with-guidance state machine. The CLI and the TUI gateway are thin views: they render events and turn results and never mutate agent state themselves.

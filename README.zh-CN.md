@@ -10,6 +10,7 @@
   <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/package%20manager-uv-DE5FE9?style=flat-square&logo=uv&logoColor=white" alt="uv"></a>
   <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64"></a>
   <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-macOS%20ARM%20%7C%20Intel-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon 与 Intel"></a>
+  <a href="docs/install.zh-CN.md"><img src="https://img.shields.io/badge/platform-Linux%20CLI%20%7C%20TUI-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux CLI 与 TUI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
 </p>
 
@@ -48,12 +49,15 @@ uv tool install -e . --force --reinstall
 - 通用任务执行：处理本地文件与命令、联网检索，并让普通任务持续推进到交付与验证。
 - 两层 Loop：Agent Loop 负责模型与工具交互；独立的 Verify / Goal Loop 检查交付物并依据证据驱动修正。
 - Prefix 友好的上下文：稳定 Runtime 规则位于前部，用户、项目、Skill 和召回记忆按需渐进披露。
-- 多级上下文压缩：先探测无损工具结果简化，必要时再进行结构化对话压缩并保留最近十个完整 Turn。
+- 多级上下文压缩：先探测无损工具结果简化，必要时再进行结构化对话压缩，并在预算内最多保留最近十个完整用户 Turn。
 - 分层记忆与进度：稳定用户事实、项目知识、情景召回和可恢复任务进度彼此独立。
 - 渐进式 Skill：先返回元数据和路径，只读取被选中的 `SKILL.md` 及其引用资源。
 - 长程任务控制：显式目标、计划、下一步、验证状态、语义停止条件和 Session 恢复共同防止任务迷失。
-- Turn 级检查点：`/undo` 同时恢复最近一次 Friday 执行前的工作区文件、对话和任务进度，不改动项目自身的 Git 历史。
-- 程序级权限：危险 Bash 命令在执行前停止并请求明确批准。
+- Turn 级检查点：`friday undo` 与桌面端消息回退可同时恢复工作区文件、对话和任务进度，不改动项目自身的 Git 历史。
+- 工具生命周期 Hook：执行前由代码完成权限预检，执行后用三轮滑动窗口识别工具名与参数完全相同的无进展循环；参数变化的正常重试不会被误拦截。
+- 程序级权限：硬拒绝命令与显式 deny 规则在执行前停止；灰区命令可交给用户或独立意图审查器判断。
+- 基于 Checkpoint 的交付物：真实被当前 Turn 修改的文件会附在回复中，安全的文档和图片格式可直接预览。
+- Prompt Injection 边界：主 Agent 与辅助模型调用都保护私有控制上下文，并把检索内容视作不可信数据。
 - 有预算的联网检索：只为缺失证据继续搜索，并区分检索事实与模型推断。
 - 精确统计与 Trace：记录 Provider Usage、模型调用、工具过程、压缩、验证和结果，支持检查与分析。
 - Runtime 兼容性：固定经过验证的 [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) 版本，并在执行前检查安装环境。

@@ -1,3 +1,8 @@
 """Friday general-purpose local CLI agent."""
 
-__version__ = "0.1.3"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("friday-agent")
+except PackageNotFoundError:
+    __version__ = "0+unknown"

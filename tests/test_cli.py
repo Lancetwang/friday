@@ -5,13 +5,14 @@ import os
 import sys
 import tempfile
 import unittest
+from importlib.metadata import version as package_version
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 from agent_core import RunContext
 
-from friday import cli
+from friday import __version__, cli
 from friday.doctor import doctor_report
 from friday import tui_node
 from friday.session import FridaySession
@@ -19,6 +20,9 @@ from friday.state import save_turn
 
 
 class CliTests(unittest.TestCase):
+    def test_runtime_version_matches_package_metadata(self) -> None:
+        self.assertEqual(__version__, package_version("friday-agent"))
+
     def test_cli_help_exposes_tui_session_commands(self) -> None:
         output = StringIO()
         with patch.object(sys, "stdout", output), self.assertRaises(SystemExit):

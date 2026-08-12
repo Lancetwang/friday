@@ -16,11 +16,11 @@ Friday 支持两种安装方式：普通用户推荐安装 Windows 或 macOS 桌
 ### 安装步骤
 
 1. 打开 [GitHub Releases](https://github.com/Lancetwang/friday/releases)。
-2. Windows 下载 `Friday_0.1.1_x64-setup.exe`；Apple Silicon Mac 下载 `Friday_0.1.1_arm64.dmg`；Intel Mac 下载 `Friday_0.1.1_x64.dmg`。
+2. Windows 下载 `Friday_<version>_x64-setup.exe`；Apple Silicon Mac 下载 `Friday_<version>_arm64.dmg`；Intel Mac 下载 `Friday_<version>_x64.dmg`。
 3. Windows 运行安装程序；macOS 打开 DMG，将 Friday 拖入“应用程序”。
 4. 打开**设置 > 模型**，展开一个供应商，填写 API Key，然后选择**保存并使用**。
 
-Release 资源会公布 SHA-256。Windows 安装包尚未进行代码签名；macOS 版本使用 ad-hoc 签名，尚未公证。请先核对哈希。如果 macOS 阻止首次启动，请打开**系统设置 > 隐私与安全性**并选择**仍要打开**。
+Windows 安装包尚未进行代码签名；macOS 版本使用 ad-hoc 签名，尚未公证。如果 macOS 阻止首次启动，请打开**系统设置 > 隐私与安全性**并选择**仍要打开**。
 
 联网搜索是可选能力，可以在**设置 > 联网搜索**中配置 Tavily 或 AnySearch。称呼和 Friday 的回复语言位于**设置 > 通用**，与桌面界面的展示语言彼此独立。
 
@@ -62,6 +62,14 @@ uv tool install -e . --force --reinstall
 ```
 
 `uv tool install` 会创建隔离的 Python 环境，并安装当前 Friday 固定且验证过的 `friday-agent-core` 版本。可编辑安装会让全局 `friday` 命令继续引用该源码目录，因此不要在安装后删除仓库。
+
+macOS 和 Linux 的源码仓库还包含与 Windows `friday.cmd` 对应的 POSIX 启动器。在仓库内运行 `./friday` 即可启动 TUI；它会保留启动命令时所在的目录作为工作区：
+
+```bash
+cd path/to/friday
+./friday
+./friday ask "总结这个项目"
+```
 
 如果终端找不到 `friday`，运行 `uv tool update-shell`，重新打开终端后再执行 `friday --help`。
 

@@ -2,6 +2,15 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.1.11 - TUI navigation and loop diagnostics (2026-08-12)
+
+- Rebuilt the TUI around prefix-filtered slash completion and searchable keyboard menus for provider login, model and native thinking-level selection, web-search credentials, permissions, and saved conversations. Added branch navigation, background Trace Workbench control, and reliable double-Esc cancellation across Windows, macOS, and Linux terminals.
+- Anchored live context occupancy to the provider's latest exact prompt-token count; Friday reports only the locally measured delta until the next request. Turn input, output, request, and cache totals remain provider-derived cost measurements rather than context estimates.
+- Added a composable tool lifecycle layer around Agent Core: permission preflight runs before a batch, while post-tool hooks preserve approval suspension, attach visual results, and detect exact repeated calls within a batch or across a three-round sliding window. Read-only calls retain bounded parallel execution and every tool keeps its durable backend timing.
+- Centralized model, search, and Skill discovery under Friday-managed state and CLI/TUI flows; source installs no longer depend on `.env` files, and macOS/Linux now have a checkout launcher equivalent to `friday.cmd`.
+- Unified Python, TUI, desktop, and Tauri release metadata at `0.1.11`; `friday doctor` now reads the installed package version, including from the bundled desktop sidecar, instead of carrying a second hard-coded version.
+- Removed obsolete repository-local evaluation fixtures and reports. Evaluation remains a development activity rather than part of the installed product or public usage path.
+
 ## v0.1.10 - Provider controls and runtime reliability (2026-08-08)
 
 - Added OpenCode Go as a built-in provider and made thinking levels follow each provider and model's native capabilities instead of exposing one invented scale everywhere.
@@ -105,6 +114,6 @@ Friday records product releases here. Internal test builds and packaging retries
 - Added prefix-aware context assembly, multi-stage compaction, layered memory, progressive Skill disclosure, and program-enforced permissions.
 - Removed external Git and separately installed Friday CLI requirements from the packaged desktop app.
 - Added managed model, web search, language, and user-profile settings with local persistence under `~/.friday/`.
-- Added a 50-case local Harness benchmark, a 25-case representative agent benchmark, and `friday doctor` diagnostics.
+- Added `friday doctor` diagnostics for installation and configuration checks.
 - Hardened desktop startup, checkpoint cleanup, approval continuation, Markdown and math rendering, process cancellation, and cross-platform sidecar packaging.
 - Fixed macOS gateway startup by using managed CPython sidecars, disabling hardened runtime for ad-hoc signatures, and smoke-testing the gateway inside both shipped DMGs.

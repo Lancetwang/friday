@@ -10,6 +10,7 @@
   <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/package%20manager-uv-DE5FE9?style=flat-square&logo=uv&logoColor=white" alt="uv"></a>
   <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64"></a>
   <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-macOS%20ARM%20%7C%20Intel-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon and Intel"></a>
+  <a href="docs/install.md"><img src="https://img.shields.io/badge/platform-Linux%20CLI%20%7C%20TUI-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux CLI and TUI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
 </p>
 
@@ -48,11 +49,12 @@ See [Install](docs/install.md) for both installation paths, prerequisites, confi
 - General-purpose execution: work with local files and commands, search the web, and continue ordinary tasks through delivery and validation.
 - Two-layer loop: the agent loop handles model-tool interaction; the independent Verify / Goal loop checks deliverables and drives evidence-based repair.
 - Prefix-aware context: stable runtime rules lead the prompt, while user, project, Skill, and recalled memory layers are disclosed only when needed.
-- Multi-stage compaction: lossless tool-result simplification is probed first; structured conversation compaction preserves the latest ten complete turns when required.
+- Multi-stage compaction: lossless tool-result simplification is probed first; structured conversation compaction keeps the largest complete recent tail that fits, up to ten user turns.
 - Layered memory and progress: stable user facts, project knowledge, episodic recall, and resumable task progress remain separate.
 - Progressive Skills: Friday lists metadata and paths first, then reads only the selected `SKILL.md` and referenced resources.
 - Long-running task control: explicit objectives, plans, next actions, verifier state, semantic stop conditions, and session resume keep work on track.
-- Turn checkpoints: `/undo` restores workspace files, conversation, and progress to the state before the latest Friday turn without touching the project's Git history.
+- Turn checkpoints: `friday undo` and desktop message restore recover workspace files, conversation, and progress without touching the project's Git history.
+- Tool lifecycle hooks: code-level permission preflight runs before execution, while a three-round sliding no-progress guard catches identical tool calls without constraining legitimate retries with changed arguments.
 - Program-enforced permissions: hard-denied commands and explicit deny rules stop before execution; grey-area commands can be reviewed by the user or a separate intent reviewer.
 - Checkpoint-derived deliverables: files actually changed by a turn are attached to its reply and safe document/image formats can be previewed locally.
 - Prompt-injection boundary: private control context is protected across the main agent and auxiliary model calls, while retrieved content is treated as untrusted data.

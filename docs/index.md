@@ -16,5 +16,6 @@ Start here:
 - [Memory](memory.md)
 - [Skills](skills.md)
 - [Verification](verification.md)
+- [Phone Bridge](im-feishu.md)
 - [Observability](observability.md)
 - [Checkpoints](checkpoints.md)

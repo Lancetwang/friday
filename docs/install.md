@@ -20,7 +20,7 @@ Git, Python, Node.js, Rust, and a separate `friday-agent-core` installation are 
 3. Run the Windows installer, or open the DMG and move Friday to Applications.
 4. Open **Settings > Models**, expand a provider, enter its API key, and select **Save and use**.
 
-The release assets publish SHA-256 digests. The Windows installer is not code-signed; macOS builds use an ad-hoc signature and are not notarized. Verify the digest first. If macOS blocks the first launch, open **System Settings > Privacy & Security** and choose **Open Anyway**.
+The Windows installer is not code-signed; macOS builds use an ad-hoc signature and are not notarized. If macOS blocks the first launch, open **System Settings > Privacy & Security** and choose **Open Anyway**.
 
 Web search is optional. Configure Tavily or AnySearch under **Settings > Web Search**. Your preferred name and Friday response language live under **Settings > General**; the desktop display language is a separate setting.
 

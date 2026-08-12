@@ -10,6 +10,10 @@ friday doctor [--json]
 friday skill
 friday skill --json
 friday skill --help
+friday model list [--json]
+friday model add --help
+friday model use <profile-id>
+friday model remove <profile-id>
 friday memory --help
 friday memory status
 friday memory list [user|global|project|episode|all] [--json]
@@ -93,6 +97,11 @@ Esc returns to the parent picker. `/model` selects the model first and then
 offers only the thinking levels that model actually supports. `/resume` can
 also delete a selected saved conversation. Press Esc twice while Friday is
 working to stop the current response.
+
+The plain `friday chat` surface keeps text-form compatibility commands such as
+`/undo`, `/approve`, and `/reject`. The richer TUI presents approval choices and
+branch navigation interactively instead of listing those commands in its slash
+palette.
 
 `/clear` deletes the current saved conversation and starts fresh. `/fork`
 creates a branch from the latest Friday response, while `/backward` returns to

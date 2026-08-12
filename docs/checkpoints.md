@@ -20,9 +20,11 @@ friday checkpoint list
 friday checkpoint restore <checkpoint-id>
 ```
 
-CLI chat and the TUI expose the same latest-turn operation as `/undo`. Restoring
-an older checkpoint also supersedes newer checkpoints because workspace history
-is linear.
+Top-level `friday undo` and plain CLI chat's `/undo` expose the same latest-turn
+operation. The TUI uses `/fork` and `/backward` for branch navigation; checkpoint
+restore remains available through the top-level CLI and desktop message action.
+Restoring an older checkpoint also supersedes newer checkpoints because workspace
+history is linear.
 
 The desktop attaches restore only to user messages, returning to the state
 before that request. Fork is attached only to assistant responses, so a branch
