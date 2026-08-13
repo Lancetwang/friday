@@ -48,14 +48,13 @@ to the `friday` entry point. Neither client contains a second agent runtime.
 
 ## State and concurrency
 
-Session snapshots remain compatible with the existing `~/.friday` layout. A
-live session owns its Agent, RunContext, approval state, and cancellation signal.
-Switching the UI to another conversation does not stop it. Shared writes are
-atomic, navigation and settings writes are serialized, and checkpoints never
-touch the user's Git index.
-
-TypeScript migration testing writes checkpoints and traces to separate
-TypeScript stores so it cannot corrupt rollback data from the Python release.
+Session snapshots remain compatible with the `~/.friday` layout used by the
+v0.1 Python release, so upgrading does not discard conversations or settings.
+That compatibility logic is TypeScript; the repository contains no legacy
+Python runtime. A live session owns its Agent, RunContext, approval state, and
+cancellation signal. Switching the UI to another conversation does not stop
+it. Shared writes are atomic, navigation and settings writes are serialized,
+and checkpoints never touch the user's Git index.
 
 ## Security boundary
 

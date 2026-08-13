@@ -100,7 +100,7 @@ test('the gateway serves memory commands without requiring a configured model', 
 })
 
 async function withWorkspace(work: (home: string, workspace: string) => Promise<void>): Promise<void> {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-memory-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-memory-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   const previous = process.env.FRIDAY_HOME

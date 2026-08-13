@@ -18,7 +18,7 @@
 
 Friday is a local general-purpose agent available as a Windows, macOS, and Linux desktop app, plus a cross-platform TUI. It can work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
 
-The TypeScript monorepo contains a small reusable agent core and the Friday Harness. The Harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, and UI behavior. [TypeScript migration](docs/typescript-migration.md) describes the boundary.
+The TypeScript monorepo contains a small reusable agent core and the Friday Harness. The Harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, and UI behavior. [Architecture](docs/architecture.md) describes the boundary.
 
 ## Install
 
@@ -47,7 +47,7 @@ If a prerelease has not reached the npm registry yet, download its
 `friday-agent` tarball from the same GitHub Release and install that exact build:
 
 ```bash
-npm install --global ./friday-agent-0.2.0.tgz
+npm install --global ./friday-agent-0.2.1.tgz
 friday
 ```
 

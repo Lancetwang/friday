@@ -1,6 +1,6 @@
 {
   "name": "friday-desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,11 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "test:math": "node --experimental-strip-types scripts/test-markdown.ts",
     "test:sources": "node --experimental-strip-types scripts/test-sources.ts",
-    "desktop": "npm run sidecar && tauri dev",
-    "desktop:ts": "tauri dev --features typescript-sidecar --config src-tauri/tauri.typescript.conf.json",
-    "bundle": "npm run sidecar && tauri build",
-    "bundle:ts": "node ../scripts/bundle-desktop.mjs",
-    "sidecar": "node scripts/build-sidecar.mjs",
+    "desktop": "tauri dev",
+    "bundle": "node ../scripts/bundle-desktop.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

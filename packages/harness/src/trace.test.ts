@@ -10,7 +10,7 @@ import { Gateway } from './gateway.js'
 import { writeTrace } from './trace.js'
 
 test('trace RPC serves local structured records and stops idempotently', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-trace-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-trace-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)

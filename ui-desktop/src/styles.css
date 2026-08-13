@@ -4408,56 +4408,10 @@ input[type="checkbox"] {
   font-size: var(--text-caption);
 }
 
-/* Phone bridge */
-
 .settings-form-stack {
   display: grid;
   align-content: start;
   gap: 20px;
-}
-
-.phone-switch {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.phone-switch-copy {
-  display: grid;
-  gap: 3px;
-}
-
-.phone-switch-copy strong {
-  color: var(--muted);
-  font-size: var(--text-label);
-  font-weight: var(--weight-semibold);
-}
-
-.phone-switch-copy small {
-  color: var(--faint);
-  font-size: var(--text-caption);
-}
-
-.phone-switch .settings-switch {
-  flex: 0 0 auto;
-  align-self: center;
-}
-
-.phone-secret-field {
-  align-items: center;
-}
-
-.phone-secret-message {
-  min-height: 0;
-  padding-left: 112px;
-}
-
-.phone-group-setting {
-  margin-top: 4px;
-  padding-top: 14px;
 }
 
 .settings-hint {
@@ -4486,27 +4440,6 @@ input[type="checkbox"] {
   font-size: var(--text-caption);
   line-height: var(--leading-body);
   resize: none;
-}
-
-.phone-log summary {
-  width: fit-content;
-  cursor: pointer;
-  color: var(--muted);
-  font-size: var(--text-caption);
-  transition: color var(--dur-1) ease-out;
-}
-
-.phone-log summary:hover {
-  color: var(--ink);
-}
-
-.phone-log pre {
-  margin: 8px 0 0;
-  max-height: 180px;
-  overflow: auto;
-  color: var(--faint);
-  font-size: var(--text-micro);
-  white-space: pre-wrap;
 }
 
 .settings-form > footer {

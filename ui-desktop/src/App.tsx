@@ -32,7 +32,6 @@ import {
 } from './Icons'
 import { normalizeMarkdown } from './markdown'
 import { MenuDetails } from './MenuDetails'
-import { PhoneBridgeSettings, type BridgeStatus, type FeishuSettings } from './PhoneBridgeSettings'
 import { SaveFooter, SettingsMessage, useSettingsSave } from './SettingsForm'
 import { collectMessageSources, hostOf, safeIconUrl, type WebSource } from './sources'
 
@@ -162,7 +161,6 @@ type ContextCompaction = {
 type SessionInfo = {
   approval?: Approval
   cwd: string
-  features?: { phone?: boolean }
   model: string
   model_configured?: boolean
   model_name?: string
@@ -231,9 +229,6 @@ type MemoryFileDetail = MemoryFileInfo & {
 type MemoryFileScope = 'global' | 'user'
 
 type AppSettings = {
-  bridge?: BridgeStatus
-  features?: { phone?: boolean }
-  feishu?: FeishuSettings
   memory_files: Record<MemoryFileScope, MemoryFileInfo>
   user_profile: UserProfileSettings
   web_search: WebSearchSettings
@@ -415,9 +410,7 @@ const ACTIVE_PROJECT_KEY = 'friday.desktop.activeProject'
 const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
 const THEME_KEY = 'friday.desktop.theme'
 const DEFAULT_SIDEBAR_WIDTH = 252
-const PHONE_POLL_MS = 8000
-
-type SidebarSection = 'phone' | 'projects' | 'recent'
+type SidebarSection = 'projects' | 'recent'
 const MIN_SIDEBAR_WIDTH = 180
 const MAX_SIDEBAR_WIDTH = 520
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -657,7 +650,6 @@ function App() {
   const [renaming, setRenaming] = useState<{ id: string; original: string; title: string; workspace: string } | null>(null)
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [collapsedSections, setCollapsedSections] = useState<Set<SidebarSection>>(new Set())
-  const [phoneSessions, setPhoneSessions] = useState<ResumeChoice[]>([])
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [theme, setTheme] = useState<Theme>(loadTheme)
@@ -738,8 +730,6 @@ function App() {
   const view = views[activeProject] || emptyView(activeProject)
   const { activeSession, attachments, busy, cancelling, checkpoints, draft, forkTree, goalMode, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
   const isDefaultWorkspace = Boolean(defaultWorkspace && samePath(defaultWorkspace, activeProject))
-  const phoneSupported = status === 'ready' && info.features?.phone !== false
-
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
     setViews(current => {
       const next = update(current[workspace] || emptyView(workspace))
@@ -851,8 +841,8 @@ function App() {
     viewsRef.current = views
   }, [views])
 
-  // One Python backend runs per open project and idles around 70 MB, so a project
-  // the user walked away from costs as much as the one they are working in. Its
+  // One gateway runs per open project, so a project the user walked away from
+  // still consumes resources like the one they are working in. Its
   // state is on disk, so stopping it is recoverable; reselecting it restarts the
   // backend and resumes the same conversation. Only the idle timeout reclaims:
   // capping the number of live backends would restart them while the user is
@@ -1566,28 +1556,6 @@ function App() {
 
   const settingsWorkspace = activeProject || defaultWorkspace
 
-  // A phone turn is answered by the bridge's own gateway, so none of its events
-  // reach this window. The conversations land in the same files either way, so the
-  // sidebar polls for them instead of waiting for an event that never arrives.
-  useEffect(() => {
-    if (!settingsWorkspace || !phoneSupported) {
-      setPhoneSessions([])
-      return
-    }
-    let live = true
-    const read = () => {
-      void sendGateway<{ choices: ResumeChoice[] }>(settingsWorkspace, 'bridge.sessions')
-        .then(result => { if (live) setPhoneSessions(result.choices) })
-        .catch(() => undefined)
-    }
-    read()
-    const timer = setInterval(read, PHONE_POLL_MS)
-    return () => {
-      live = false
-      clearInterval(timer)
-    }
-  }, [phoneSupported, settingsWorkspace])
-
   const changeLanguage = (next: Language) => {
     setLanguage(next)
     setLanguageState(next)
@@ -1602,19 +1570,6 @@ function App() {
   ).then(result => result.api_key)
   const saveUserProfile = (profile: Partial<UserProfileSettings>) =>
     sendGateway<UserProfileSettings>(settingsWorkspace, 'settings.user.save', { profile })
-  const saveFeishuSettings = (value: Record<string, unknown>) =>
-    sendGateway<{ bridge: BridgeStatus; feishu: FeishuSettings }>(
-      settingsWorkspace,
-      'settings.feishu.save',
-      value
-    )
-  const revealFeishuSecret = () => sendGateway<{ app_secret: string }>(
-    settingsWorkspace,
-    'settings.feishu.key.get'
-  ).then(result => result.app_secret)
-  const setBridgeRunning = (running: boolean) =>
-    sendGateway<BridgeStatus>(settingsWorkspace, running ? 'bridge.start' : 'bridge.stop')
-  const readBridgeStatus = () => sendGateway<BridgeStatus>(settingsWorkspace, 'bridge.status')
   const readMemoryFile = (file: MemoryFileScope) =>
     sendGateway<MemoryFileDetail>(settingsWorkspace, 'settings.memory.read', { file })
   const saveMemoryFileContent = (file: MemoryFileScope, content: string) =>
@@ -2155,10 +2110,7 @@ function App() {
 
   const renderSessions = (workspace: string) => {
     const projectView = views[workspace] || emptyView(workspace)
-    const onPhone = new Set(phoneSessions.map(session => session.id))
-    // A phone conversation has its own section, so listing it here as well would
-    // show the same conversation twice under two names.
-    return renderSessionList(workspace, projectView.sessions.filter(session => !onPhone.has(session.id)))
+    return renderSessionList(workspace, projectView.sessions)
   }
 
   const renderSessionList = (workspace: string, sessions: ResumeChoice[]) => {
@@ -2301,19 +2253,6 @@ function App() {
               </div>
             </section>
 
-            {phoneSupported && <section className={`sidebar-section phone-space ${collapsedSections.has('phone') ? 'collapsed' : ''}`}>
-              <div className="section-heading">
-                {renderSectionHeading('phone', t('sidebar.phone'), <PhoneIcon />)}
-              </div>
-              <div aria-hidden={collapsedSections.has('phone')} className="section-body" inert={collapsedSections.has('phone')}>
-                <div className="section-body-content">
-                  {phoneSessions.length > 0
-                    ? renderSessionList(settingsWorkspace, phoneSessions)
-                    : <div className="empty-sessions">{t('sidebar.phoneEmpty')}</div>}
-                </div>
-              </div>
-            </section>}
-
             <section className={`sidebar-section conversation-space ${collapsedSections.has('recent') ? 'collapsed' : ''}`}>
               <div className="section-heading">
                 {renderSectionHeading('recent', t('sidebar.recent'), <ClockIcon />)}
@@ -2392,7 +2331,6 @@ function App() {
             catalog={models}
             initialSection={settingsSection}
             language={language}
-            phoneSupported={phoneSupported}
             onClose={() => setPage('chat')}
             onClearKey={clearModelKey}
             onEnable={setProviderEnabled}
@@ -2400,14 +2338,10 @@ function App() {
             onLoad={loadSettings}
             onReadMemory={readMemoryFile}
             onRefreshModels={refreshProviderModels}
-            onRevealFeishuSecret={revealFeishuSecret}
             onRevealKey={revealModelKey}
             onRevealWebKey={revealWebKey}
-            onBridgeStatus={readBridgeStatus}
-            onBridgeToggle={setBridgeRunning}
             onDelete={deleteModel}
             onSave={saveModel}
-            onSaveFeishu={saveFeishuSettings}
             onSaveMemory={saveMemoryFileContent}
             onSaveProfile={saveUserProfile}
             onSaveWeb={saveWebSettings}
@@ -3026,15 +2960,6 @@ function ClockIcon() {
   )
 }
 
-function PhoneIcon() {
-  return (
-    <svg aria-hidden="true" className="section-icon" fill="none" viewBox="0 0 24 24">
-      <rect height="18.4" rx="2.6" width="12.4" x="5.8" y="2.8" />
-      <path d="M10.4 18.2h3.2" />
-    </svg>
-  )
-}
-
 function BranchIcon() {
   return (
     <svg aria-hidden="true" className="branch-icon" fill="none" viewBox="0 0 24 24">
@@ -3116,13 +3041,12 @@ function MoonIcon() {
   )
 }
 
-type SettingsSection = 'docs' | 'general' | 'models' | 'web' | 'memory' | 'phone'
+type SettingsSection = 'docs' | 'general' | 'models' | 'web' | 'memory'
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ hintKey: string; id: SettingsSection; labelKey: string }> = [
   { hintKey: 'settings.general.hint', id: 'general', labelKey: 'settings.general' },
   { hintKey: 'settings.models.hint', id: 'models', labelKey: 'settings.models' },
   { hintKey: 'settings.web.hint', id: 'web', labelKey: 'settings.web' },
-  { hintKey: 'settings.phone.hint', id: 'phone', labelKey: 'settings.phone' },
   { hintKey: 'settings.memory.hint', id: 'memory', labelKey: 'settings.memory' },
   { hintKey: 'settings.docs.hint', id: 'docs', labelKey: 'settings.docs' }
 ]
@@ -3294,9 +3218,6 @@ function SettingsPage({
   catalog,
   initialSection,
   language,
-  phoneSupported,
-  onBridgeStatus,
-  onBridgeToggle,
   onClearKey,
   onClose,
   onDelete,
@@ -3305,11 +3226,9 @@ function SettingsPage({
   onLoad,
   onReadMemory,
   onRefreshModels,
-  onRevealFeishuSecret,
   onRevealKey,
   onRevealWebKey,
   onSave,
-  onSaveFeishu,
   onSaveMemory,
   onSaveProfile,
   onSaveWeb
@@ -3317,9 +3236,6 @@ function SettingsPage({
   catalog: ModelCatalog
   initialSection: SettingsSection
   language: Language
-  phoneSupported: boolean
-  onBridgeStatus: () => Promise<BridgeStatus>
-  onBridgeToggle: (running: boolean) => Promise<BridgeStatus>
   onClearKey: (target: ModelTarget) => Promise<ModelCatalog>
   onClose: () => void
   onDelete: (profileId: string) => Promise<ModelCatalog>
@@ -3328,11 +3244,9 @@ function SettingsPage({
   onLoad: () => Promise<AppSettings>
   onReadMemory: (file: MemoryFileScope) => Promise<MemoryFileDetail>
   onRefreshModels: (target: ModelTarget) => Promise<{ catalog: ModelCatalog; models: string[] }>
-  onRevealFeishuSecret: () => Promise<string>
   onRevealKey: (target: ModelTarget) => Promise<string>
   onRevealWebKey: (provider: string) => Promise<string>
   onSave: (profile: ModelDraft, apiKey: string) => Promise<ModelCatalog>
-  onSaveFeishu: (value: Record<string, unknown>) => Promise<{ bridge: BridgeStatus; feishu: FeishuSettings }>
   onSaveMemory: (file: MemoryFileScope, content: string) => Promise<MemoryFileInfo>
   onSaveProfile: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
   onSaveWeb: (value: Record<string, unknown>) => Promise<WebSearchSettings>
@@ -3408,11 +3322,6 @@ function SettingsPage({
     return userProfile
   })
 
-  const persistFeishu = (value: Record<string, unknown>) => onSaveFeishu(value).then(result => {
-    setSettings(current => current ? { ...current, bridge: result.bridge, feishu: result.feishu } : current)
-    return result.feishu
-  })
-
   return (
     <div className="settings-page">
       <aside className="settings-nav">
@@ -3421,7 +3330,7 @@ function SettingsPage({
           <span>{t('settings.back')}</span>
         </button>
         <div className="settings-nav-group">
-          {SETTINGS_SECTIONS.filter(item => phoneSupported || item.id !== 'phone').map(item => (
+          {SETTINGS_SECTIONS.map(item => (
             <button
               className={`settings-section ${section === item.id ? 'active' : ''}`}
               key={item.id}
@@ -3581,24 +3490,6 @@ function SettingsPage({
               </header>
               {settings
                 ? <WebSearchSettings initial={settings.web_search} onReveal={onRevealWebKey} onSave={persistWeb} />
-                : <SettingsLoading error={settingsError} />}
-            </div>
-          )}
-          {phoneSupported && section === 'phone' && (
-            <div className="settings-section-wrap">
-              <header className="settings-head">
-                <h2>{t('phone.title')}</h2>
-                <p>{t('phone.desc')}</p>
-              </header>
-              {settings?.feishu && settings.bridge
-                ? <PhoneBridgeSettings
-                    initial={settings.feishu}
-                    initialStatus={settings.bridge}
-                    onRefresh={onBridgeStatus}
-                    onRevealSecret={onRevealFeishuSecret}
-                    onSave={persistFeishu}
-                    onToggle={onBridgeToggle}
-                  />
                 : <SettingsLoading error={settingsError} />}
             </div>
           )}

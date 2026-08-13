@@ -37,7 +37,7 @@ test('progress validates one active step and can be restored without prompt mess
 })
 
 test('UpdatePlan is an agent tool whose state reaches the UI snapshot', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-progress-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-progress-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)

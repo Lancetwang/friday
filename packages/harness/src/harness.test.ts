@@ -27,7 +27,7 @@ import { resetFriday } from './reset.js'
 const exec = promisify(execFile)
 
 test('the harness loads legacy config, chats, and writes a resumable snapshot', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-harness-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(workspace)
@@ -111,7 +111,7 @@ test('the harness loads legacy config, chats, and writes a resumable snapshot', 
 })
 
 test('Python session records resume with user metadata, artifacts, metrics, and activities intact', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-python-session-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-python-session-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -175,7 +175,7 @@ test('Python session records resume with user metadata, artifacts, metrics, and 
 })
 
 test('the gateway can boot and report settings without a configured key', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-empty-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-empty-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -220,7 +220,7 @@ test('the gateway can boot and report settings without a configured key', async 
 })
 
 test('the gateway keeps a running session alive while another session is selected', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-background-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-background-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -332,7 +332,7 @@ test('the gateway keeps a running session alive while another session is selecte
 })
 
 test('session reset clears only project state by default and preserves model configuration', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-reset-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-reset-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -368,7 +368,7 @@ test('session reset clears only project state by default and preserves model con
 })
 
 test('global reset refuses a Friday home that contains the workspace', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-reset-boundary-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-reset-boundary-'))
   const workspace = join(temporary, 'workspace')
   await mkdir(workspace)
   await writeFile(join(workspace, 'keep.txt'), 'keep')
@@ -385,7 +385,7 @@ test('global reset refuses a Friday home that contains the workspace', async () 
 })
 
 test('model profiles keep credentials private and remain selectable', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-models-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-models-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -426,7 +426,7 @@ test('model profiles keep credentials private and remain selectable', async () =
 })
 
 test('session RPCs rename, fork, navigate, and delete a branch subtree', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-sessions-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-sessions-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -455,15 +455,6 @@ test('session RPCs rename, fork, navigate, and delete a branch subtree', async (
     await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
     const gateway = new Gateway(workspace, value => output.push(value))
     await gateway.start()
-    output.length = 0
-    await gateway.handle({ id: 'info', method: 'session.info' })
-    assert.equal((responseResult(output, 'info') as { features: { phone: boolean } }).features.phone, false)
-    output.length = 0
-    await gateway.handle({ id: 'phone', method: 'bridge.status' })
-    assert.match(
-      String((output[0] as { error?: { message?: unknown } }).error?.message),
-      /Method not implemented/
-    )
     output.length = 0
     await gateway.handle({ id: 'chat', method: 'chat.send', params: { text: 'root question' } })
     await gateway.handle({ id: 'rename', method: 'session.rename', params: { id: currentSession(output), title: 'Root thread' } })
@@ -500,7 +491,7 @@ test('session RPCs rename, fork, navigate, and delete a branch subtree', async (
 })
 
 test('settings RPCs store secrets privately and expose only configuration status', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-settings-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-settings-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -521,12 +512,10 @@ test('settings RPCs store secrets privately and expose only configuration status
     await gateway.handle({ id: 'settings', method: 'settings.get' })
 
     const settings = responseResult(output, 'settings') as {
-      features: { phone: boolean }
       web_search: { tavily_configured: boolean }
       user_profile: { preferred_name: string }
       memory_files: { global: { chars: number; limit: number } }
     }
-    assert.equal(settings.features.phone, false)
     assert.equal(settings.web_search.tavily_configured, true)
     assert.equal(settings.user_profile.preferred_name, 'Kai')
     assert.equal(settings.memory_files.global.chars, '# Durable memory\n'.length)
@@ -546,7 +535,7 @@ test('settings RPCs store secrets privately and expose only configuration status
 })
 
 test('compaction shrinks the model prompt without shrinking resumable UI history', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-compaction-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-compaction-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -613,7 +602,7 @@ test('compaction shrinks the model prompt without shrinking resumable UI history
 })
 
 test('checkpoints restore exact files, reject later changes, and leave the user git index alone', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-checkpoint-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-checkpoint-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -664,7 +653,7 @@ test('checkpoints restore exact files, reject later changes, and leave the user 
 })
 
 test('checkpoints fall back to a content-addressed file store when Git is unavailable', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-file-checkpoint-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-file-checkpoint-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -706,7 +695,7 @@ test('checkpoints fall back to a content-addressed file store when Git is unavai
 })
 
 test('both checkpoint backends restore file and directory type changes', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-checkpoint-types-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-checkpoint-types-'))
   const home = join(temporary, 'home')
   await mkdir(home)
   const previousHome = process.env.FRIDAY_HOME
@@ -745,7 +734,7 @@ test('both checkpoint backends restore file and directory type changes', async (
 })
 
 test('checkpoint restore refuses to overwrite ignored files at a type boundary', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-checkpoint-ignored-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-checkpoint-ignored-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -775,7 +764,7 @@ test('checkpoint restore refuses to overwrite ignored files at a type boundary',
 })
 
 test('gateway undo restores both a mutating agent turn and its conversation boundary', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-undo-turn-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-undo-turn-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -841,7 +830,7 @@ test('gateway undo restores both a mutating agent turn and its conversation boun
 })
 
 test('undoing a paused mutating turn discards its stale approval', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-undo-approval-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-undo-approval-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -902,7 +891,7 @@ test('undoing a paused mutating turn discards its stale approval', async () => {
 })
 
 test('a risky shell call pauses the session, executes once after approval, and resumes the model', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-approval-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-approval-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -978,7 +967,7 @@ test('a risky shell call pauses the session, executes once after approval, and r
 })
 
 test('automatic permission mode independently reviews a risky command before running it', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-auto-permission-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-auto-permission-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -1044,7 +1033,7 @@ test('automatic permission mode independently reviews a risky command before run
 })
 
 test('the gateway announces a suspended turn and keeps continuation events ordered', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-gateway-approval-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-gateway-approval-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)

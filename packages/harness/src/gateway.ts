@@ -155,7 +155,6 @@ export class Gateway {
           memoryFile(this.workspace, 'user', false), memoryFile(this.workspace, 'global', false)
         ])
         this.ok(id, {
-          features: { phone: false },
           memory_files: { user, global },
           web_search: loadWebSearchSettings(),
           user_profile: loadUserProfile()
@@ -643,7 +642,6 @@ export class Gateway {
   private sessionInfo(session = this.session): Record<string, unknown> {
     return {
       ...session.info(),
-      features: { phone: false },
       running: session.running || this.activeRuns.has(session.sessionId)
     }
   }

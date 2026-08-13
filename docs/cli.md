@@ -58,5 +58,4 @@ TUI slash commands:
 Typing `/` opens prefix completion. `/login`, `/model`, `/search`, `/resume`,
 and `/permission` use searchable pickers. `/clear` deletes the current saved
 conversation and starts fresh; `/fork` branches from the latest response;
-`/backward` returns to its parent. Phone/Feishu commands are intentionally not
-part of the TypeScript product.
+`/backward` returns to its parent.

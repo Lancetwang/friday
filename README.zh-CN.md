@@ -18,7 +18,7 @@
 
 Friday 是一个本地通用 Agent，提供 Windows、macOS 与 Linux 桌面端，以及跨平台 TUI。它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
 
-TypeScript Monorepo 同时包含可复用的轻量 Agent Core 与 Friday Harness。Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace 和 UI 行为。边界设计见 [TypeScript 迁移文档](docs/typescript-migration.md)。
+TypeScript Monorepo 同时包含可复用的轻量 Agent Core 与 Friday Harness。Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace 和 UI 行为。边界设计见[架构文档](docs/architecture.md)。
 
 ## 安装
 
@@ -47,7 +47,7 @@ npm install friday-agent-core
 `friday-agent` tarball，并安装这个完全相同的构建：
 
 ```bash
-npm install --global ./friday-agent-0.2.0.tgz
+npm install --global ./friday-agent-0.2.1.tgz
 friday
 ```
 

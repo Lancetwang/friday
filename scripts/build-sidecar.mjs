@@ -20,7 +20,7 @@ const bun = join(root, 'node_modules', 'bun', 'bin', 'bun.exe')
 if (!existsSync(bun)) throw new Error('Bun is not installed. Run npm ci at the repository root.')
 const directory = join(root, 'ui-desktop', 'src-tauri', 'binaries')
 const extension = triple.includes('windows') ? '.exe' : ''
-const output = join(directory, `friday-ts-app-server-${triple}${extension}`)
+const output = join(directory, `friday-app-server-${triple}${extension}`)
 mkdirSync(directory, { recursive: true })
 
 const result = spawnSync(bun, [

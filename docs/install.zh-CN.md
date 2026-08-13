@@ -44,7 +44,7 @@ npm 会生成对应平台的可执行 Shim，因此 PowerShell、cmd、bash 与 
 `friday-agent` tarball，并安装已经通过测试的完整包：
 
 ```bash
-npm install --global ./friday-agent-0.2.0.tgz
+npm install --global ./friday-agent-0.2.1.tgz
 friday --version
 ```
 
@@ -67,7 +67,7 @@ npm install friday-agent-core
 同一个 GitHub Release 也提供 Core tarball，作为 Registry 发布前的备用安装方式：
 
 ```bash
-npm install ./friday-agent-core-0.2.0.tgz
+npm install ./friday-agent-core-0.2.1.tgz
 ```
 
 ## 从源码开发
@@ -90,13 +90,13 @@ friday
 
 ```powershell
 npm ci --prefix ui-desktop
-npm run desktop:ts
+npm run desktop
 ```
 
 构建当前平台的独立桌面安装包：
 
 ```powershell
-npm run bundle:desktop:ts
+npm run bundle:desktop
 ```
 
 模型配置和凭据可以在 TUI 或桌面 UI 中管理，保存在 `~/.friday/`。无界面运行也支持

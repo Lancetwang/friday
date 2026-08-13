@@ -9,10 +9,10 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const triple = execFileSync('rustc', ['--print', 'host-tuple'], { encoding: 'utf8' }).trim()
 const extension = triple.includes('windows') ? '.exe' : ''
-const binary = join(root, 'ui-desktop', 'src-tauri', 'binaries', `friday-ts-app-server-${triple}${extension}`)
-if (!existsSync(binary)) throw new Error(`TypeScript sidecar not found: ${binary}`)
+const binary = join(root, 'ui-desktop', 'src-tauri', 'binaries', `friday-app-server-${triple}${extension}`)
+if (!existsSync(binary)) throw new Error(`Friday sidecar not found: ${binary}`)
 
-const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-sidecar-'))
+const temporary = await mkdtemp(join(tmpdir(), 'friday-sidecar-'))
 const home = join(temporary, 'home')
 const workspace = join(temporary, 'workspace')
 await mkdir(home)
@@ -44,7 +44,7 @@ try {
   })
   child.stdin.write(`${JSON.stringify({ id: 'smoke-1', jsonrpc: '2.0', method: 'session.current', params: {} })}\n`)
   await answer
-  process.stdout.write('TypeScript sidecar smoke test passed.\n')
+  process.stdout.write('Friday sidecar smoke test passed.\n')
 } catch (error) {
   if (stderr.length && error instanceof Error) error.message += `\n${stderr.slice(-40).join('\n')}`
   throw error

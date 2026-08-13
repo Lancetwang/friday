@@ -49,7 +49,7 @@ If a prerelease is not yet available from npm, download its `friday-agent`
 tarball from the same GitHub Release and install the already-tested package:
 
 ```bash
-npm install --global ./friday-agent-0.2.0.tgz
+npm install --global ./friday-agent-0.2.1.tgz
 friday --version
 ```
 
@@ -69,11 +69,11 @@ package, not Friday's internal Harness:
 npm install friday-agent-core
 ```
 
-The same GitHub Release also contains `friday-agent-core-0.2.0.tgz` as a
+The same GitHub Release also contains `friday-agent-core-0.2.1.tgz` as a
 fallback before registry publication:
 
 ```bash
-npm install ./friday-agent-core-0.2.0.tgz
+npm install ./friday-agent-core-0.2.1.tgz
 ```
 
 ## Develop from source
@@ -97,13 +97,13 @@ build tools. From the repository root:
 
 ```powershell
 npm ci --prefix ui-desktop
-npm run desktop:ts
+npm run desktop
 ```
 
 Build the current platform's standalone desktop package with:
 
 ```powershell
-npm run bundle:desktop:ts
+npm run bundle:desktop
 ```
 
 Model profiles and credentials are configured in the TUI or desktop UI and are

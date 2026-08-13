@@ -9,7 +9,7 @@ import { Gateway } from './gateway.js'
 import { imageUrls } from './attachments.js'
 
 test('desktop images and selected local files reach the model and resumable history safely', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-attachments-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-attachments-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   const external = join(temporary, 'selected.txt')

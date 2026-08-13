@@ -1,6 +1,6 @@
 {
   "name": "friday-agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Friday, a local-first general-purpose agent.",
   "license": "MIT",
   "repository": {
@@ -26,11 +26,11 @@
     "build:cli": "npm run build:runtime && npm --global=false run build -w friday-agent-cli && bun scripts/build-cli.mjs",
     "check": "npm --global=false run build -w friday-agent-core && npm --global=false run check -w friday-agent-harness && npm --global=false run typecheck -w friday-agent-cli",
     "gateway": "npm --global=false run gateway -w friday-agent-harness",
-    "tui:ts": "npm run build:cli && node dist/friday.js",
-    "desktop:ts": "npm run build:runtime && npm run desktop:ts --prefix ui-desktop",
-    "sidecar:ts": "npm run build:runtime && node scripts/build-ts-sidecar.mjs",
-    "smoke:sidecar:ts": "node scripts/smoke-ts-sidecar.mjs",
-    "bundle:desktop:ts": "npm run sidecar:ts && npm run bundle:ts --prefix ui-desktop",
+    "tui": "npm run build:cli && node dist/friday.js",
+    "desktop": "npm run build:runtime && npm run desktop --prefix ui-desktop",
+    "sidecar": "npm run build:runtime && node scripts/build-sidecar.mjs",
+    "smoke:sidecar": "node scripts/smoke-sidecar.mjs",
+    "bundle:desktop": "npm run sidecar && npm run bundle --prefix ui-desktop",
     "pack:release": "node -e \"require('node:fs').mkdirSync('artifacts/npm',{recursive:true})\" && npm pack --pack-destination artifacts/npm && npm pack -w friday-agent-core --pack-destination artifacts/npm",
     "prepare": "npm run build:cli",
     "test": "npm --global=false run test -w friday-agent-core && npm --global=false run test -w friday-agent-harness && npm --global=false run test -w friday-agent-cli"

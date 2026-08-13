@@ -32,7 +32,7 @@ test('verification JSON is strict and verifier shell access is read-only', async
 })
 
 test('goal mode repairs once, passes independent verification, and reports both attempts', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-goal-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-goal-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)
@@ -109,7 +109,7 @@ test('goal mode repairs once, passes independent verification, and reports both 
 })
 
 test('cancelling independent verification leaves a resumable blocked goal instead of stale work', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'friday-ts-goal-cancel-'))
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-goal-cancel-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   await mkdir(home)

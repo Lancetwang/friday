@@ -19,4 +19,3 @@ Start here:
 - [Evaluations](evaluation.md)
 - [Observability](observability.md)
 - [Checkpoints](checkpoints.md)
-- [TypeScript Migration](typescript-migration.md)

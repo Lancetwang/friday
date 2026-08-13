@@ -102,43 +102,23 @@ fn repository_root() -> Result<PathBuf, String> {
 #[cfg(debug_assertions)]
 fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
     let repository = repository_root()?;
-    if cfg!(feature = "typescript-sidecar")
-        || env::var("FRIDAY_GATEWAY").ok().as_deref() == Some("typescript")
-    {
-        let gateway = repository.join("packages/harness/dist/gateway.js");
-        if !gateway.is_file() {
-            return Err(format!(
-                "TypeScript gateway is not built: {}. Run npm run build first.",
-                gateway.display()
-            ));
-        }
-        return Ok(app
-            .shell()
-            .command("node")
-            .args([gateway.to_string_lossy().into_owned()]));
+    let gateway = repository.join("packages/harness/dist/gateway.js");
+    if !gateway.is_file() {
+        return Err(format!(
+            "Friday gateway is not built: {}. Run npm run build first.",
+            gateway.display()
+        ));
     }
-    let repository = repository.to_string_lossy().into_owned();
-    Ok(app.shell().command("uv").args([
-        "run",
-        "--project",
-        repository.as_str(),
-        "--no-sync",
-        "friday",
-        "app-server",
-    ]))
+    Ok(app
+        .shell()
+        .command("node")
+        .args([gateway.to_string_lossy().into_owned()]))
 }
 
-#[cfg(all(not(debug_assertions), not(feature = "typescript-sidecar")))]
+#[cfg(not(debug_assertions))]
 fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
     app.shell()
         .sidecar("friday-app-server")
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(all(not(debug_assertions), feature = "typescript-sidecar"))]
-fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
-    app.shell()
-        .sidecar("friday-ts-app-server")
         .map_err(|error| error.to_string())
 }
 

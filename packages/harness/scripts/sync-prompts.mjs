@@ -3,14 +3,14 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const sourceRoot = resolve(packageRoot, '../../src/friday/prompt_templates')
+const sourceRoot = resolve(packageRoot, 'prompts')
 const output = join(packageRoot, 'src/prompt-assets.ts')
 const normalizeLines = value => value.replaceAll('\r\n', '\n')
 const assets = Object.fromEntries(readdirSync(sourceRoot)
   .filter(name => name.endsWith('.md'))
   .sort()
   .map(name => [name, normalizeLines(readFileSync(join(sourceRoot, name), 'utf8'))]))
-const generated = `// Generated from src/friday/prompt_templates by scripts/sync-prompts.mjs.\nexport const promptAssets: Readonly<Record<string, string>> = ${JSON.stringify(assets, null, 2)}\n`
+const generated = `// Generated from packages/harness/prompts by scripts/sync-prompts.mjs.\nexport const promptAssets: Readonly<Record<string, string>> = ${JSON.stringify(assets, null, 2)}\n`
 
 if (process.argv.includes('--check')) {
   if (normalizeLines(readFileSync(output, 'utf8')) !== normalizeLines(generated)) {

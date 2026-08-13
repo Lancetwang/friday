@@ -9,7 +9,7 @@ import type { JsonObject } from 'friday-agent-core'
 import { buildWebTools, webFetch, webSearch } from './web.js'
 
 test('WebSearch prefers Tavily and returns bounded structured results', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'friday-ts-web-'))
+  const home = await mkdtemp(join(tmpdir(), 'friday-web-'))
   const previousHome = process.env.FRIDAY_HOME
   const previous = process.env.TAVILY_API_KEY
   process.env.FRIDAY_HOME = home
@@ -40,7 +40,7 @@ test('WebSearch prefers Tavily and returns bounded structured results', async ()
 })
 
 test('WebSearch falls back to AnySearch without an API key', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'friday-ts-web-'))
+  const home = await mkdtemp(join(tmpdir(), 'friday-web-'))
   const previousHome = process.env.FRIDAY_HOME
   const previousTavily = process.env.TAVILY_API_KEY
   const previousAnysearch = process.env.ANYSEARCH_API_KEY

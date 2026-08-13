@@ -5,17 +5,13 @@ node_cache/
 ui-tui/dist/
 ui-desktop/dist/
 packages/*/dist/
-ui-desktop/app-icon.png
-ui-desktop/.sidecar-build/
 ui-desktop/src-tauri/binaries/
 ui-desktop/src-tauri/target/
 ui-desktop/src-tauri/gen/
-ui-desktop/.dev-*.log
 __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
 .friday/
-/eval/
 /dist/
 /artifacts/

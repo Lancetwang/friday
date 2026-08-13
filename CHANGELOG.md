@@ -2,6 +2,10 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.2.1 - Final TypeScript repository cleanup (2026-08-14)
+
+- Retired the in-repository Python Harness, phone bridge, Python desktop sidecar, and migration-only release paths. Friday now has one TypeScript runtime; only the optional Harbor protocol adapter remains Python.
+
 ## v0.2.0 - TypeScript runtime and unified distribution (2026-08-13)
 
 - Rebuilt Agent Core and the Friday Harness as a TypeScript monorepo with one guarded model/tool loop, explicit runtime context, structured permissions, resumable sessions, layered memory, verification, and observable traces.

@@ -1,11 +1,10 @@
 {
   "name": "friday-agent-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "tsx src/entry.tsx",
-    "start:ts": "tsx src/entry.tsx",
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/*.test.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
