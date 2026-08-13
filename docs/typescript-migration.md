@@ -34,11 +34,12 @@ inside `friday-agent`; users do not assemble the application from internals.
 npm creates `friday` on macOS/Linux and `friday.cmd` on Windows, so the command
 is the same in PowerShell, cmd, bash, and zsh.
 
-The npm names are prepared but not published during branch development. Test
-the pushed branch directly with:
+The npm names are prepared but not published during branch development. The
+`Friday-npm-packages` workflow artifact contains the exact packages intended
+for publication. Extract it and test the full package with:
 
 ```bash
-npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+npm install --global ./friday-agent-0.2.0-alpha.0.tgz
 friday --version
 ```
 

@@ -34,10 +34,11 @@ friday
 npm 会生成对应平台的可执行 Shim，因此 PowerShell、cmd、bash 与 zsh 中都使用同一个
 `friday` 命令。完整包已经包含 Core、Harness 与 TUI。
 
-迁移分支评审期间 npm 包名尚未正式发布，可以直接安装同一份 GitHub 分支：
+迁移分支评审期间 npm 包名尚未正式发布。请从 TypeScript 工作流下载并解压
+`Friday-npm-packages` 构建产物，然后安装已经打好的完整包：
 
 ```bash
-npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+npm install --global ./friday-agent-0.2.0-alpha.0.tgz
 friday --version
 ```
 
@@ -55,6 +56,12 @@ Harness：
 
 ```bash
 npm install friday-agent-core
+```
+
+正式发布前，同一个工作流构建产物中也包含 Core 包：
+
+```bash
+npm install ./friday-agent-core-0.2.0-alpha.0.tgz
 ```
 
 ## 从源码开发

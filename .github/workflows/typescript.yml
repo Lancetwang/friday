@@ -57,6 +57,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run pack:release
+      - name: Smoke test npm packages
+        run: |
+          cli_prefix="$RUNNER_TEMP/friday-cli"
+          core_dir="$RUNNER_TEMP/friday-core"
+          npm install --global --prefix "$cli_prefix" artifacts/npm/friday-agent-*.tgz
+          "$cli_prefix/bin/friday" --version
+          mkdir -p "$core_dir"
+          cd "$core_dir"
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/artifacts/npm/friday-agent-core-*.tgz
+          node --input-type=module -e "const core = await import('friday-agent-core'); if (typeof core.Agent !== 'function') process.exit(1)"
+      - name: Check Harbor adapter syntax
+        run: python -m py_compile integrations/harbor/friday.py
       - uses: actions/upload-artifact@v6
         with:
           name: Friday-npm-packages

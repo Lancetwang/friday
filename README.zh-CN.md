@@ -43,10 +43,12 @@ friday
 npm install friday-agent-core
 ```
 
-迁移分支评审期间 npm 包名尚未发布，可以直接安装已推送的分支：
+迁移分支评审期间 npm 包名尚未发布。请从
+[TypeScript 工作流](https://github.com/Lancetwang/friday/actions/workflows/typescript.yml)
+下载并解压 `Friday-npm-packages` 构建产物，再安装其中已经打好的完整包：
 
 ```bash
-npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+npm install --global ./friday-agent-0.2.0-alpha.0.tgz
 friday
 ```
 

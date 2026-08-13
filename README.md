@@ -43,11 +43,13 @@ Install only the reusable core in another TypeScript project:
 npm install friday-agent-core
 ```
 
-The npm names are not published while the migration branch is under review. The
-equivalent preview install is:
+The npm names are not published while the migration branch is under review.
+Download the `Friday-npm-packages` artifact from the
+[TypeScript workflow](https://github.com/Lancetwang/friday/actions/workflows/typescript.yml),
+extract it, and install the already-packed artifact:
 
 ```bash
-npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+npm install --global ./friday-agent-0.2.0-alpha.0.tgz
 friday
 ```
 

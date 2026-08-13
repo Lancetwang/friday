@@ -40,10 +40,11 @@ npm creates the appropriate executable shim, so the command is `friday` in
 PowerShell, cmd, bash, and zsh. The package includes Core, Harness, and TUI.
 
 The npm package will be published with the promoted release. While reviewing the
-migration branch, install the same package directly from GitHub:
+migration branch, download and extract the `Friday-npm-packages` artifact from
+the TypeScript workflow, then install the already-packed full package:
 
 ```bash
-npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+npm install --global ./friday-agent-0.2.0-alpha.0.tgz
 friday --version
 ```
 
@@ -61,6 +62,13 @@ package, not Friday's internal Harness:
 
 ```bash
 npm install friday-agent-core
+```
+
+Before registry publication, the same workflow artifact contains
+`friday-agent-core-0.2.0-alpha.0.tgz`:
+
+```bash
+npm install ./friday-agent-core-0.2.0-alpha.0.tgz
 ```
 
 ## Develop from source

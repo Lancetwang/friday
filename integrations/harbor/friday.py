@@ -29,8 +29,18 @@ class FridayAgent(BaseInstalledAgent):
         await self.ensure_system_dependencies(
             environment, ("bash", "curl", "git", "nodejs", "npm")
         )
-        package = self._get_env("FRIDAY_NPM_SPEC") or (
-            "github:Lancetwang/friday#codex/typescript-rewrite"
+        package = self._get_env("FRIDAY_NPM_SPEC")
+        install_command = (
+            f"npm install --global {shlex.quote(package)}"
+            if package
+            else (
+                'source_dir="$(mktemp -d)"; package_dir="$(mktemp -d)"; '
+                "git clone --depth 1 --branch codex/typescript-rewrite "
+                'https://github.com/Lancetwang/friday.git "$source_dir"; '
+                '(cd "$source_dir" && npm ci && '
+                'npm pack --pack-destination "$package_dir"); '
+                'npm install --global "$package_dir"/friday-agent-*.tgz'
+            )
         )
         installed = await self.exec_as_agent(
             environment,
@@ -41,7 +51,7 @@ class FridayAgent(BaseInstalledAgent):
                 '  export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm install 22; '
                 "fi; "
                 'if [ -s "$HOME/.nvm/nvm.sh" ]; then . "$HOME/.nvm/nvm.sh"; fi; '
-                f"npm install --global {shlex.quote(package)}; "
+                f"{install_command}; "
                 "command -v node; command -v friday"
             ),
         )
