@@ -38,10 +38,12 @@ jobs:
       - run: npm run test:math --prefix ui-desktop
       - run: npm run test:sources --prefix ui-desktop
       - run: npm run build --prefix ui-desktop
-      - run: cargo check --manifest-path ui-desktop/src-tauri/Cargo.toml
-      - run: cargo check --manifest-path ui-desktop/src-tauri/Cargo.toml --features typescript-sidecar
       - run: npm run sidecar:ts
       - run: npm run smoke:sidecar:ts
+      - name: Check Tauri TypeScript bridge
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":["binaries/friday-ts-app-server"]}}'
+        run: cargo check --manifest-path ui-desktop/src-tauri/Cargo.toml --features typescript-sidecar
 
   npm-packages:
     if: github.event_name != 'pull_request'

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -73,8 +73,8 @@ test('desktop images and selected local files reach the model and resumable hist
     assert.equal(restored.text, 'Inspect my attachments.')
     assert.deepEqual(restored.images, [image])
     assert.deepEqual(restored.attachments, [
-      { kind: 'file', name: 'selected.txt', path: external, size: 18 },
-      { kind: 'folder', name: 'selected-folder', path: selectedFolder }
+      { kind: 'file', name: 'selected.txt', path: await realpath(external), size: 18 },
+      { kind: 'folder', name: 'selected-folder', path: await realpath(selectedFolder) }
     ])
     assert.throws(() => imageUrls(['data:image/png;base64,not base64']), /PNG, JPEG, WebP, or GIF/)
   } finally {

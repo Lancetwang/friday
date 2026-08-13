@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { pathToFileURL } from 'node:url'
 
@@ -65,8 +67,13 @@ export class Gateway {
   private reasoningSequence = 0
   private permissionMode: PermissionMode | undefined
   private traceServer: TraceServer | undefined
+  private readonly workspace: string
+  private readonly send: (value: unknown) => void
 
-  constructor(private readonly workspace = process.cwd(), private readonly send: (value: unknown) => void = writeLine) {}
+  constructor(workspace = process.cwd(), send: (value: unknown) => void = writeLine) {
+    this.workspace = realpathSync.native(resolve(workspace))
+    this.send = send
+  }
 
   async start(): Promise<void> {
     this.session = await this.loadSession()
