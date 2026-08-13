@@ -24,7 +24,7 @@ The TypeScript monorepo contains a small reusable agent core and the Friday Harn
 
 ### Desktop App (Recommended)
 
-Download the Windows x64 NSIS installer, macOS Apple Silicon DMG, or Linux x64 AppImage from the TypeScript workflow artifacts (and from [GitHub Releases](https://github.com/Lancetwang/friday/releases) once promoted). The packaged app contains a standalone TypeScript sidecar; Git, Python, Node.js, Bun, and Rust are not required.
+Download the Windows x64 NSIS installer, macOS Apple Silicon DMG, or Linux x64 Debian package from the TypeScript workflow artifacts (and from [GitHub Releases](https://github.com/Lancetwang/friday/releases) once promoted). The packaged app contains a standalone TypeScript sidecar; Git, Python, Node.js, Bun, and Rust are not required.
 
 Launch Friday, open **Settings > Models**, and configure at least one provider API key. Web search keys and user preferences can be configured from the same Settings page.
 

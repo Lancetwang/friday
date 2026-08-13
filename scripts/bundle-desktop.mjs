@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const bundle = { darwin: 'dmg', linux: 'appimage', win32: 'nsis' }[process.platform]
+const bundle = { darwin: 'dmg', linux: 'deb', win32: 'nsis' }[process.platform]
 if (!bundle) throw new Error(`Unsupported desktop platform: ${process.platform}`)
 
 const desktop = join(root, 'ui-desktop')

@@ -11,7 +11,13 @@ Friday 同时提供独立桌面安装包和通过 npm 安装的 TUI。普通用�
 
 - Windows x64：NSIS `.exe`
 - macOS Apple Silicon：`.dmg`
-- Linux x64：`.AppImage`
+- Linux x64（Debian/Ubuntu）：`.deb`
+
+Linux 请交给系统包管理器安装，以自动解析 WebKitGTK 依赖：
+
+```bash
+sudo apt install ./Friday_*_amd64.deb
+```
 
 桌面应用自带独立 TypeScript Sidecar，不要求安装 Git、Python、Node.js、Bun 或
 Rust。启动后在**设置 > 模型**中配置至少一个模型 API Key。

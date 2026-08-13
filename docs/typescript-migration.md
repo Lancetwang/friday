@@ -57,7 +57,7 @@ npm run desktop:ts
 ```
 
 The desktop application compiles the gateway into a platform-specific Bun
-sidecar. End users of the NSIS, DMG, or AppImage do not need Node.js, Bun,
+sidecar. End users of the NSIS, DMG, or Debian package do not need Node.js, Bun,
 Python, or Rust.
 
 ## Evaluations
@@ -84,7 +84,7 @@ See [Evaluations](evaluation.md) for Terminal-Bench 2.1.
 
 - Windows x64 NSIS installer
 - macOS arm64 DMG
-- Linux x64 AppImage
+- Linux x64 Debian package
 - `friday-agent` and `friday-agent-core` npm tarballs
 
 ## Deliberate scope

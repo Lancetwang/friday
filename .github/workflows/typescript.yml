@@ -93,8 +93,8 @@ jobs:
             output: ui-desktop/src-tauri/target/release/bundle/dmg/*.dmg
           - runner: ubuntu-24.04
             artifact: Friday-Linux-x64
-            bundle: appimage
-            output: ui-desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            bundle: deb
+            output: ui-desktop/src-tauri/target/release/bundle/deb/*.deb
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -109,14 +109,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2t64 patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - run: npm ci
       - run: npm ci --prefix ui-desktop
       - run: npm run sidecar:ts
       - name: Build desktop installer
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: ${{ runner.os == 'Linux' && '1' || '' }}
-          NO_STRIP: ${{ runner.os == 'Linux' && 'true' || '' }}
         run: npm run tauri --prefix ui-desktop -- build --features typescript-sidecar --config src-tauri/tauri.typescript.conf.json --bundles ${{ matrix.bundle }} --verbose
       - uses: actions/upload-artifact@v6
         with:

@@ -13,7 +13,14 @@ or from GitHub Releases after the migration is promoted:
 
 - Windows x64: NSIS `.exe`
 - macOS Apple Silicon: `.dmg`
-- Linux x64: `.AppImage`
+- Linux x64 (Debian/Ubuntu): `.deb`
+
+Install the Linux package with the system package manager so its WebKitGTK
+dependencies are resolved:
+
+```bash
+sudo apt install ./Friday_*_amd64.deb
+```
 
 The app contains its own TypeScript sidecar. Git, Python, Node.js, Bun, and Rust
 are not required. Open **Settings > Models** after launch and configure at least
