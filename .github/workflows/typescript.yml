@@ -6,6 +6,12 @@ on:
     branches: [codex/typescript-rewrite, main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish_npm:
+        description: Publish the npm packages from this ref
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -78,7 +84,7 @@ jobs:
           if-no-files-found: error
 
   desktop-installers:
-    if: github.event_name != 'pull_request'
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.publish_npm != true) }}
     needs: test
     strategy:
       fail-fast: false
@@ -162,7 +168,16 @@ jobs:
           fi
 
   publish-npm:
-    if: startsWith(github.ref, 'refs/tags/v') && vars.NPM_PUBLISH_ENABLED == 'true'
+    if: >-
+      ${{
+        always() &&
+        vars.NPM_PUBLISH_ENABLED == 'true' &&
+        needs.npm-packages.result == 'success' &&
+        (
+          (startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_npm)
+        )
+      }}
     needs: [npm-packages, release]
     runs-on: ubuntu-latest
     permissions:
@@ -188,13 +203,15 @@ jobs:
       - name: Publish tested packages
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          channel=latest
-          [[ "$version" == *-* ]] && channel=next
-          core="$(find npm-packages -maxdepth 1 -name 'friday-agent-core-*.tgz' -print -quit)"
-          full="$(find npm-packages -maxdepth 1 -name 'friday-agent-*.tgz' ! -name 'friday-agent-core-*' -print -quit)"
+          core="$(find ./npm-packages -maxdepth 1 -name 'friday-agent-core-*.tgz' -print -quit)"
+          full="$(find ./npm-packages -maxdepth 1 -name 'friday-agent-*.tgz' ! -name 'friday-agent-core-*' -print -quit)"
           test -n "$core"
           test -n "$full"
+          version="${core##*/}"
+          version="${version#friday-agent-core-}"
+          version="${version%.tgz}"
+          channel=latest
+          [[ "$version" == *-* ]] && channel=next
           if ! npm view "friday-agent-core@$version" version >/dev/null 2>&1; then
             npm publish "$core" --access public --tag "$channel" --provenance
           fi
