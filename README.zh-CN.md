@@ -47,7 +47,7 @@ npm install friday-agent-core
 `friday-agent` tarball，并安装这个完全相同的构建：
 
 ```bash
-npm install --global ./friday-agent-0.2.0-alpha.0.tgz
+npm install --global ./friday-agent-0.2.0.tgz
 friday
 ```
 
@@ -56,7 +56,6 @@ friday
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
 cd friday
-git switch codex/typescript-rewrite
 npm ci
 npm link
 friday

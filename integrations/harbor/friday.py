@@ -27,21 +27,10 @@ class FridayAgent(BaseInstalledAgent):
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         await self.ensure_system_dependencies(
-            environment, ("bash", "curl", "git", "nodejs", "npm")
+            environment, ("bash", "curl", "nodejs", "npm")
         )
-        package = self._get_env("FRIDAY_NPM_SPEC")
-        install_command = (
-            f"npm install --global {shlex.quote(package)}"
-            if package
-            else (
-                'source_dir="$(mktemp -d)"; package_dir="$(mktemp -d)"; '
-                "git clone --depth 1 --branch codex/typescript-rewrite "
-                'https://github.com/Lancetwang/friday.git "$source_dir"; '
-                '(cd "$source_dir" && npm ci && '
-                'npm pack --pack-destination "$package_dir"); '
-                'npm install --global "$package_dir"/friday-agent-*.tgz'
-            )
-        )
+        package = self._get_env("FRIDAY_NPM_SPEC") or "friday-agent@0.2.0"
+        install_command = f"npm install --global {shlex.quote(package)}"
         installed = await self.exec_as_agent(
             environment,
             command=(

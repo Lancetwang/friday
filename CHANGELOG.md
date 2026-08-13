@@ -2,6 +2,13 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.2.0 - TypeScript runtime and unified distribution (2026-08-13)
+
+- Rebuilt Agent Core and the Friday Harness as a TypeScript monorepo with one guarded model/tool loop, explicit runtime context, structured permissions, resumable sessions, layered memory, verification, and observable traces.
+- Shipped the same Harness through the TUI, headless `friday run` evaluation command, browser observability UI, and a standalone Tauri desktop sidecar without a Python, Node.js, Bun, or Rust runtime requirement for desktop users.
+- Added public `friday-agent-core` and `friday-agent` npm packages, native Windows, macOS, and Debian installers, checksum-bearing GitHub Releases, and tag-driven cross-platform validation.
+- Kept legacy Friday state compatible for rollback and left the separately maintained Python Agent Core repository untouched.
+
 ## v0.1.11 - TUI navigation and loop diagnostics (2026-08-12)
 
 - Rebuilt the TUI around prefix-filtered slash completion and searchable keyboard menus for provider login, model and native thinking-level selection, web-search credentials, permissions, and saved conversations. Added branch navigation, background Trace Workbench control, and reliable double-Esc cancellation across Windows, macOS, and Linux terminals.

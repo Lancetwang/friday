@@ -47,7 +47,7 @@ If a prerelease has not reached the npm registry yet, download its
 `friday-agent` tarball from the same GitHub Release and install that exact build:
 
 ```bash
-npm install --global ./friday-agent-0.2.0-alpha.0.tgz
+npm install --global ./friday-agent-0.2.0.tgz
 friday
 ```
 
@@ -56,7 +56,6 @@ friday
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
 cd friday
-git switch codex/typescript-rewrite
 npm ci
 npm link
 friday

@@ -44,7 +44,7 @@ npm 会生成对应平台的可执行 Shim，因此 PowerShell、cmd、bash 与 
 `friday-agent` tarball，并安装已经通过测试的完整包：
 
 ```bash
-npm install --global ./friday-agent-0.2.0-alpha.0.tgz
+npm install --global ./friday-agent-0.2.0.tgz
 friday --version
 ```
 
@@ -67,7 +67,7 @@ npm install friday-agent-core
 同一个 GitHub Release 也提供 Core tarball，作为 Registry 发布前的备用安装方式：
 
 ```bash
-npm install ./friday-agent-core-0.2.0-alpha.0.tgz
+npm install ./friday-agent-core-0.2.0.tgz
 ```
 
 ## 从源码开发
@@ -77,7 +77,6 @@ npm install ./friday-agent-core-0.2.0-alpha.0.tgz
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
 cd friday
-git switch codex/typescript-rewrite
 npm ci
 npm test
 npm link

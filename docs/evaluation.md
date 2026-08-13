@@ -38,13 +38,13 @@ harbor run \
   --agent integrations.harbor.friday:FridayAgent
 ```
 
-During branch development the adapter installs Friday from GitHub. After npm
-publication, pin the exact package supplied to every trial:
+The adapter installs Friday from npm. Pin the exact package supplied to every
+trial:
 
 ```bash
 harbor run ... \
   --agent integrations.harbor.friday:FridayAgent \
-  --ae FRIDAY_NPM_SPEC=friday-agent@0.2.0-alpha.0
+  --ae FRIDAY_NPM_SPEC=friday-agent@0.2.0
 ```
 
 For reproducible results, also pin Harbor, the model, task dataset, environment,

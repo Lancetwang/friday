@@ -1,8 +1,8 @@
 # TypeScript migration
 
-The rewrite lives on `codex/typescript-rewrite` in the existing Friday
-repository. The branch starts from `main`; it is not a new repository and it
-does not merge back until the migration is deliberately promoted.
+The rewrite was developed on `codex/typescript-rewrite` in the existing Friday
+repository and promoted to `main` for v0.2.0. It was never a separate
+repository; the independent Python Agent Core remains separately maintained.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ checksums. If npm ownership is still being bootstrapped, the full package can
 be installed directly from that Release:
 
 ```bash
-npm install --global ./friday-agent-0.2.0-alpha.0.tgz
+npm install --global ./friday-agent-0.2.0.tgz
 friday --version
 ```
 

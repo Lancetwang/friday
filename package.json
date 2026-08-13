@@ -1,6 +1,6 @@
 {
   "name": "friday-agent",
-  "version": "0.2.0-alpha.0",
+  "version": "0.2.0",
   "description": "Friday, a local-first general-purpose agent.",
   "license": "MIT",
   "repository": {

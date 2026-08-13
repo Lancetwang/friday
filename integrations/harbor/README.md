@@ -13,13 +13,13 @@ harbor run \
   --agent integrations.harbor.friday:FridayAgent
 ```
 
-Until `friday-agent` is published to npm, the adapter installs the migration
-branch from GitHub. Override that source without changing the adapter:
+The adapter installs the stable npm package by default. Pin or replace that
+package without changing the adapter:
 
 ```bash
 harbor run ... \
   --agent integrations.harbor.friday:FridayAgent \
-  --ae FRIDAY_NPM_SPEC=friday-agent@0.2.0-alpha.0
+  --ae FRIDAY_NPM_SPEC=friday-agent@0.2.0
 ```
 
 Friday writes Harbor's `/logs/agent/trajectory.json` directly in ATIF-v1.7.
