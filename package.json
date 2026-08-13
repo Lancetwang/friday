@@ -1,0 +1,46 @@
+{
+  "name": "friday-agent",
+  "version": "0.2.0-alpha.0",
+  "description": "Friday, a local-first general-purpose agent.",
+  "license": "MIT",
+  "repository": "github:Lancetwang/friday",
+  "type": "module",
+  "bin": {
+    "friday": "dist/friday.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "workspaces": [
+    "packages/*",
+    "ui-tui"
+  ],
+  "scripts": {
+    "build": "npm run build:cli",
+    "build:runtime": "npm run build -w friday-agent-core && npm run build -w friday-agent-harness",
+    "build:cli": "npm run build:runtime && npm run build -w friday-agent-cli && bun scripts/build-cli.mjs",
+    "check": "npm run build -w friday-agent-core && npm run check -w friday-agent-harness && npm run typecheck -w friday-agent-cli",
+    "gateway": "npm run gateway -w friday-agent-harness",
+    "tui:ts": "npm run build:cli && node dist/friday.js",
+    "desktop:ts": "npm run build:runtime && npm run desktop:ts --prefix ui-desktop",
+    "sidecar:ts": "npm run build:runtime && node scripts/build-ts-sidecar.mjs",
+    "smoke:sidecar:ts": "node scripts/smoke-ts-sidecar.mjs",
+    "bundle:desktop:ts": "npm run sidecar:ts && npm run bundle:ts --prefix ui-desktop",
+    "pack:release": "node -e \"require('node:fs').mkdirSync('artifacts/npm',{recursive:true})\" && npm pack --pack-destination artifacts/npm && npm pack -w friday-agent-core --pack-destination artifacts/npm",
+    "prepare": "npm run build:cli",
+    "test": "npm run test -w friday-agent-core && npm run test -w friday-agent-harness && npm run test -w friday-agent-cli"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.2",
+    "bun": "1.3.14",
+    "typescript": "5.9.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,6 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { existsSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
 
 import type { GatewayEvent } from './types.js'
 
@@ -16,14 +19,17 @@ export class GatewayClient extends EventEmitter {
 
   start() {
     if (this.proc) return
-    const python = process.env.FRIDAY_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
     const env = { ...process.env }
-    const root = process.env.FRIDAY_ROOT
     const cwd = process.env.FRIDAY_CWD || process.cwd()
+    const here = dirname(fileURLToPath(import.meta.url))
+    const packaged = resolve(here, 'gateway.js')
+    const source = resolve(here, '../../packages/harness/dist/gateway.js')
+    const entry = process.env.FRIDAY_GATEWAY_ENTRY || (existsSync(packaged) ? packaged : source)
+    if (!existsSync(entry)) throw new Error(`Friday gateway is not built: ${entry}. Run npm run build first.`)
 
-    const proc = spawn(python, ['-m', 'friday.app_server'], {
+    const proc = spawn(process.execPath, [entry], {
       cwd,
-      env: root ? { ...env, PYTHONPATH: env.PYTHONPATH ? `${root}${process.platform === 'win32' ? ';' : ':'}${env.PYTHONPATH}` : root } : env,
+      env,
       stdio: ['pipe', 'pipe', 'pipe']
     })
     this.proc = proc

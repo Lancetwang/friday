@@ -6,41 +6,64 @@
 
 <p align="center">
   <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/github/v/release/Lancetwang/friday?sort=semver&style=flat-square&label=release" alt="GitHub release"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
-  <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/package%20manager-uv-DE5FE9?style=flat-square&logo=uv&logoColor=white" alt="uv"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22+"></a>
+  <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/package%20manager-npm-CB3837?style=flat-square&logo=npm&logoColor=white" alt="npm"></a>
   <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64"></a>
-  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-macOS%20ARM%20%7C%20Intel-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon and Intel"></a>
-  <a href="docs/install.md"><img src="https://img.shields.io/badge/platform-Linux%20CLI%20%7C%20TUI-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux CLI and TUI"></a>
+  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-macOS%20ARM-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon"></a>
+  <a href="docs/install.md"><img src="https://img.shields.io/badge/platform-Linux%20Desktop%20%7C%20TUI-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux desktop and TUI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
 </p>
 
 <p align="center"><a href="README.zh-CN.md">中文说明</a></p>
 
-Friday is a local general-purpose agent available as a Windows and macOS desktop app, plus a TUI and CLI for Windows, macOS, and Linux. It can work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
+Friday is a local general-purpose agent available as a Windows, macOS, and Linux desktop app, plus a cross-platform TUI. It can work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
 
-It uses [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) for generic agent execution. The Friday harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, and desktop, CLI, and TUI behavior. [Architecture](docs/architecture.md) describes the boundary between the two.
+The TypeScript monorepo contains a small reusable agent core and the Friday Harness. The Harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, and UI behavior. [TypeScript migration](docs/typescript-migration.md) describes the boundary.
 
 ## Install
 
 ### Desktop App (Recommended)
 
-Open [GitHub Releases](https://github.com/Lancetwang/friday/releases) and download the Windows x64 installer, macOS Apple Silicon DMG, or macOS Intel DMG. The packaged app includes Friday and its Python runtime; Git, Python, Node.js, and Rust are not required.
+Download the Windows x64 NSIS installer, macOS Apple Silicon DMG, or Linux x64 AppImage from the TypeScript workflow artifacts (and from [GitHub Releases](https://github.com/Lancetwang/friday/releases) once promoted). The packaged app contains a standalone TypeScript sidecar; Git, Python, Node.js, Bun, and Rust are not required.
 
 Launch Friday, open **Settings > Models**, and configure at least one provider API key. Web search keys and user preferences can be configured from the same Settings page.
+
+### npm
+
+Install the complete Core + Harness + TUI package globally:
+
+```bash
+npm install --global friday-agent
+friday
+```
+
+Install only the reusable core in another TypeScript project:
+
+```bash
+npm install friday-agent-core
+```
+
+The npm names are not published while the migration branch is under review. The
+equivalent preview install is:
+
+```bash
+npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+friday
+```
 
 ### From Source
 
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
 cd friday
-npm --prefix ui-tui ci
-npm --prefix ui-tui run build
-uv tool install -e . --force --reinstall
+git switch codex/typescript-rewrite
+npm ci
+npm link
+friday
 ```
 
-The source installation provides the global `friday` CLI and TUI. The checkout stays on disk, and all Python dependencies, including [`friday-agent-core`](https://pypi.org/project/friday-agent-core/), resolve automatically from PyPI.
-
-From the checkout itself you can also launch without installing: `./friday` on macOS/Linux or `friday.cmd` on Windows starts the TUI with the launching directory as the workspace, using the checkout's own uv environment. If the global `friday` command is not found after `uv tool install`, run `uv tool update-shell` and reopen the terminal.
+Node.js 22 or newer is required for npm and source installs. npm creates the
+platform shim, so `friday` is the command in PowerShell, cmd, bash, and zsh.
 
 See [Install](docs/install.md) for both installation paths, prerequisites, configuration, upgrades, and uninstall steps.
 
@@ -51,16 +74,16 @@ See [Install](docs/install.md) for both installation paths, prerequisites, confi
 - Prefix-aware context: stable runtime rules lead the prompt, while user, project, Skill, and recalled memory layers are disclosed only when needed.
 - Multi-stage compaction: lossless tool-result simplification is probed first; structured conversation compaction keeps the largest complete recent tail that fits, up to ten user turns.
 - Layered memory and progress: stable user facts, project knowledge, episodic recall, and resumable task progress remain separate.
-- Progressive Skills: Friday lists metadata and paths first, then reads only the selected `SKILL.md` and referenced resources.
+- Progressive Skills: Friday routes on compact metadata first, then reads only the selected `SKILL.md` and referenced resources.
 - Long-running task control: explicit objectives, plans, next actions, verifier state, semantic stop conditions, and session resume keep work on track.
-- Turn checkpoints: `friday undo` and desktop message restore recover workspace files, conversation, and progress without touching the project's Git history.
+- Turn checkpoints: desktop message restore recovers workspace files, conversation, and progress without touching the project's Git history.
 - Tool lifecycle hooks: code-level permission preflight runs before execution, while a three-round sliding no-progress guard catches identical tool calls without constraining legitimate retries with changed arguments.
 - Program-enforced permissions: hard-denied commands and explicit deny rules stop before execution; grey-area commands can be reviewed by the user or a separate intent reviewer.
 - Checkpoint-derived deliverables: files actually changed by a turn are attached to its reply and safe document/image formats can be previewed locally.
 - Prompt-injection boundary: private control context is protected across the main agent and auxiliary model calls, while retrieved content is treated as untrusted data.
 - Bounded web research: search continues only for missing evidence, with retrieved sources separated from model inference.
 - Exact accounting and traces: provider usage, model calls, tool activity, compaction, verification, and results are recorded for inspection and analysis.
-- Runtime compatibility: Friday pins a tested [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) version and checks the installed environment before execution.
+- Evaluation contract: `friday run` provides headless sandbox execution and writes ATIF-v1.7 trajectories for Harbor, Terminal-Bench, and other harnesses.
 
 ## Architecture
 
@@ -68,15 +91,16 @@ See [Install](docs/install.md) for both installation paths, prerequisites, confi
 flowchart TD
     User["User"] --> Surface["Friday Desktop / CLI / TUI"]
     Surface --> Harness["Friday harness"]
+    Harness --> Core["TypeScript agent core"]
 
-    Harness --> AgentLoop["Agent loop<br/>model -> tools -> model -> answer"]
+    Core --> AgentLoop["Agent loop<br/>model -> tools -> model -> answer"]
     AgentLoop --> OuterLoop["Verify / goal loop<br/>inspect deliverable -> feedback -> retry"]
     OuterLoop --> AgentLoop
 
     Prefix["Prefix caching<br/>stable rules before volatile state"] --> AgentLoop
     Context["Context engineering<br/>budget -> tool compact -> conversation compact"] --> AgentLoop
     Memory["Memory management<br/>hot facts + recalled episodes + task progress"] --> AgentLoop
-    Skills["Progressive skills<br/>CLI catalog -> selected files"] --> AgentLoop
+    Skills["Progressive skills<br/>metadata catalog -> selected files"] --> AgentLoop
     Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan"] --> AgentLoop
 ```
 
@@ -93,16 +117,18 @@ flowchart TD
 - [Memory](docs/memory.md)
 - [Skills](docs/skills.md)
 - [Verification](docs/verification.md)
-- [Phone Bridge](docs/im-feishu.md)
+- [Evaluations](docs/evaluation.md)
 - [Observability](docs/observability.md)
 - [Checkpoints](docs/checkpoints.md)
 
 ## Validate
 
 ```powershell
-uv run python -m unittest discover -s tests
-uv run python -m compileall src tests
-npm --prefix ui-tui run typecheck
+npm ci
+npm run check
+npm test
+npm ci --prefix ui-desktop
+npm run build --prefix ui-desktop
 ```
 
 ## License

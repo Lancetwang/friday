@@ -1,73 +1,38 @@
 # CLI Commands
 
-Top-level commands:
+The npm package exposes one cross-platform executable, `friday`.
 
-```powershell
-friday
-friday init
+```text
+friday                         Start the TUI in the current directory
+friday tui                     Start the TUI explicitly
+friday ask <prompt>            Run one non-interactive turn
+friday goal <prompt>           Run with independent goal verification
+friday run <instruction>       Run in evaluation/sandbox mode
 friday --help
-friday doctor [--json]
-friday skill
-friday skill --json
-friday skill --help
-friday model list [--json]
-friday model add --help
-friday model use <profile-id>
-friday model remove <profile-id>
-friday memory --help
-friday memory status
-friday memory list [user|global|project|episode|all] [--json]
-friday memory search <query> [--scope <scope>] [--json]
-friday memory add --scope <scope> <text>
-friday memory update <id> <text>
-friday memory remove <id>
-friday memory consolidate [--days 2] [--json]
-friday trace list [--json]
-friday trace show <session-id> [--json]
-friday trace serve [--port 8765] [--no-open]
-friday undo
-friday undo --checkpoint <id>
-friday checkpoint list [--json]
-friday checkpoint restore <id> [--force]
-friday ask "..."
-friday goal "..."
-friday chat
-friday tui
-friday feishu
-friday feishu --console
-friday compact
-friday resume
-friday resume --list
-friday resume --session <id>
-friday session list
-friday session rename <id> <title>
-friday session delete <id>
-friday approve
-friday approve --for-session
-friday reject
-friday reject --message "use another approach"
-friday context
-friday progress
-friday reset
+friday --version
 ```
 
-`friday doctor` performs read-only local checks for the Friday version, pinned
-agent runtime, model credentials, writable data paths, and source TUI assets.
-It does not call the model or consume tokens.
+Common options:
 
-`friday feishu` serves the current directory to Feishu over a long connection so
-a phone can drive this machine. It needs the `feishu` extra and an `open_id`
-allowlist, and reads the credentials saved in Settings. The desktop switch and
-`/phone` start the same bridge, so a terminal is only needed for a headless
-machine. `friday feishu --console` exercises the bridge without Feishu, which is
-the fastest way to tell a Friday problem from a Feishu one. See
-[Phone Bridge](im-feishu.md).
+```text
+--cwd <path>                   Select the workspace
+--permission-mode <mode>       manual, auto, or bypass
+--stdin                        Read the prompt from standard input
+--json                         Print the final result as JSON
+--trajectory <path>            Write an ATIF-v1.7 trajectory
+```
 
-Top-level `friday reset` requires confirmation and clears global Friday state.
+`ask` and `goal` retain the configured permission policy. `run` defaults to
+bypass mode because it is designed for an evaluator-provided sandbox; hard
+denials still apply. Override it with `--permission-mode auto` when desired.
 
-Top-level `goal`, `compact`, `context`, `progress`, `resume`, `approve`, and
-`reject` operate on persisted sessions. Use `--session <id>` when the latest
-session is not the one you want.
+Examples:
+
+```powershell
+friday ask --cwd E:\work\project "summarize this repository"
+Get-Content task.txt | friday run --stdin --json
+friday run --trajectory C:\logs\trajectory.json -- "fix the failing tests"
+```
 
 TUI slash commands:
 
@@ -80,7 +45,6 @@ TUI slash commands:
 /memory [help|status|list|search|add|update|remove|consolidate]
 /context
 /trace on|off
-/phone [on|off]
 /compact
 /clear
 /goal <task>
@@ -91,37 +55,8 @@ TUI slash commands:
 /exit
 ```
 
-Typing `/` opens prefix-filtered command completion. `/login`, `/model`,
-`/search`, `/resume`, and `/permission` use searchable Up/Down pickers; Enter confirms and
-Esc returns to the parent picker. `/model` selects the model first and then
-offers only the thinking levels that model actually supports. `/resume` can
-also delete a selected saved conversation. Press Esc twice while Friday is
-working to stop the current response.
-
-The plain `friday chat` surface keeps text-form compatibility commands such as
-`/undo`, `/approve`, and `/reject`. The richer TUI presents approval choices and
-branch navigation interactively instead of listing those commands in its slash
-palette.
-
-`/clear` deletes the current saved conversation and starts fresh. `/fork`
-creates a branch from the latest Friday response, while `/backward` returns to
-its parent. `/phone [on|off]` switches the Feishu bridge from the TUI only; the
-plain CLI chat does not expose it. See [Phone Bridge](im-feishu.md).
-
-Permission flags:
-
-```powershell
-friday --permission-mode manual
-friday --permission-mode auto
-friday --permission-mode bypass
-friday --dangerously-skip-permissions
-friday --permission-allow
-friday --allowed-tools "Bash(git log *)"
-friday --disallowed-tools "Bash(rm *)"
-```
-
-Modes:
-
-- `manual`: default approval behavior.
-- `auto`: let a separate, tool-free model review decide whether a risky command matches the current request. Hard-denied commands and explicit deny rules still win.
-- `bypass`: skip interactive approval. Hard-denied commands and explicit deny rules still apply; use only in a sandbox.
+Typing `/` opens prefix completion. `/login`, `/model`, `/search`, `/resume`,
+and `/permission` use searchable pickers. `/clear` deletes the current saved
+conversation and starts fresh; `/fork` branches from the latest response;
+`/backward` returns to its parent. Phone/Feishu commands are intentionally not
+part of the TypeScript product.

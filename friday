@@ -1,16 +1,6 @@
 #!/usr/bin/env sh
-# Friday launcher for POSIX shells — the counterpart of friday.cmd.
-#
-# Runs the source checkout with its own uv environment, keeping the
-# launching directory as the Friday workspace. Installable usage:
-#   ./friday            # start the TUI with the current directory as workspace
-#   ./friday ask "..."  # one-shot ask from anywhere
-# After `uv tool install -e .`, the global `friday` command works from any
-# directory without this script.
 set -e
+
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-if [ -z "${FRIDAY_CWD:-}" ]; then
-  FRIDAY_CWD=$PWD
-fi
-export FRIDAY_CWD
-exec uv run --project "$ROOT" friday "$@"
+export FRIDAY_CWD=${FRIDAY_CWD:-$PWD}
+exec node "$ROOT/dist/friday.js" "$@"

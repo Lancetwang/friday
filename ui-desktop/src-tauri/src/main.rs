@@ -90,11 +90,33 @@ fn take_lines(buffer: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
 }
 
 #[cfg(debug_assertions)]
+fn repository_root() -> Result<PathBuf, String> {
+    Ok(plain_path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .map_err(|error| error.to_string())?,
+    ))
+}
+
+#[cfg(debug_assertions)]
 fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
+    let repository = repository_root()?;
+    if cfg!(feature = "typescript-sidecar")
+        || env::var("FRIDAY_GATEWAY").ok().as_deref() == Some("typescript")
+    {
+        let gateway = repository.join("packages/harness/dist/gateway.js");
+        if !gateway.is_file() {
+            return Err(format!(
+                "TypeScript gateway is not built: {}. Run npm run build first.",
+                gateway.display()
+            ));
+        }
+        return Ok(app
+            .shell()
+            .command("node")
+            .args([gateway.to_string_lossy().into_owned()]));
+    }
     let repository = repository.to_string_lossy().into_owned();
     Ok(app.shell().command("uv").args([
         "run",
@@ -106,10 +128,17 @@ fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
     ]))
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(feature = "typescript-sidecar")))]
 fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
     app.shell()
         .sidecar("friday-app-server")
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(all(not(debug_assertions), feature = "typescript-sidecar"))]
+fn app_server_command(app: &tauri::AppHandle) -> Result<Command, String> {
+    app.shell()
+        .sidecar("friday-ts-app-server")
         .map_err(|error| error.to_string())
 }
 
@@ -297,6 +326,20 @@ mod tests {
         assert_eq!(super::plain_path(PathBuf::from(r"\\?\E:\work")), PathBuf::from(r"E:\work"));
         assert_eq!(super::plain_path(PathBuf::from(r"\\?\UNC\host\share")), PathBuf::from(r"\\host\share"));
         assert_eq!(super::plain_path(PathBuf::from("/home/me/work")), PathBuf::from("/home/me/work"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn node_entry_point_uses_a_plain_windows_path() {
+        let gateway = super::repository_root()
+            .unwrap()
+            .join("packages/harness/dist/gateway.js");
+
+        assert!(
+            !gateway.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            gateway.display()
+        );
     }
 
     #[test]

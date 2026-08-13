@@ -162,6 +162,7 @@ type ContextCompaction = {
 type SessionInfo = {
   approval?: Approval
   cwd: string
+  features?: { phone?: boolean }
   model: string
   model_configured?: boolean
   model_name?: string
@@ -230,8 +231,9 @@ type MemoryFileDetail = MemoryFileInfo & {
 type MemoryFileScope = 'global' | 'user'
 
 type AppSettings = {
-  bridge: BridgeStatus
-  feishu: FeishuSettings
+  bridge?: BridgeStatus
+  features?: { phone?: boolean }
+  feishu?: FeishuSettings
   memory_files: Record<MemoryFileScope, MemoryFileInfo>
   user_profile: UserProfileSettings
   web_search: WebSearchSettings
@@ -736,6 +738,7 @@ function App() {
   const view = views[activeProject] || emptyView(activeProject)
   const { activeSession, attachments, busy, cancelling, checkpoints, draft, forkTree, goalMode, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
   const isDefaultWorkspace = Boolean(defaultWorkspace && samePath(defaultWorkspace, activeProject))
+  const phoneSupported = status === 'ready' && info.features?.phone !== false
 
   const updateView = (workspace: string, update: (current: ProjectView) => ProjectView) => {
     setViews(current => {
@@ -1201,7 +1204,7 @@ function App() {
         updateView(workspace, current => ({
           ...current,
           items: current.items.map(item =>
-            item.kind === 'tool' && item.toolCallId === toolCallId && item.status === 'running'
+            item.kind === 'tool' && item.toolCallId === toolCallId && (item.status === 'running' || item.status === 'approval')
               ? { ...item, text: capText(String(payload.content || ''), MAX_TOOL_TEXT) }
               : item
           )
@@ -1235,7 +1238,10 @@ function App() {
           ...current,
           busy: Boolean(payload.continued),
           guidance: '',
-          pendingApproval: null
+          pendingApproval: null,
+          items: current.items.map(item => item.kind === 'tool' && item.status === 'approval'
+            ? { ...item, status: payload.decision === 'approve' ? 'done' : 'error' }
+            : item)
         }))
       } else if (type === 'verification.start') {
         updateView(workspace, current => ({
@@ -1564,7 +1570,10 @@ function App() {
   // reach this window. The conversations land in the same files either way, so the
   // sidebar polls for them instead of waiting for an event that never arrives.
   useEffect(() => {
-    if (!settingsWorkspace) return
+    if (!settingsWorkspace || !phoneSupported) {
+      setPhoneSessions([])
+      return
+    }
     let live = true
     const read = () => {
       void sendGateway<{ choices: ResumeChoice[] }>(settingsWorkspace, 'bridge.sessions')
@@ -1577,7 +1586,7 @@ function App() {
       live = false
       clearInterval(timer)
     }
-  }, [settingsWorkspace])
+  }, [phoneSupported, settingsWorkspace])
 
   const changeLanguage = (next: Language) => {
     setLanguage(next)
@@ -2292,7 +2301,7 @@ function App() {
               </div>
             </section>
 
-            <section className={`sidebar-section phone-space ${collapsedSections.has('phone') ? 'collapsed' : ''}`}>
+            {phoneSupported && <section className={`sidebar-section phone-space ${collapsedSections.has('phone') ? 'collapsed' : ''}`}>
               <div className="section-heading">
                 {renderSectionHeading('phone', t('sidebar.phone'), <PhoneIcon />)}
               </div>
@@ -2303,7 +2312,7 @@ function App() {
                     : <div className="empty-sessions">{t('sidebar.phoneEmpty')}</div>}
                 </div>
               </div>
-            </section>
+            </section>}
 
             <section className={`sidebar-section conversation-space ${collapsedSections.has('recent') ? 'collapsed' : ''}`}>
               <div className="section-heading">
@@ -2383,6 +2392,7 @@ function App() {
             catalog={models}
             initialSection={settingsSection}
             language={language}
+            phoneSupported={phoneSupported}
             onClose={() => setPage('chat')}
             onClearKey={clearModelKey}
             onEnable={setProviderEnabled}
@@ -3284,6 +3294,7 @@ function SettingsPage({
   catalog,
   initialSection,
   language,
+  phoneSupported,
   onBridgeStatus,
   onBridgeToggle,
   onClearKey,
@@ -3306,6 +3317,7 @@ function SettingsPage({
   catalog: ModelCatalog
   initialSection: SettingsSection
   language: Language
+  phoneSupported: boolean
   onBridgeStatus: () => Promise<BridgeStatus>
   onBridgeToggle: (running: boolean) => Promise<BridgeStatus>
   onClearKey: (target: ModelTarget) => Promise<ModelCatalog>
@@ -3409,7 +3421,7 @@ function SettingsPage({
           <span>{t('settings.back')}</span>
         </button>
         <div className="settings-nav-group">
-          {SETTINGS_SECTIONS.map(item => (
+          {SETTINGS_SECTIONS.filter(item => phoneSupported || item.id !== 'phone').map(item => (
             <button
               className={`settings-section ${section === item.id ? 'active' : ''}`}
               key={item.id}
@@ -3572,13 +3584,13 @@ function SettingsPage({
                 : <SettingsLoading error={settingsError} />}
             </div>
           )}
-          {section === 'phone' && (
+          {phoneSupported && section === 'phone' && (
             <div className="settings-section-wrap">
               <header className="settings-head">
                 <h2>{t('phone.title')}</h2>
                 <p>{t('phone.desc')}</p>
               </header>
-              {settings
+              {settings?.feishu && settings.bridge
                 ? <PhoneBridgeSettings
                     initial={settings.feishu}
                     initialStatus={settings.bridge}

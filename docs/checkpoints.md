@@ -7,24 +7,7 @@ Friday creates one checkpoint before each user turn. The checkpoint covers:
 - the current objective, plan, and progress;
 - an approval continuation as part of its original user turn.
 
-Use the latest checkpoint:
-
-```powershell
-friday undo
-```
-
-List or restore an older checkpoint:
-
-```powershell
-friday checkpoint list
-friday checkpoint restore <checkpoint-id>
-```
-
-Top-level `friday undo` and plain CLI chat's `/undo` expose the same latest-turn
-operation. The TUI uses `/fork` and `/backward` for branch navigation; checkpoint
-restore remains available through the top-level CLI and desktop message action.
-Restoring an older checkpoint also supersedes newer checkpoints because workspace
-history is linear.
+In the desktop timeline, use the restore action on a user message to return to the state before that request. Restoring an older checkpoint also supersedes newer checkpoints because workspace history is linear. TUI `/fork` and `/backward` navigate conversation branches; they do not silently restore workspace files.
 
 The desktop attaches restore only to user messages, returning to the state
 before that request. Fork is attached only to assistant responses, so a branch
@@ -32,8 +15,8 @@ always starts from a complete request-response boundary.
 
 ## Storage And Safety
 
-File snapshots use a separate content-addressed Git object store under
-`~/.friday/projects/<workspace-id>/checkpoints/`; Friday never changes the
+File snapshots use a separate content-addressed store under
+`~/.friday/projects/<workspace-id>/checkpoints-ts/`; Friday never changes the
 workspace's `.git` index, branch, commits, or stash. Conversation content is
 reused from the trace object store instead of being copied into every
 checkpoint. Friday retains the latest 50 restorable checkpoints per project;

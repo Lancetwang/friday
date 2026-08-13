@@ -4,6 +4,7 @@ node_modules/
 node_cache/
 ui-tui/dist/
 ui-desktop/dist/
+packages/*/dist/
 ui-desktop/app-icon.png
 ui-desktop/.sidecar-build/
 ui-desktop/src-tauri/binaries/
@@ -17,3 +18,4 @@ __pycache__/
 .friday/
 /eval/
 /dist/
+/artifacts/

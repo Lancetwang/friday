@@ -9,24 +9,7 @@ Friday discovers skills from:
 ~/.friday/FridaySkills/<skill>/SKILL.md
 ```
 
-The startup prompt contains only one routing instruction. Run `friday skill --json` through Bash to list each available skill's `name`, `description`, `scope`, and `SKILL.md` path. After selecting one, use Bash to read its `SKILL.md`, referenced files, or scripts as needed.
-
-For human-readable output:
-
-```powershell
-friday skill
-```
-
-Project skills take precedence over same-named user skills. Friday also provisions a user-level `friday-cli` skill that explains how to inspect Friday's own commands and deterministic pipelines, including `friday skill` and `friday memory ...`.
-
-Friday's own commands use the same progressive help structure:
-
-```powershell
-friday --help
-friday skill --help
-friday memory --help
-friday memory search --help
-```
+The startup prompt contains only each skill's `name` and `description`. When one matches a task, the `Skill` tool reads that skill's `SKILL.md`; referenced files are loaded only when the skill asks for them. Project skills take precedence over same-named user skills.
 
 A minimal skill:
 
@@ -54,13 +37,13 @@ Use when the user asks Friday to review code changes.
 - Do not rewrite code unless the user asks.
 ```
 
-The frontmatter routing fields are returned by `friday skill --json`:
+The frontmatter provides the routing fields:
 
 - `name`: stable skill id shown to the agent.
 - `description`: short routing text used before the full skill is loaded.
-- `scope`: `project` or `user`.
-- `path`: absolute path to the selected entry `SKILL.md`.
 
-The Markdown body is progressive disclosure. It is not included in the startup prompt or listing; Friday reads it with Bash only after choosing the skill. Other Markdown files, references, templates, and scripts remain in the skill directory and are accessed only when the selected `SKILL.md` calls for them.
+Friday derives `scope` and the absolute path from where the skill was discovered; they do not need to be repeated in frontmatter.
+
+The Markdown body is progressive disclosure. It is not included in the startup prompt; Friday reads it through the `Skill` tool only after choosing the skill. Other Markdown files, references, templates, and scripts remain in the skill directory and are accessed only when the selected `SKILL.md` calls for them.
 
 Keep skills focused. A skill should teach one repeatable workflow, not become a second system prompt.

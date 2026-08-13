@@ -13,7 +13,6 @@ export const COMMANDS = [
   { name: '/memory', detail: 'Inspect or manage persistent memory' },
   { name: '/context', detail: 'Show current context usage' },
   { name: '/trace', detail: 'Usage: /trace on | /trace off' },
-  { name: '/phone', detail: 'Usage: /phone [on | off]' },
   { name: '/compact', detail: 'Compact the current conversation' },
   { name: '/clear', detail: 'Delete and clear the current conversation' },
   { name: '/resume', detail: 'Switch to or delete a saved conversation' },

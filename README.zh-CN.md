@@ -6,41 +6,62 @@
 
 <p align="center">
   <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/github/v/release/Lancetwang/friday?sort=semver&style=flat-square&label=release" alt="GitHub Release"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
-  <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/package%20manager-uv-DE5FE9?style=flat-square&logo=uv&logoColor=white" alt="uv"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22+"></a>
+  <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/package%20manager-npm-CB3837?style=flat-square&logo=npm&logoColor=white" alt="npm"></a>
   <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64"></a>
-  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-macOS%20ARM%20%7C%20Intel-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon 与 Intel"></a>
-  <a href="docs/install.zh-CN.md"><img src="https://img.shields.io/badge/platform-Linux%20CLI%20%7C%20TUI-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux CLI 与 TUI"></a>
+  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-macOS%20ARM-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon"></a>
+  <a href="docs/install.zh-CN.md"><img src="https://img.shields.io/badge/platform-Linux%20Desktop%20%7C%20TUI-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux 桌面端与 TUI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a></p>
 
-Friday 是一个本地通用 Agent，提供 Windows 与 macOS 桌面端，并为 Windows、macOS 和 Linux 提供 TUI 与 CLI。它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
+Friday 是一个本地通用 Agent，提供 Windows、macOS 与 Linux 桌面端，以及跨平台 TUI。它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
 
-底层的 [agent-core-runtime](https://github.com/Lancetwang/agent-core-runtime) 负责通用 Agent 执行。Friday Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace，以及桌面端、CLI 和 TUI。两者之间的边界契约见[架构文档](docs/architecture.md)。
+TypeScript Monorepo 同时包含可复用的轻量 Agent Core 与 Friday Harness。Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace 和 UI 行为。边界设计见 [TypeScript 迁移文档](docs/typescript-migration.md)。
 
 ## 安装
 
 ### 桌面端（推荐）
 
-打开 [GitHub Releases](https://github.com/Lancetwang/friday/releases)，按设备下载 Windows x64 安装程序、macOS Apple Silicon DMG 或 macOS Intel DMG。安装包已包含 Friday 和 Python Runtime，不要求用户额外安装 Git、Python、Node.js 或 Rust。
+从 TypeScript 工作流产物下载 Windows x64 NSIS 安装程序、macOS Apple Silicon DMG 或 Linux x64 AppImage；迁移正式发布后会进入 [GitHub Releases](https://github.com/Lancetwang/friday/releases)。安装包内置独立的 TypeScript Sidecar，不要求用户安装 Git、Python、Node.js、Bun 或 Rust。
 
 启动 Friday 后，在**设置 > 模型**中配置至少一个模型供应商的 API Key。联网搜索 Key 和用户偏好也可以在设置中完成。
+
+### npm 安装
+
+安装完整的 Core + Harness + TUI：
+
+```bash
+npm install --global friday-agent
+friday
+```
+
+只在另一个 TypeScript 项目中安装可复用 Core：
+
+```bash
+npm install friday-agent-core
+```
+
+迁移分支评审期间 npm 包名尚未发布，可以直接安装已推送的分支：
+
+```bash
+npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+friday
+```
 
 ### 从源码安装
 
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
 cd friday
-npm --prefix ui-tui ci
-npm --prefix ui-tui run build
-uv tool install -e . --force --reinstall
+git switch codex/typescript-rewrite
+npm ci
+npm link
+friday
 ```
 
-源码安装会提供全局 `friday` CLI 与 TUI。源码目录需要保留，所有 Python 依赖，包括 [`friday-agent-core`](https://pypi.org/project/friday-agent-core/)，都会自动从 PyPI 解析。
-
-也可以不安装、直接在源码目录启动：macOS/Linux 用 `./friday`，Windows 用 `friday.cmd`，会把启动时所在目录作为工作区并启动 TUI，使用源码目录自带的 uv 环境。若 `uv tool install` 之后全局 `friday` 命令找不到，运行 `uv tool update-shell` 并重开终端。
+npm 与源码安装要求 Node.js 22 或更高版本。npm 会按平台生成 Shim，因此 PowerShell、cmd、bash 与 zsh 中都统一使用 `friday`。
 
 两种安装方式的环境要求、配置、升级与卸载步骤见[中文安装文档](docs/install.zh-CN.md)。
 
@@ -51,16 +72,16 @@ uv tool install -e . --force --reinstall
 - Prefix 友好的上下文：稳定 Runtime 规则位于前部，用户、项目、Skill 和召回记忆按需渐进披露。
 - 多级上下文压缩：先探测无损工具结果简化，必要时再进行结构化对话压缩，并在预算内最多保留最近十个完整用户 Turn。
 - 分层记忆与进度：稳定用户事实、项目知识、情景召回和可恢复任务进度彼此独立。
-- 渐进式 Skill：先返回元数据和路径，只读取被选中的 `SKILL.md` 及其引用资源。
+- 渐进式 Skill：先用精简元数据路由，只读取被选中的 `SKILL.md` 及其引用资源。
 - 长程任务控制：显式目标、计划、下一步、验证状态、语义停止条件和 Session 恢复共同防止任务迷失。
-- Turn 级检查点：`friday undo` 与桌面端消息回退可同时恢复工作区文件、对话和任务进度，不改动项目自身的 Git 历史。
+- Turn 级检查点：桌面端消息回退可同时恢复工作区文件、对话和任务进度，不改动项目自身的 Git 历史。
 - 工具生命周期 Hook：执行前由代码完成权限预检，执行后用三轮滑动窗口识别工具名与参数完全相同的无进展循环；参数变化的正常重试不会被误拦截。
 - 程序级权限：硬拒绝命令与显式 deny 规则在执行前停止；灰区命令可交给用户或独立意图审查器判断。
 - 基于 Checkpoint 的交付物：真实被当前 Turn 修改的文件会附在回复中，安全的文档和图片格式可直接预览。
 - Prompt Injection 边界：主 Agent 与辅助模型调用都保护私有控制上下文，并把检索内容视作不可信数据。
 - 有预算的联网检索：只为缺失证据继续搜索，并区分检索事实与模型推断。
 - 精确统计与 Trace：记录 Provider Usage、模型调用、工具过程、压缩、验证和结果，支持检查与分析。
-- Runtime 兼容性：固定经过验证的 [`friday-agent-core`](https://pypi.org/project/friday-agent-core/) 版本，并在执行前检查安装环境。
+- 评测契约：`friday run` 提供无交互沙箱执行，并输出 ATIF-v1.7 轨迹，可接入 Harbor、Terminal-Bench 和其他 Harness。
 
 ## 架构
 
@@ -68,15 +89,16 @@ uv tool install -e . --force --reinstall
 flowchart TD
     User["用户"] --> Surface["Friday Desktop / CLI / TUI"]
     Surface --> Harness["Friday Harness"]
+    Harness --> Core["TypeScript Agent Core"]
 
-    Harness --> AgentLoop["Agent Loop<br/>模型 -> 工具 -> 模型 -> 回答"]
+    Core --> AgentLoop["Agent Loop<br/>模型 -> 工具 -> 模型 -> 回答"]
     AgentLoop --> OuterLoop["Verify / Goal Loop<br/>检查交付物 -> 反馈 -> 重试"]
     OuterLoop --> AgentLoop
 
     Prefix["Prefix Caching<br/>稳定规则位于动态状态之前"] --> AgentLoop
     Context["Context Engineering<br/>预算 -> 工具压缩 -> 对话压缩"] --> AgentLoop
     Memory["Memory Management<br/>常驻事实 + 情景召回 + 任务进度"] --> AgentLoop
-    Skills["Progressive Skills<br/>CLI 索引 -> 选中资源"] --> AgentLoop
+    Skills["Progressive Skills<br/>元数据索引 -> 选中资源"] --> AgentLoop
     Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan"] --> AgentLoop
 ```
 
@@ -93,16 +115,18 @@ flowchart TD
 - [记忆](docs/memory.md)
 - [Skills](docs/skills.md)
 - [验证](docs/verification.md)
-- [手机接入（飞书）](docs/im-feishu.md)
+- [评测](docs/evaluation.md)
 - [可观测性](docs/observability.md)
 - [检查点与撤回](docs/checkpoints.md)
 
 ## 验证
 
 ```powershell
-uv run python -m unittest discover -s tests
-uv run python -m compileall src tests
-npm --prefix ui-tui run typecheck
+npm ci
+npm run check
+npm test
+npm ci --prefix ui-desktop
+npm run build --prefix ui-desktop
 ```
 
 ## 开源协议

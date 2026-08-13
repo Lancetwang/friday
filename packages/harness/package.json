@@ -1,0 +1,23 @@
+{
+  "name": "friday-agent-harness",
+  "version": "0.2.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "friday-gateway": "dist/gateway.js"
+  },
+  "exports": {
+    "./gateway": "./dist/gateway.js"
+  },
+  "scripts": {
+    "build": "node scripts/sync-prompts.mjs --check && tsc -p tsconfig.json",
+    "check": "node scripts/sync-prompts.mjs --check && tsc --noEmit -p tsconfig.json",
+    "gateway": "node dist/gateway.js",
+    "prompts": "node scripts/sync-prompts.mjs",
+    "test": "npm run build && node --test dist/*.test.js"
+  },
+  "dependencies": {
+    "friday-agent-core": "0.2.0-alpha.0",
+    "ignore": "7.0.6"
+  }
+}

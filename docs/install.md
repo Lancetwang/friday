@@ -2,133 +2,99 @@
 
 [中文](install.zh-CN.md)
 
-Friday can be installed as a packaged Windows or macOS app, or from source. The desktop app is the shortest path for normal use; the source installation provides the global `friday` CLI and TUI on Windows, macOS, and Linux.
+Friday ships as a standalone desktop app and as an npm-installed TUI. The
+desktop app is the shortest path for normal use.
 
 ## Desktop App (Recommended)
 
-### Requirements
+Download the artifact for your platform from the
+[TypeScript workflow](https://github.com/Lancetwang/friday/actions/workflows/typescript.yml),
+or from GitHub Releases after the migration is promoted:
 
-- 64-bit Windows 10/11, or macOS 11 or newer
-- A model provider API key
+- Windows x64: NSIS `.exe`
+- macOS Apple Silicon: `.dmg`
+- Linux x64: `.AppImage`
 
-Git, Python, Node.js, Rust, and a separate `friday-agent-core` installation are not required. The installer contains the desktop client and its Python sidecar.
+The app contains its own TypeScript sidecar. Git, Python, Node.js, Bun, and Rust
+are not required. Open **Settings > Models** after launch and configure at least
+one model API key.
 
-### Install
+Windows development builds are not code-signed; macOS builds use an ad-hoc
+signature and are not notarized. If macOS blocks the first launch, use **System
+Settings > Privacy & Security > Open Anyway**.
 
-1. Open [GitHub Releases](https://github.com/Lancetwang/friday/releases).
-2. Download the latest release asset: `Friday_<version>_x64-setup.exe` for Windows, `Friday_<version>_arm64.dmg` for Apple Silicon, or `Friday_<version>_x64.dmg` for an Intel Mac.
-3. Run the Windows installer, or open the DMG and move Friday to Applications.
-4. Open **Settings > Models**, expand a provider, enter its API key, and select **Save and use**.
+An upgrade can be installed over the existing version. Sessions, model profiles,
+memory, and settings remain under `~/.friday/`. Uninstalling the application
+does not remove that data directory.
 
-The Windows installer is not code-signed; macOS builds use an ad-hoc signature and are not notarized. If macOS blocks the first launch, open **System Settings > Privacy & Security** and choose **Open Anyway**.
+## Install the TUI with npm
 
-Web search is optional. Configure Tavily or AnySearch under **Settings > Web Search**. Your preferred name and Friday response language live under **Settings > General**; the desktop display language is a separate setting.
+Node.js 22 or newer is required.
 
-### Upgrade
-
-Download the newer installer from GitHub Releases and run it over the existing installation. Sessions, projects, model profiles, memory, and settings remain under `~/.friday/`.
-
-### Uninstall
-
-Remove Friday from **Windows Settings > Apps > Installed apps**, or remove `Friday.app` from the macOS Applications folder. Uninstalling the application does not delete `~/.friday/`; remove that directory separately only when its sessions, memory, and configuration are no longer needed.
-
-## Install From Source
-
-### Requirements
-
-- Git
-- Python 3.12 or newer
-- [uv](https://docs.astral.sh/uv/)
-- Node.js 20 or newer with npm
-
-Verify them before installing:
-
-```powershell
-git --version
-uv --version
-python --version
-node --version
-npm --version
+```bash
+npm install --global friday-agent
+friday
 ```
 
-### Clone And Install The CLI/TUI
+npm creates the appropriate executable shim, so the command is `friday` in
+PowerShell, cmd, bash, and zsh. The package includes Core, Harness, and TUI.
+
+The npm package will be published with the promoted release. While reviewing the
+migration branch, install the same package directly from GitHub:
+
+```bash
+npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+friday --version
+```
+
+To upgrade or uninstall:
+
+```bash
+npm install --global friday-agent@latest
+npm uninstall --global friday-agent
+```
+
+## Install only Agent Core
+
+Applications embedding just the model/tool loop should use the small public core
+package, not Friday's internal Harness:
+
+```bash
+npm install friday-agent-core
+```
+
+## Develop from source
+
+Source development requires Git and Node.js 22 or newer:
 
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
 cd friday
-npm --prefix ui-tui ci
-npm --prefix ui-tui run build
-uv tool install -e . --force --reinstall
-```
-
-`uv tool install` creates an isolated Python environment and installs the exact `friday-agent-core` version pinned by the checkout. The editable install keeps the global `friday` command connected to the cloned Python and TUI source, so the checkout must remain on disk.
-
-On macOS and Linux the checkout also ships a POSIX launcher that matches `friday.cmd` on Windows — run `./friday` inside the checkout to start the TUI with the launching directory as the workspace, no install needed:
-
-```bash
-cd path\to\friday
-./friday
-./friday ask "summarize this project"
-```
-
-If `friday` is not found, run `uv tool update-shell`, reopen the terminal, and try `friday --help`.
-
-### Configure The Source Installation
-
-Start `friday`, then use `/login` to configure a model provider and `/search` to configure Tavily or AnySearch. The same credentials can be managed in the desktop **Settings** screen. Friday stores them privately under `~/.friday/`; it does not read `.env` files.
-
-For headless runs, explicit process environment variables such as `DEEPSEEK_API_KEY`, `TAVILY_API_KEY`, and `ANYSEARCH_API_KEY` remain supported. Copy `config.example.json` to `~/.friday/config.json` only when you need to override token limits or other model defaults.
-
-See [Model Configuration](model-configuration.md) for provider profiles, token limits, configuration precedence, and desktop-managed credentials.
-
-### Verify The Source Installation
-
-Run these from a directory other than the Friday checkout:
-
-```powershell
-friday --help
-friday doctor
-friday ask "Reply with OK and do not use tools"
+git switch codex/typescript-rewrite
+npm ci
+npm test
+npm link
 friday
 ```
 
-`friday doctor` checks the local runtime, model credentials, writable paths, and TUI assets without calling the model. The next command verifies the model connection, and the final command starts the TUI with the current directory as its workspace.
+Run a single non-interactive turn with `friday ask "Reply with OK"`; evaluation
+sandboxes should use `friday run`. See [Evaluations](evaluation.md).
 
-### Run The Desktop App From Source
-
-Desktop development additionally requires the stable Rust toolchain. Windows needs Microsoft C++ Build Tools; macOS needs Xcode Command Line Tools. From the repository root:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ui-desktop\scripts\start-dev.ps1
-```
-
-The incremental launcher installs desktop npm dependencies when needed, builds missing native pieces, starts Vite, and opens the debug application.
-
-On macOS:
-
-```bash
-npm --prefix ui-desktop ci
-npm --prefix ui-desktop run desktop
-```
-
-### Upgrade The Source Installation
-
-Friday pins a tested `friday-agent-core` version. Update Friday and its compatible runtime together:
+Desktop development additionally needs the stable Rust toolchain and platform
+build tools. From the repository root:
 
 ```powershell
-cd path\to\friday
-git pull --ff-only
-npm --prefix ui-tui ci
-npm --prefix ui-tui run build
-uv tool install -e . --force --reinstall
+npm ci --prefix ui-desktop
+npm run desktop:ts
 ```
 
-Friday checks the installed runtime version against its pin at startup and reports the reinstall command when the source checkout and tool environment differ.
-
-### Uninstall The Source Installation
+Build the current platform's standalone desktop package with:
 
 ```powershell
-uv tool uninstall friday-agent
+npm run bundle:desktop:ts
 ```
 
-The source checkout can then be removed. User data under `~/.friday/` remains until deleted explicitly.
+Model profiles and credentials are configured in the TUI or desktop UI and are
+stored under `~/.friday/`. Explicit process variables such as `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `TAVILY_API_KEY`, and
+`ANYSEARCH_API_KEY` are also supported for headless runs.

@@ -1,0 +1,106 @@
+name: TypeScript migration
+
+on:
+  pull_request:
+  push:
+    branches: [codex/typescript-rewrite]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typescript-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: npm ci
+      - run: npm test
+      - run: npm ci --prefix ui-desktop
+      - run: npm run test:math --prefix ui-desktop
+      - run: npm run test:sources --prefix ui-desktop
+      - run: npm run build --prefix ui-desktop
+      - run: cargo check --manifest-path ui-desktop/src-tauri/Cargo.toml
+      - run: cargo check --manifest-path ui-desktop/src-tauri/Cargo.toml --features typescript-sidecar
+      - run: npm run sidecar:ts
+      - run: npm run smoke:sidecar:ts
+
+  npm-packages:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run pack:release
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Friday-npm-packages
+          path: artifacts/npm/*.tgz
+          if-no-files-found: error
+
+  desktop-installers:
+    if: github.event_name != 'pull_request'
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            artifact: Friday-Windows-x64
+            bundle: nsis
+            output: ui-desktop/src-tauri/target/release/bundle/nsis/*.exe
+          - runner: macos-15
+            artifact: Friday-macOS-arm64
+            bundle: dmg
+            output: ui-desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          - runner: ubuntu-24.04
+            artifact: Friday-Linux-x64
+            bundle: appimage
+            output: ui-desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui-desktop/package-lock.json
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - run: npm ci --prefix ui-desktop
+      - run: npm run sidecar:ts
+      - run: npm run tauri --prefix ui-desktop -- build --features typescript-sidecar --config src-tauri/tauri.typescript.conf.json --bundles ${{ matrix.bundle }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.output }}
+          if-no-files-found: error

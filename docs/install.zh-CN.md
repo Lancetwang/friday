@@ -2,133 +2,91 @@
 
 [English](install.md)
 
-Friday 支持两种安装方式：普通用户推荐安装 Windows 或 macOS 桌面端；从源码安装则在 Windows、macOS 和 Linux 上提供全局 `friday` CLI 与 TUI。
+Friday 同时提供独立桌面安装包和通过 npm 安装的 TUI。普通用户优先使用桌面端。
 
 ## 桌面端（推荐）
 
-### 环境要求
+从 [TypeScript 工作流](https://github.com/Lancetwang/friday/actions/workflows/typescript.yml)
+下载当前平台的构建产物；迁移正式发布后也会进入 GitHub Releases：
 
-- 64 位 Windows 10/11，或 macOS 11 及以上版本
-- 至少一个模型供应商的 API Key
+- Windows x64：NSIS `.exe`
+- macOS Apple Silicon：`.dmg`
+- Linux x64：`.AppImage`
 
-安装包已包含桌面客户端与 Python Sidecar，不要求用户额外安装 Git、Python、Node.js、Rust 或 `friday-agent-core`。
+桌面应用自带独立 TypeScript Sidecar，不要求安装 Git、Python、Node.js、Bun 或
+Rust。启动后在**设置 > 模型**中配置至少一个模型 API Key。
 
-### 安装步骤
+Windows 开发构建尚未代码签名；macOS 使用 ad-hoc 签名且尚未公证。如果首次启动
+被 macOS 拦截，请到**系统设置 > 隐私与安全性 > 仍要打开**。
 
-1. 打开 [GitHub Releases](https://github.com/Lancetwang/friday/releases)。
-2. Windows 下载 `Friday_<version>_x64-setup.exe`；Apple Silicon Mac 下载 `Friday_<version>_arm64.dmg`；Intel Mac 下载 `Friday_<version>_x64.dmg`。
-3. Windows 运行安装程序；macOS 打开 DMG，将 Friday 拖入“应用程序”。
-4. 打开**设置 > 模型**，展开一个供应商，填写 API Key，然后选择**保存并使用**。
+新版可以直接覆盖安装。会话、模型配置、记忆和设置保存在 `~/.friday/`；卸载应用
+不会自动删除该目录。
 
-Windows 安装包尚未进行代码签名；macOS 版本使用 ad-hoc 签名，尚未公证。如果 macOS 阻止首次启动，请打开**系统设置 > 隐私与安全性**并选择**仍要打开**。
+## 通过 npm 安装 TUI
 
-联网搜索是可选能力，可以在**设置 > 联网搜索**中配置 Tavily 或 AnySearch。称呼和 Friday 的回复语言位于**设置 > 通用**，与桌面界面的展示语言彼此独立。
+要求 Node.js 22 或更高版本。
 
-### 升级
-
-从 GitHub Releases 下载新版安装包并直接运行即可覆盖升级。项目、会话、模型配置、记忆与设置都保存在 `~/.friday/`，不会因升级丢失。
-
-### 卸载
-
-Windows 可在**设置 > 应用 > 已安装的应用**中卸载 Friday；macOS 可从“应用程序”中移除 `Friday.app`。卸载不会删除 `~/.friday/`；只有确认不再需要会话、记忆和配置时，才手动删除该目录。
-
-## 从源码安装
-
-### 环境要求
-
-- Git
-- Python 3.12 或更高版本
-- [uv](https://docs.astral.sh/uv/)
-- Node.js 20 或更高版本及 npm
-
-安装前可以先检查：
-
-```powershell
-git --version
-uv --version
-python --version
-node --version
-npm --version
+```bash
+npm install --global friday-agent
+friday
 ```
 
-### 安装 CLI 与 TUI
+npm 会生成对应平台的可执行 Shim，因此 PowerShell、cmd、bash 与 zsh 中都使用同一个
+`friday` 命令。完整包已经包含 Core、Harness 与 TUI。
+
+迁移分支评审期间 npm 包名尚未正式发布，可以直接安装同一份 GitHub 分支：
+
+```bash
+npm install --global github:Lancetwang/friday#codex/typescript-rewrite
+friday --version
+```
+
+升级与卸载：
+
+```bash
+npm install --global friday-agent@latest
+npm uninstall --global friday-agent
+```
+
+## 只安装 Agent Core
+
+只需要嵌入模型/工具循环的 TypeScript 项目应安装公开 Core，不需要依赖 Friday 内部
+Harness：
+
+```bash
+npm install friday-agent-core
+```
+
+## 从源码开发
+
+源码开发要求 Git 与 Node.js 22 或更高版本：
 
 ```powershell
 git clone https://github.com/Lancetwang/friday.git
 cd friday
-npm --prefix ui-tui ci
-npm --prefix ui-tui run build
-uv tool install -e . --force --reinstall
-```
-
-`uv tool install` 会创建隔离的 Python 环境，并安装当前 Friday 固定且验证过的 `friday-agent-core` 版本。可编辑安装会让全局 `friday` 命令继续引用该源码目录，因此不要在安装后删除仓库。
-
-macOS 和 Linux 的源码仓库还包含与 Windows `friday.cmd` 对应的 POSIX 启动器。在仓库内运行 `./friday` 即可启动 TUI；它会保留启动命令时所在的目录作为工作区：
-
-```bash
-cd path/to/friday
-./friday
-./friday ask "总结这个项目"
-```
-
-如果终端找不到 `friday`，运行 `uv tool update-shell`，重新打开终端后再执行 `friday --help`。
-
-### 配置源码安装
-
-启动 `friday` 后，使用 `/login` 配置模型供应商，使用 `/search` 配置 Tavily 或 AnySearch；桌面端 **设置** 页面管理的是同一份凭据。Friday 将密钥私密保存在 `~/.friday/`，不再读取 `.env` 文件。
-
-无界面运行时仍可显式设置 `DEEPSEEK_API_KEY`、`TAVILY_API_KEY`、`ANYSEARCH_API_KEY` 等进程环境变量。只有需要修改 Token 限制或其他模型默认值时，才需要把 `config.example.json` 复制为 `~/.friday/config.json`。
-
-供应商配置、Token 限制、配置优先级和桌面端密钥存储方式见[模型配置](model-configuration.md)。
-
-### 验证源码安装
-
-在 Friday 仓库之外的目录运行：
-
-```powershell
-friday --help
-friday doctor
-friday ask "Reply with OK and do not use tools"
+git switch codex/typescript-rewrite
+npm ci
+npm test
+npm link
 friday
 ```
 
-`friday doctor` 会在不调用模型的情况下检查本地 Runtime、模型凭据、目录写入权限和 TUI 资源；下一个命令验证模型连接，最后一个命令以当前目录为工作区启动 TUI。
+`friday ask "Reply with OK"` 可以执行单次无交互任务；评测沙箱应使用
+`friday run`，详见[评测文档](evaluation.md)。
 
-### 从源码运行桌面端
-
-桌面端开发还需要稳定版 Rust 工具链。Windows 需要 Microsoft C++ Build Tools，macOS 需要 Xcode Command Line Tools。在仓库根目录运行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ui-desktop\scripts\start-dev.ps1
-```
-
-增量启动脚本会按需安装桌面端 npm 依赖、构建缺失的原生组件、启动 Vite 并打开调试应用。
-
-macOS 下运行：
-
-```bash
-npm --prefix ui-desktop ci
-npm --prefix ui-desktop run desktop
-```
-
-### 升级源码安装
-
-Friday 会固定一个兼容性经过验证的 `friday-agent-core` 版本。请一起更新 Friday 与对应 Runtime：
+桌面端源码开发还需要稳定版 Rust 工具链和对应平台编译工具。在仓库根目录运行：
 
 ```powershell
-cd path\to\friday
-git pull --ff-only
-npm --prefix ui-tui ci
-npm --prefix ui-tui run build
-uv tool install -e . --force --reinstall
+npm ci --prefix ui-desktop
+npm run desktop:ts
 ```
 
-启动时 Friday 会检查 Runtime 版本；如果源码与工具环境不一致，会直接给出重新安装命令。
-
-### 卸载源码安装
+构建当前平台的独立桌面安装包：
 
 ```powershell
-uv tool uninstall friday-agent
+npm run bundle:desktop:ts
 ```
 
-之后可以删除源码目录。`~/.friday/` 中的用户数据仍会保留，除非手动删除。
+模型配置和凭据可以在 TUI 或桌面 UI 中管理，保存在 `~/.friday/`。无界面运行也支持
+显式传入 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`DEEPSEEK_API_KEY`、
+`TAVILY_API_KEY` 与 `ANYSEARCH_API_KEY` 等进程环境变量。

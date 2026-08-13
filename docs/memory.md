@@ -21,17 +21,17 @@ Before each model turn, the harness searches episodic Markdown with English term
 
 Memory is evidence from an earlier point in time, not authority over current state. Before acting on a remembered file, function, flag, date, or external resource, Friday checks the current workspace or source and updates or removes stale entries.
 
-The main agent can promote a durable fact into hot memory through Bash and the CLI. No separate memory model, database, or model tool is required:
+The main agent can promote a durable fact through the built-in `Memory` tool. People can inspect or manage the same store from the TUI:
 
-```powershell
-friday memory --help
-friday memory status
-friday memory list user --json
-friday memory search "preferred language" --json
-friday memory add --scope user "Preferred language is Chinese."
-friday memory update <id> "Default response language is Chinese."
-friday memory remove <id>
-friday memory consolidate --days 2
+```text
+/memory help
+/memory status
+/memory list user
+/memory search preferred language
+/memory add user Preferred language is Chinese.
+/memory update <id> Default response language is Chinese.
+/memory remove <id>
+/memory consolidate --days 2
 ```
 
 `consolidate` reads recent episodes and existing permanent memory, makes one non-streaming LLM call, then applies only validated `merge` and `promote` operations. Promotion requires a combined count of at least two. Unknown, unsupported, transient, or single notes remain untouched. Entries are ordinary Markdown bullets; hidden HTML comments carry ids, sources, timestamps, and episode counts. Friday removes those comments from the model prefix.
@@ -40,7 +40,7 @@ friday memory consolidate --days 2
 
 `USER.md`, global memory, and project memory are loaded into a frozen system prefix at session start. A memory change is written to disk immediately but does not rewrite the active system message. The updated hot memory enters context on the next start, resume, or compact rebuild.
 
-The desktop app's **Settings > General** fields manage a marked profile block inside `USER.md` for the user's preferred name and Friday response language. **Settings > Memory** opens the bounded `USER.md` and global `MEMORY.md` files for explicit inspection and editing; project and episodic memory remain available through the CLI.
+The desktop app's **Settings > General** fields manage a marked profile block inside `USER.md` for the user's preferred name and Friday response language. **Settings > Memory** opens the bounded `USER.md` and global `MEMORY.md` files for explicit inspection and editing; project and episodic memory remain available through TUI `/memory`.
 
 `/compact` first gives Friday a chance to persist ordinary memory candidates as episodes, then rebuilds the live context from the fresh prefix, structured summary, the largest recent complete user-turn tail that fits (up to ten turns), and one current progress checkpoint. Only explicitly permanent requests bypass episodes. Compact summaries and temporary task progress are never stored as long-term memory.
 

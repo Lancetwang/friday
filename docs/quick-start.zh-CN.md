@@ -30,15 +30,9 @@ friday
 
 启动目录会成为当前工作区。使用 `/help` 查看交互命令，按 `Ctrl+O` 展开或折叠工具调用详情。
 
-项目初始化是可选的：
+项目指令是可选的；需要记录项目命令或约定时，在项目根目录添加 `AGENTS.md` 即可。Runtime 状态统一保存在 `~/.friday/projects/`，打开项目不会在原目录中创建 `.friday/`。
 
-```powershell
-friday init
-```
-
-该命令会创建 `AGENTS.md`，用于记录项目命令和工作约定。Runtime 状态统一保存在 `~/.friday/projects/`，打开项目不会在原目录中创建 `.friday/`。
-
-## 单次调用与普通终端对话
+## 单次调用与评测运行
 
 不进入 TUI，直接完成一次请求：
 
@@ -46,46 +40,32 @@ friday init
 friday ask "总结这个项目"
 ```
 
-使用纯终端对话：
-
-```powershell
-friday chat
-```
-
-桌面端、CLI 和 TUI 共用相同的 Turn、上下文、记忆、验证、审批、会话和 Trace 实现。
-
-## 常用 CLI 流程
-
-运行带验证的 Goal Loop：
+运行带独立验证的 Goal Loop：
 
 ```powershell
 friday goal "修复失败的测试并验证它通过"
 ```
 
-恢复会话或撤回最近一次执行：
+评测器与隔离沙箱使用无交互命令，并可输出 ATIF 轨迹：
 
 ```powershell
-friday resume --list
-friday resume --session <id>
-friday undo
+friday run --trajectory C:\logs\trajectory.json -- "修复失败的测试"
 ```
 
-查看上下文、Skill 或记忆：
+桌面端、CLI 和 TUI 共用相同的 Turn、上下文、记忆、验证、审批、会话和 Trace 实现。
 
-```powershell
-friday context
-friday compact
-friday skill --json
-friday memory status
-```
+## 交互命令
 
-批准或拒绝危险命令：
+在 TUI 内使用 slash command 管理会话与 Runtime：
 
-```powershell
-friday approve
-friday approve --for-session
-friday reject
-friday reject --message "换一种方式"
+```text
+/resume
+/memory status
+/context
+/compact
+/permission
+/fork
+/backward
 ```
 
 项目状态保存在 `~/.friday/projects/<workspace-id>/`。全局配置、模型凭据、用户档案、记忆、规则和用户 Skill 位于 `~/.friday/`。

@@ -41,7 +41,7 @@ They are Friday application tools, not part of `friday-agent-core`.
 
 `Read`, `Glob`, `Grep`, `WebSearch`, and `WebFetch` are read-only and may run concurrently when one model response requests several of them. `Write`, `Edit`, `Bash`, and `UpdatePlan` remain serial barriers. Agent Core uses at most four worker threads for each parallel batch and returns results in the model's original call order.
 
-Skill discovery and memory management are deliberately not model tools. Friday uses Bash with `friday skill --json` or `friday memory ...`; the harness performs automatic memory capture and recall in code.
+Skill discovery and memory management are first-class Harness tools. `Skill` reads only a selected skill and its referenced resources; `Memory` manages durable facts without spawning another process. The Harness still performs automatic memory capture and recall in code.
 
 ## Web research contract
 

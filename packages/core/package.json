@@ -1,0 +1,22 @@
+{
+  "name": "friday-agent-core",
+  "version": "0.2.0-alpha.0",
+  "description": "Minimal model/tool loop powering Friday agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lancetwang/friday.git",
+    "directory": "packages/core"
+  },
+  "type": "module",
+  "exports": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "!dist/*.test.*"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run build && node --test dist/*.test.js"
+  },
+  "engines": { "node": ">=22" },
+  "publishConfig": { "access": "public" }
+}

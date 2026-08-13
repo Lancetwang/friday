@@ -16,7 +16,7 @@ import {
   type MenuOption,
   type PickerMenu,
 } from './menu.js'
-import type { BridgeStatus, ContextCompaction, GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
+import type { ContextCompaction, GatewayEvent, Message, ProgressState, SessionInfo, VerificationResult } from './types.js'
 
 const theme: Theme = {
   accent: '#4F6CD8',
@@ -123,13 +123,20 @@ export function App({ gateway }: { gateway: GatewayClient }) {
 
   useEffect(() => {
     const onEvent = (event: GatewayEvent) => {
+      const eventSession = sessionId(event)
+      const selectedSession = infoRef.current?.session_id
+      if (eventSession && selectedSession && eventSession !== selectedSession) return
       if (event.type === 'gateway.ready') {
         void gateway.request<SessionInfo>('session.info').then(value => {
+          infoRef.current = value
           setInfo(value)
           setProgress(value.progress ?? null)
+          applyApproval(value)
         })
       } else if (event.type === 'session.info') {
+        infoRef.current = event.payload
         setInfo(event.payload)
+        applyApproval(event.payload)
       } else if (event.type === 'message.delta') {
         setStreaming(text => text + event.payload.text)
         setMessages(items => closeOpenThinking(items, activeTurn.current))
@@ -147,6 +154,11 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setStreaming('')
         setBusy(false)
         setActivity('')
+      } else if (event.type === 'message.suspended') {
+        setProgress(event.payload.progress ?? null)
+        setStreaming('')
+        setBusy(false)
+        setActivity('Waiting for approval.')
       } else if (event.type === 'message.cancelled') {
         const turnId = activeTurn.current
         activeTurn.current = null
@@ -196,7 +208,9 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setBusy(false)
       } else if (event.type === 'approval.resolved') {
         setApprovalPicker(null)
-        setBusy(false)
+        setBusy(Boolean(event.payload.continued))
+      } else if (event.type === 'session.updated' && typeof event.payload.running === 'boolean') {
+        setBusy(event.payload.running)
       } else if (event.type === 'verification.start') {
         setActivity('verifying')
         setMessages(items => updateVerification(items, activeTurn.current, { running: true }))
@@ -326,14 +340,14 @@ export function App({ gateway }: { gateway: GatewayClient }) {
 
   const submit = (value: string) => {
     const text = cleanInput(value)
-    if (!text || busy) {
+    if (!text || (busy && !canNavigateWhileBusy(text))) {
       return
     }
     if (text.startsWith('/')) {
       const head = text.split(/\s+/, 1)[0]!.toLowerCase()
       if (!COMMANDS.some(command => command.name === head) && suggestions.length) {
         const selected = suggestions[Math.min(commandIndex, suggestions.length - 1)]!
-        if (['/goal', '/memory', '/phone', '/trace'].includes(selected.name)) {
+        if (['/goal', '/memory', '/trace'].includes(selected.name)) {
           setInput(`${selected.name} `)
           setCommandIndex(0)
           return
@@ -440,11 +454,20 @@ export function App({ gateway }: { gateway: GatewayClient }) {
 
   function applySession(result: SessionResult) {
     activeTurn.current = null
+    infoRef.current = result.info
     setInfo(result.info)
     setProgress(result.progress ?? result.info.progress ?? null)
     setMessages(historyToMessages(result.history ?? []))
     setStreaming('')
-    setBusy(false)
+    setBusy(Boolean(result.info.running))
+    applyApproval(result.info)
+  }
+
+  function applyApproval(value: SessionInfo) {
+    const approval = value.approval
+    setApprovalPicker(approval?.pending
+      ? { approval, index: approvalIndex('once'), instruction: '' }
+      : null)
   }
 
   function openLoginMenu() {
@@ -674,11 +697,6 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else {
         appendSystem('Usage: /trace on | /trace off')
       }
-    } else if (command === '/phone') {
-      const mode = argument.toLowerCase()
-      const method = mode === '' ? 'bridge.status' : mode === 'on' ? 'bridge.start' : mode === 'off' ? 'bridge.stop' : ''
-      if (!method) appendSystem('Usage: /phone [on | off]')
-      else void gateway.request<BridgeStatus>(method).then(status => appendSystem(formatBridge(status))).catch(requestError)
     } else if (command === '/compact') {
       void gateway.request<{ text: string }>('session.compact').then(result => appendSystem(`Compacted conversation:\n\n${result.text}`)).catch(requestError)
     } else if (command === '/clear') {
@@ -738,6 +756,15 @@ export function App({ gateway }: { gateway: GatewayClient }) {
 
 function cleanInput(value: string) {
   return value.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+}
+
+function canNavigateWhileBusy(value: string) {
+  return /^\/(?:new|resume)$/i.test(value)
+}
+
+function sessionId(event: GatewayEvent) {
+  const value = 'session_id' in event.payload ? event.payload.session_id : undefined
+  return typeof value === 'string' ? value : ''
 }
 
 function goalText(value: string) {
@@ -1270,14 +1297,6 @@ function approvalIndex(decision: ApprovalDecision) {
   return APPROVAL_OPTIONS.findIndex(option => option.id === decision)
 }
 
-function formatBridge(status: BridgeStatus) {
-  if (status.running) {
-    return `Feishu can reach this workspace (pid ${status.pid}). It goes offline when Friday closes.`
-  }
-  const tail = status.log.length ? `\n${status.log[status.log.length - 1]}` : ''
-  return `Feishu cannot reach this workspace. Turn it on with /phone on.${tail}`
-}
-
 function Composer({ busy, input, onChange, onSubmit }: { busy: boolean; input: string; onChange: (value: string) => void; onSubmit: (value: string) => void }) {
   const rule = '─'.repeat(Math.max(20, (process.stdout.columns ?? 80) - 2))
   return (
@@ -1285,7 +1304,7 @@ function Composer({ busy, input, onChange, onSubmit }: { busy: boolean; input: s
       <Text color={theme.dim}>{rule}</Text>
       <Box>
         <Text color={busy ? theme.dim : theme.accent}>{busy ? '…' : '❯'} </Text>
-        <TextInput focus={!busy} onChange={onChange} onSubmit={onSubmit} placeholder="Ask Friday or /help" value={input} />
+        <TextInput focus onChange={onChange} onSubmit={onSubmit} placeholder="Ask Friday or /help" value={input} />
       </Box>
     </Box>
   )

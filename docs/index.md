@@ -16,6 +16,7 @@ Start here:
 - [Memory](memory.md)
 - [Skills](skills.md)
 - [Verification](verification.md)
-- [Phone Bridge](im-feishu.md)
+- [Evaluations](evaluation.md)
 - [Observability](observability.md)
 - [Checkpoints](checkpoints.md)
+- [TypeScript Migration](typescript-migration.md)

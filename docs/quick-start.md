@@ -30,15 +30,9 @@ friday
 
 The launch directory becomes the workspace. Use `/help` for interactive commands and `Ctrl+O` to expand or collapse tool details.
 
-Project initialization is optional:
+Project instructions are optional. Add an `AGENTS.md` to the project root when you want to record commands or rules. Runtime state stays under `~/.friday/projects/`; opening a project does not create a `.friday/` directory inside it.
 
-```powershell
-friday init
-```
-
-It creates `AGENTS.md`, where project commands and rules can be recorded. Runtime state stays under `~/.friday/projects/`; opening a project does not create a `.friday/` directory inside it.
-
-## One-Shot And Plain Chat
+## One-Shot And Evaluation Runs
 
 Ask once without opening the TUI:
 
@@ -46,46 +40,32 @@ Ask once without opening the TUI:
 friday ask "summarize this project"
 ```
 
-Use the plain terminal chat instead of the TUI:
-
-```powershell
-friday chat
-```
-
-The desktop app, CLI, and TUI share the same turn, context, memory, verification, approval, session, and trace implementation.
-
-## Common CLI Workflows
-
 Run a verified goal loop:
 
 ```powershell
 friday goal "fix the failing test and verify it passes"
 ```
 
-Resume or undo work:
+Evaluators and isolated sandboxes use the headless command. It can write an ATIF trajectory:
 
 ```powershell
-friday resume --list
-friday resume --session <id>
-friday undo
+friday run --trajectory C:\logs\trajectory.json -- "fix the failing tests"
 ```
 
-Inspect context, skills, or memory:
+The desktop app, CLI, and TUI share the same turn, context, memory, verification, approval, session, and trace implementation.
 
-```powershell
-friday context
-friday compact
-friday skill --json
-friday memory status
-```
+## Interactive Commands
 
-Approve or reject a pending dangerous command:
+Inside the TUI, use slash commands for session and runtime operations:
 
-```powershell
-friday approve
-friday approve --for-session
-friday reject
-friday reject --message "use another approach"
+```text
+/resume
+/memory status
+/context
+/compact
+/permission
+/fork
+/backward
 ```
 
 Project state is stored under `~/.friday/projects/<workspace-id>/`. Global configuration, model credentials, user profile, memory, rules, and user skills live directly under `~/.friday/`.

@@ -1,21 +1,25 @@
+type SessionScoped = { session_id?: string }
+
 export type GatewayEvent =
   | { type: 'gateway.ready'; payload: { cwd: string } }
   | { type: 'session.info'; payload: SessionInfo }
-  | { type: 'message.start'; payload: { text: string } }
-  | { type: 'message.delta'; payload: { text: string } }
-  | { type: 'message.complete'; payload: { metrics?: MessageMetrics; progress?: ProgressState; status?: string; text: string } }
-  | { type: 'message.cancelled'; payload: Record<string, never> }
-  | { type: 'reasoning.delta'; payload: { id: string; text: string } }
-  | { type: 'reasoning.complete'; payload: { error?: boolean; id: string } }
-  | { type: 'tool.start'; payload: { tool_call_id: string; name: string; arguments?: unknown } }
-  | { type: 'tool.update'; payload: { tool_call_id: string; name: string; content?: string } }
-  | { type: 'tool.complete'; payload: { tool_call_id: string; name: string; error?: boolean; content?: string; elapsed_ms?: number } }
-  | { type: 'approval.pending'; payload: { command?: string; reason?: string } }
-  | { type: 'approval.resolved'; payload: { decision: string; continued?: boolean } }
-  | { type: 'verification.start'; payload: Record<string, never> }
-  | { type: 'verification.complete'; payload: VerificationResult }
-  | { type: 'progress.update'; payload: ProgressState }
-  | { type: 'context.compacted'; payload: ContextCompaction }
+  | { type: 'message.start'; payload: { text: string } & SessionScoped }
+  | { type: 'message.delta'; payload: { text: string } & SessionScoped }
+  | { type: 'message.complete'; payload: { metrics?: MessageMetrics; progress?: ProgressState; status?: string; text: string } & SessionScoped }
+  | { type: 'message.suspended'; payload: { metrics?: MessageMetrics; progress?: ProgressState; status?: string; text: string } & SessionScoped }
+  | { type: 'message.cancelled'; payload: SessionScoped }
+  | { type: 'session.updated'; payload: { running?: boolean } & SessionScoped }
+  | { type: 'reasoning.delta'; payload: { id: string; text: string } & SessionScoped }
+  | { type: 'reasoning.complete'; payload: { elapsed_ms?: number; error?: boolean; id: string } & SessionScoped }
+  | { type: 'tool.start'; payload: { tool_call_id: string; name: string; arguments?: unknown } & SessionScoped }
+  | { type: 'tool.update'; payload: { tool_call_id: string; name: string; content?: string } & SessionScoped }
+  | { type: 'tool.complete'; payload: { tool_call_id: string; name: string; error?: boolean; content?: string; elapsed_ms?: number } & SessionScoped }
+  | { type: 'approval.pending'; payload: { command?: string; reason?: string } & SessionScoped }
+  | { type: 'approval.resolved'; payload: { decision: string; continued?: boolean } & SessionScoped }
+  | { type: 'verification.start'; payload: SessionScoped }
+  | { type: 'verification.complete'; payload: VerificationResult & SessionScoped }
+  | { type: 'progress.update'; payload: ProgressState & SessionScoped }
+  | { type: 'context.compacted'; payload: ContextCompaction & SessionScoped }
   | { type: 'gateway.stderr'; payload: { line: string } }
   | { type: 'gateway.protocol_error'; payload: { preview: string } }
 
@@ -35,6 +39,14 @@ export interface ContextCompaction {
 }
 
 export interface SessionInfo {
+  approval?: {
+    command?: string
+    id?: string
+    message?: string
+    pending?: boolean
+    reason?: string
+    timeout_seconds?: number
+  }
   cwd: string
   model: string
   model_configured?: boolean
@@ -59,14 +71,6 @@ export interface ProgressState {
   status?: 'blocked' | 'done' | 'waiting' | 'working'
   steps?: Array<{ status: 'blocked' | 'completed' | 'in_progress' | 'pending'; step: string }>
   updated?: string
-}
-
-export interface BridgeStatus {
-  exit_code: number | null
-  log: string[]
-  pid: number | null
-  running: boolean
-  workspace: string
 }
 
 export interface Message {
