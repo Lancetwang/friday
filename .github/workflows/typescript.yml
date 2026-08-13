@@ -192,14 +192,6 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - name: Configure npm token fallback
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        shell: bash
-        run: |
-          if [[ -n "$NPM_TOKEN" ]]; then
-            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN" --location=user
-          fi
       - name: Publish tested packages
         shell: bash
         run: |

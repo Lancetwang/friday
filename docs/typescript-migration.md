@@ -88,11 +88,11 @@ See [Evaluations](evaluation.md) for Terminal-Bench 2.1.
 - Linux x64 Debian package
 - `friday-agent` and `friday-agent-core` npm tarballs
 
-npm publishing uses the same tested tarballs and runs only after the GitHub
-Release succeeds. It is gated by the repository variable
-`NPM_PUBLISH_ENABLED=true`: the first publish must authenticate the npm owner
-with an `NPM_TOKEN`; after both package names exist, they can use npm trusted
-publishing for `typescript.yml` and the token can be removed.
+npm publishing uses the same tested tarballs. Tag builds publish only after the
+GitHub Release succeeds; an explicit `publish_npm` workflow dispatch is the
+recovery path for an already-tested version. Publishing is gated by the
+repository variable `NPM_PUBLISH_ENABLED=true` and authenticates through npm
+Trusted Publishing for `typescript.yml`; the repository stores no npm token.
 
 ## Deliberate scope
 
