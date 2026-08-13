@@ -1,135 +1,185 @@
 # Friday
 
 <p align="center">
-  <img src=".github/friday-social-preview.png" alt="Friday - Local General-Purpose Agent" width="100%">
+  <img src=".github/friday-social-preview.png" alt="Friday — a local-first general-purpose agent" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/github/v/release/Lancetwang/friday?sort=semver&style=flat-square&label=release" alt="GitHub release"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22+"></a>
-  <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/package%20manager-npm-CB3837?style=flat-square&logo=npm&logoColor=white" alt="npm"></a>
-  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64"></a>
-  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-macOS%20ARM-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon"></a>
-  <a href="docs/install.md"><img src="https://img.shields.io/badge/platform-Linux%20Desktop%20%7C%20TUI-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux desktop and TUI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
+  A local-first agent for real work, available as a desktop app, terminal UI, and headless evaluation runtime.
 </p>
 
-<p align="center"><a href="README.zh-CN.md">中文说明</a></p>
+<p align="center">
+  <a href="https://github.com/Lancetwang/friday/actions/workflows/typescript.yml"><img src="https://img.shields.io/github/actions/workflow/status/Lancetwang/friday/typescript.yml?branch=main&style=flat-square&label=build" alt="Build status"></a>
+  <a href="https://www.npmjs.com/package/friday-agent"><img src="https://img.shields.io/npm/v/friday-agent?style=flat-square&label=npm" alt="npm version"></a>
+  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/github/v/release/Lancetwang/friday?sort=semver&style=flat-square&label=release" alt="GitHub release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Lancetwang/friday?style=flat-square" alt="MIT License"></a>
+</p>
 
-Friday is a local general-purpose agent available as a Windows, macOS, and Linux desktop app, plus a cross-platform TUI. It can work with files, execute commands, search the web, retain useful context, and carry tasks through verification.
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="docs/quick-start.md">Quick start</a> ·
+  <a href="docs/index.md">Documentation</a> ·
+  <a href="https://github.com/Lancetwang/friday/releases">Downloads</a>
+</p>
 
-The TypeScript monorepo contains a small reusable agent core and the Friday Harness. The Harness owns prompts, context compaction, memory, skills, permissions, verification and goal loops, sessions, traces, and UI behavior. [Architecture](docs/architecture.md) describes the boundary.
+Friday works inside a local workspace: it reads and edits files, runs commands, searches the web, and carries a task through validation. Conversations, project state, credentials, memory, checkpoints, and traces remain on your machine under `~/.friday/`.
+
+The project is a TypeScript monorepo with one runtime shared by every surface. The desktop app and TUI are clients of the same Harness; headless evaluations invoke that same path rather than a reduced benchmark-only agent.
+
+Local-first does not mean offline: model requests and enabled web tools send the content needed for a task to the providers you configure. Friday does not operate a hosted account or synchronization backend.
+
+## Why Friday
+
+- **One agent across desktop and terminal.** Use a native desktop app for daily work, a keyboard-first TUI in any shell, or `friday run` in an isolated evaluator.
+- **Long tasks have structure.** Persistent sessions, explicit plans, resumable progress, context compaction, and an independent verification loop keep work moving without hiding the state transition.
+- **Local state is inspectable.** Project data is stored outside the project tree, credentials are separated from sessions and traces, and the UI exposes tool activity, usage, compaction, and verification evidence.
+- **Execution has enforceable boundaries.** Workspace containment, hard command denials, configurable approvals, secret redaction, and read-only verifier tools are implemented in code rather than left to prompting alone.
+- **The core is reusable.** [`friday-agent-core`](https://www.npmjs.com/package/friday-agent-core) is a small public model/tool loop with no Friday UI, persistence, memory, or product dependencies.
 
 ## Install
 
-### Desktop App (Recommended)
+Choose the surface that fits your workflow:
 
-Download the Windows x64 NSIS installer, macOS Apple Silicon DMG, or Linux x64 Debian package from [GitHub Releases](https://github.com/Lancetwang/friday/releases). The packaged app contains a standalone TypeScript sidecar; Git, Python, Node.js, Bun, and Rust are not required.
+| Surface | Install | Start | Requirements |
+| --- | --- | --- | --- |
+| Desktop | Download from [GitHub Releases](https://github.com/Lancetwang/friday/releases) | Launch Friday | Windows x64, macOS Apple Silicon, or Debian/Ubuntu x64 |
+| TUI + CLI | `npm install --global friday-agent` | `friday` | Node.js 22 or newer |
+| Agent Core | `npm install friday-agent-core` | Import from TypeScript/JavaScript | Node.js 22 or newer |
 
-Launch Friday, open **Settings > Models**, and configure at least one provider API key. Web search keys and user preferences can be configured from the same Settings page.
+Desktop installers contain the complete runtime. End users do not need Git, Python, Node.js, Bun, or Rust.
 
-### npm
+After launch, configure a provider in **Settings → Models** or with `/login` in the TUI. Friday supports OpenAI, Anthropic, DeepSeek, Xiaomi MiMo, OpenCode Go, and custom OpenAI-compatible endpoints.
 
-Install the complete Core + Harness + TUI package globally:
+See the [installation guide](docs/install.md) for platform notes, upgrades, source installation, and uninstall instructions.
+
+## Quick start
+
+Open a project directory in the desktop app, or start Friday from that directory:
 
 ```bash
-npm install --global friday-agent
+cd path/to/your-project
 friday
 ```
 
-Install only the reusable core in another TypeScript project:
+Then ask for an outcome, for example:
+
+```text
+Find the cause of the failing tests, fix it, and verify the result.
+```
+
+Run one non-interactive turn without opening the TUI:
 
 ```bash
-npm install friday-agent-core
+friday ask "Summarize this repository and explain how to test it."
 ```
 
-If a prerelease has not reached the npm registry yet, download its
-`friday-agent` tarball from the same GitHub Release and install that exact build:
+Run a task with independent goal verification:
 
 ```bash
-npm install --global ./friday-agent-0.2.1.tgz
-friday
+friday goal "Fix the failing tests and verify the result."
 ```
 
-### From Source
+Use the headless evaluation contract only inside an isolated environment:
 
-```powershell
-git clone https://github.com/Lancetwang/friday.git
-cd friday
-npm ci
-npm link
-friday
+```bash
+friday run --cwd /workspace --json --trajectory /logs/trajectory.json -- "Complete the task"
 ```
 
-Node.js 22 or newer is required for npm and source installs. npm creates the
-platform shim, so `friday` is the command in PowerShell, cmd, bash, and zsh.
+`friday run` defaults to bypassing interactive approval while retaining hard denials. See [CLI commands](docs/cli.md) and [evaluations](docs/evaluation.md) for the complete contract.
 
-See [Install](docs/install.md) for both installation paths, prerequisites, configuration, upgrades, and uninstall steps.
+## What it provides
 
-## Features
+### Task execution
 
-- General-purpose execution: work with local files and commands, search the web, and continue ordinary tasks through delivery and validation.
-- Two-layer loop: the agent loop handles model-tool interaction; the independent Verify / Goal loop checks deliverables and drives evidence-based repair.
-- Prefix-aware context: stable runtime rules lead the prompt, while user, project, Skill, and recalled memory layers are disclosed only when needed.
-- Multi-stage compaction: lossless tool-result simplification is probed first; structured conversation compaction keeps the largest complete recent tail that fits, up to ten user turns.
-- Layered memory and progress: stable user facts, project knowledge, episodic recall, and resumable task progress remain separate.
-- Progressive Skills: Friday routes on compact metadata first, then reads only the selected `SKILL.md` and referenced resources.
-- Long-running task control: explicit objectives, plans, next actions, verifier state, semantic stop conditions, and session resume keep work on track.
-- Turn checkpoints: desktop message restore recovers workspace files, conversation, and progress without touching the project's Git history.
-- Tool lifecycle hooks: code-level permission preflight runs before execution, while a three-round sliding no-progress guard catches identical tool calls without constraining legitimate retries with changed arguments.
-- Program-enforced permissions: hard-denied commands and explicit deny rules stop before execution; grey-area commands can be reviewed by the user or a separate intent reviewer.
-- Checkpoint-derived deliverables: files actually changed by a turn are attached to its reply and safe document/image formats can be previewed locally.
-- Prompt-injection boundary: private control context is protected across the main agent and auxiliary model calls, while retrieved content is treated as untrusted data.
-- Bounded web research: search continues only for missing evidence, with retrieved sources separated from model inference.
-- Exact accounting and traces: provider usage, model calls, tool activity, compaction, verification, and results are recorded for inspection and analysis.
-- Evaluation contract: `friday run` provides headless sandbox execution and writes ATIF-v1.7 trajectories for Harbor, Terminal-Bench, and other harnesses.
+Friday combines a guarded model/tool loop with workspace tools for reading, searching, editing, shell execution, web research, memory, skills, and planning. Read-only work can execute concurrently; mutations remain ordered and auditable.
+
+### Context, memory, and skills
+
+Stable instructions precede volatile state for provider prefix caching. When a conversation grows, Friday first compacts tool results and then rewrites older dialogue while preserving a complete recent tail. Durable facts, project knowledge, episodic recall, and live task progress are stored separately. Skills are discovered from compact metadata and loaded only when selected.
+
+### Verification and recovery
+
+Goal mode checks the deliverable through a separate verifier and can feed concrete failures back into another attempt. Turn checkpoints can restore changed files together with the conversation boundary and task progress without modifying the project's Git history or index.
+
+### Observability
+
+The trace workbench records model requests, tool calls and results, timing, provider token usage, context occupancy, compaction, approvals, and verification. Web evidence is linked to the turn that used it, and retrieved content remains outside the private control prefix.
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    User["User"] --> Surface["Friday Desktop / CLI / TUI"]
-    Surface --> Harness["Friday harness"]
-    Harness --> Core["TypeScript agent core"]
-
-    Core --> AgentLoop["Agent loop<br/>model -> tools -> model -> answer"]
-    AgentLoop --> OuterLoop["Verify / goal loop<br/>inspect deliverable -> feedback -> retry"]
-    OuterLoop --> AgentLoop
-
-    Prefix["Prefix caching<br/>stable rules before volatile state"] --> AgentLoop
-    Context["Context engineering<br/>budget -> tool compact -> conversation compact"] --> AgentLoop
-    Memory["Memory management<br/>hot facts + recalled episodes + task progress"] --> AgentLoop
-    Skills["Progressive skills<br/>metadata catalog -> selected files"] --> AgentLoop
-    Tools["Small tool set<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan"] --> AgentLoop
+flowchart LR
+    Desktop["Tauri desktop"] --> Gateway["Harness gateway"]
+    TUI["TUI / CLI"] --> Gateway
+    Eval["Harbor / evaluator"] --> Run["friday run"] --> Gateway
+    Gateway --> Harness["Sessions · permissions · memory · verification"]
+    Harness --> Core["Agent Core"]
+    Core --> Models["Model providers"]
+    Core --> Tools["Workspace tools"]
 ```
 
-## Docs
+- `packages/core` contains the public `Agent`, `RunContext`, provider adapters, tool execution, events, usage, cancellation, and preflight contracts.
+- `packages/harness` owns the Friday product: prompts, tools, model profiles, sessions, permissions, memory, skills, checkpoints, traces, and verification.
+- `ui-tui` and `ui-desktop` are protocol clients. They do not contain another agent loop.
+- `integrations/harbor` is a thin adapter for Harbor's Python custom-agent protocol; it installs and invokes the TypeScript package.
 
-- [Docs Index](docs/index.md) — complete guide hub
-- [Install](docs/install.md) ([中文](docs/install.zh-CN.md))
-- [Changelog](CHANGELOG.md)
-- [Quick Start](docs/quick-start.md) ([中文](docs/quick-start.zh-CN.md))
-- [Architecture](docs/architecture.md)
-- [Model Configuration](docs/model-configuration.md)
-- [CLI Commands](docs/cli.md)
-- [Tools](docs/tools.md)
-- [Memory](docs/memory.md)
-- [Skills](docs/skills.md)
-- [Verification](docs/verification.md)
-- [Evaluations](docs/evaluation.md)
-- [Observability](docs/observability.md)
-- [Checkpoints](docs/checkpoints.md)
+The design intentionally uses ordinary async control flow instead of a generic graph abstraction. Read the [architecture guide](docs/architecture.md) for runtime boundaries and security invariants.
 
-## Validate
+## Evaluations
 
-```powershell
+Friday exposes a process-level contract instead of coupling Core to one benchmark. `friday run` can emit an ATIF v1.7 trajectory containing model identity, tool calls, observations, the final answer, and available usage metrics.
+
+The included Harbor adapter runs the npm-distributed Friday runtime on Terminal-Bench 2.1. See [Evaluations](docs/evaluation.md) for invocation and reproducibility guidance.
+
+## Repository layout
+
+```text
+packages/core/          Reusable agent loop and provider adapters
+packages/harness/       Friday runtime, state, tools, and gateway
+ui-tui/                 Terminal UI and cross-platform CLI
+ui-desktop/             React + Tauri desktop application
+integrations/harbor/    Terminal-Bench / Harbor adapter
+docs/                   User and architecture documentation
+```
+
+## Development
+
+```bash
+git clone https://github.com/Lancetwang/friday.git
+cd friday
 npm ci
-npm run check
 npm test
-npm ci --prefix ui-desktop
-npm run build --prefix ui-desktop
+npm run check
 ```
+
+Desktop development additionally requires the stable Rust toolchain and platform-specific Tauri dependencies:
+
+```bash
+npm ci --prefix ui-desktop
+npm run desktop
+```
+
+The CI matrix validates Core, Harness, CLI, desktop frontend, standalone sidecar, and Tauri bridge on Windows, macOS, and Linux. Tagged builds also produce all three desktop installers, package checksums, and tested npm tarballs.
+
+## Documentation
+
+- [Quick start](docs/quick-start.md)
+- [Installation](docs/install.md)
+- [Model configuration](docs/model-configuration.md)
+- [CLI reference](docs/cli.md)
+- [Architecture](docs/architecture.md)
+- [Tools and permissions](docs/tools.md)
+- [Memory](docs/memory.md) and [Skills](docs/skills.md)
+- [Verification](docs/verification.md) and [Checkpoints](docs/checkpoints.md)
+- [Observability](docs/observability.md) and [Evaluations](docs/evaluation.md)
+- [Changelog](CHANGELOG.md)
+
+## Contributing
+
+Issues and pull requests are welcome. Keep changes focused, preserve the Core/Harness boundary, and include the narrowest tests that demonstrate the behavior. Run `npm test` and `npm run check` before submitting; desktop changes should also pass `npm run build --prefix ui-desktop`.
+
+For security-sensitive reports, avoid publishing credentials, traces, or private workspace contents in a public issue.
 
 ## License
 
-Friday is released under the [MIT License](LICENSE).
+Friday is available under the [MIT License](LICENSE).

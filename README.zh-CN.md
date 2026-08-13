@@ -1,133 +1,184 @@
 # Friday
 
 <p align="center">
-  <img src=".github/friday-social-preview.png" alt="Friday - 本地通用 Agent" width="100%">
+  <img src=".github/friday-social-preview.png" alt="Friday — 本地优先的通用 Agent" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/github/v/release/Lancetwang/friday?sort=semver&style=flat-square&label=release" alt="GitHub Release"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22+"></a>
-  <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/package%20manager-npm-CB3837?style=flat-square&logo=npm&logoColor=white" alt="npm"></a>
-  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64"></a>
-  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/badge/platform-macOS%20ARM-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon"></a>
-  <a href="docs/install.zh-CN.md"><img src="https://img.shields.io/badge/platform-Linux%20Desktop%20%7C%20TUI-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux 桌面端与 TUI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22A699?style=flat-square" alt="MIT License"></a>
+  面向真实工作的本地优先 Agent，提供桌面应用、终端界面和无头评测 Runtime。
 </p>
 
-<p align="center"><a href="README.md">English</a></p>
+<p align="center">
+  <a href="https://github.com/Lancetwang/friday/actions/workflows/typescript.yml"><img src="https://img.shields.io/github/actions/workflow/status/Lancetwang/friday/typescript.yml?branch=main&style=flat-square&label=build" alt="构建状态"></a>
+  <a href="https://www.npmjs.com/package/friday-agent"><img src="https://img.shields.io/npm/v/friday-agent?style=flat-square&label=npm" alt="npm 版本"></a>
+  <a href="https://github.com/Lancetwang/friday/releases"><img src="https://img.shields.io/github/v/release/Lancetwang/friday?sort=semver&style=flat-square&label=release" alt="GitHub Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Lancetwang/friday?style=flat-square" alt="MIT License"></a>
+</p>
 
-Friday 是一个本地通用 Agent，提供 Windows、macOS 与 Linux 桌面端，以及跨平台 TUI。它可以处理文件和命令、联网检索、记住用户与项目上下文，并持续执行任务直到完成或明确受阻。
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="docs/quick-start.zh-CN.md">快速开始</a> ·
+  <a href="docs/index.md">文档</a> ·
+  <a href="https://github.com/Lancetwang/friday/releases">下载</a>
+</p>
 
-TypeScript Monorepo 同时包含可复用的轻量 Agent Core 与 Friday Harness。Harness 负责提示词、上下文压缩、记忆、Skill、权限、验证与 Goal Loop、会话、Trace 和 UI 行为。边界设计见[架构文档](docs/architecture.md)。
+Friday 在本地工作区内读取和编辑文件、执行命令、联网检索，并持续推进任务直到完成验证。会话、项目状态、凭据、记忆、检查点和 Trace 都保存在本机的 `~/.friday/` 下。
+
+项目采用 TypeScript Monorepo，所有入口共用同一套 Runtime。桌面端和 TUI 都只是 Friday Harness 的客户端；无头评测也走同一条执行路径，而不是另写一个为 Benchmark 特化的简化 Agent。
+
+“本地优先”不等于“完全离线”：模型请求和启用的联网工具会把任务所需内容发送给你配置的供应商。Friday 本身不运营托管账号或云同步后端。
+
+## 为什么选择 Friday
+
+- **桌面端与终端共用一个 Agent。** 日常工作使用原生桌面应用，在任意 Shell 中使用键盘优先的 TUI，或在隔离评测环境中运行 `friday run`。
+- **长任务有明确结构。** 持久会话、显式计划、可恢复进度、上下文压缩和独立验证 Loop 共同维持任务方向，同时保留可检查的状态变化。
+- **本地状态可检查。** 项目状态存放在项目目录之外；凭据与会话、Trace 分离；UI 可以查看工具活动、用量、上下文压缩和验证证据。
+- **执行边界由程序保证。** 工作区隔离、危险命令硬拒绝、可配置审批、Secret 脱敏和只读验证工具由代码实施，而不只依赖提示词。
+- **Core 可以独立复用。** [`friday-agent-core`](https://www.npmjs.com/package/friday-agent-core) 是一个公开的小型模型/工具 Loop，不依赖 Friday 的 UI、持久化、记忆或产品逻辑。
 
 ## 安装
 
-### 桌面端（推荐）
+根据工作方式选择入口：
 
-从 [GitHub Releases](https://github.com/Lancetwang/friday/releases) 下载 Windows x64 NSIS 安装程序、macOS Apple Silicon DMG 或 Linux x64 Debian 安装包。安装包内置独立的 TypeScript Sidecar，不要求用户安装 Git、Python、Node.js、Bun 或 Rust。
+| 入口 | 安装 | 启动 | 环境要求 |
+| --- | --- | --- | --- |
+| 桌面端 | 从 [GitHub Releases](https://github.com/Lancetwang/friday/releases) 下载 | 启动 Friday | Windows x64、macOS Apple Silicon 或 Debian/Ubuntu x64 |
+| TUI + CLI | `npm install --global friday-agent` | `friday` | Node.js 22 或更高版本 |
+| Agent Core | `npm install friday-agent-core` | 在 TypeScript/JavaScript 中导入 | Node.js 22 或更高版本 |
 
-启动 Friday 后，在**设置 > 模型**中配置至少一个模型供应商的 API Key。联网搜索 Key 和用户偏好也可以在设置中完成。
+桌面安装包已经包含完整 Runtime，最终用户不需要安装 Git、Python、Node.js、Bun 或 Rust。
 
-### npm 安装
+首次启动后，在桌面端的**设置 → 模型**或 TUI 的 `/login` 中配置供应商。Friday 内置支持 OpenAI、Anthropic、DeepSeek、小米 MiMo、OpenCode Go，也支持自定义 OpenAI-compatible Endpoint。
 
-安装完整的 Core + Harness + TUI：
+平台说明、升级、源码安装和卸载方式见[安装文档](docs/install.zh-CN.md)。
+
+## 快速开始
+
+在桌面端打开项目目录，或从项目目录启动 Friday：
 
 ```bash
-npm install --global friday-agent
+cd path/to/your-project
 friday
 ```
 
-只在另一个 TypeScript 项目中安装可复用 Core：
+然后直接描述期望结果，例如：
+
+```text
+找出测试失败的原因，修复它，并验证结果。
+```
+
+不进入 TUI，执行一次无交互请求：
 
 ```bash
-npm install friday-agent-core
+friday ask "总结这个仓库，并说明如何运行测试。"
 ```
 
-如果某个预发布版本还没有进入 npm Registry，请从同版本的 GitHub Release 下载
-`friday-agent` tarball，并安装这个完全相同的构建：
+使用独立 Goal 验证执行任务：
 
 ```bash
-npm install --global ./friday-agent-0.2.1.tgz
-friday
+friday goal "修复失败的测试并验证结果。"
 ```
 
-### 从源码安装
+无头评测命令只应在隔离环境中运行：
 
-```powershell
-git clone https://github.com/Lancetwang/friday.git
-cd friday
-npm ci
-npm link
-friday
+```bash
+friday run --cwd /workspace --json --trajectory /logs/trajectory.json -- "完成任务"
 ```
 
-npm 与源码安装要求 Node.js 22 或更高版本。npm 会按平台生成 Shim，因此 PowerShell、cmd、bash 与 zsh 中都统一使用 `friday`。
+`friday run` 默认跳过交互审批，但仍保留危险命令硬拒绝。完整契约见 [CLI 命令](docs/cli.md)和[评测文档](docs/evaluation.md)。
 
-两种安装方式的环境要求、配置、升级与卸载步骤见[中文安装文档](docs/install.zh-CN.md)。
+## 核心能力
 
-## 特性
+### 任务执行
 
-- 通用任务执行：处理本地文件与命令、联网检索，并让普通任务持续推进到交付与验证。
-- 两层 Loop：Agent Loop 负责模型与工具交互；独立的 Verify / Goal Loop 检查交付物并依据证据驱动修正。
-- Prefix 友好的上下文：稳定 Runtime 规则位于前部，用户、项目、Skill 和召回记忆按需渐进披露。
-- 多级上下文压缩：先探测无损工具结果简化，必要时再进行结构化对话压缩，并在预算内最多保留最近十个完整用户 Turn。
-- 分层记忆与进度：稳定用户事实、项目知识、情景召回和可恢复任务进度彼此独立。
-- 渐进式 Skill：先用精简元数据路由，只读取被选中的 `SKILL.md` 及其引用资源。
-- 长程任务控制：显式目标、计划、下一步、验证状态、语义停止条件和 Session 恢复共同防止任务迷失。
-- Turn 级检查点：桌面端消息回退可同时恢复工作区文件、对话和任务进度，不改动项目自身的 Git 历史。
-- 工具生命周期 Hook：执行前由代码完成权限预检，执行后用三轮滑动窗口识别工具名与参数完全相同的无进展循环；参数变化的正常重试不会被误拦截。
-- 程序级权限：硬拒绝命令与显式 deny 规则在执行前停止；灰区命令可交给用户或独立意图审查器判断。
-- 基于 Checkpoint 的交付物：真实被当前 Turn 修改的文件会附在回复中，安全的文档和图片格式可直接预览。
-- Prompt Injection 边界：主 Agent 与辅助模型调用都保护私有控制上下文，并把检索内容视作不可信数据。
-- 有预算的联网检索：只为缺失证据继续搜索，并区分检索事实与模型推断。
-- 精确统计与 Trace：记录 Provider Usage、模型调用、工具过程、压缩、验证和结果，支持检查与分析。
-- 评测契约：`friday run` 提供无交互沙箱执行，并输出 ATIF-v1.7 轨迹，可接入 Harbor、Terminal-Bench 和其他 Harness。
+Friday 将受保护的模型/工具 Loop 与文件读取、搜索、编辑、Shell、联网检索、记忆、Skill 和计划工具组合在一起。只读工作可以并发执行，修改操作保持有序且可审计。
+
+### 上下文、记忆与 Skill
+
+稳定指令位于动态状态之前，以利用供应商的 Prefix Cache。对话增长后，Friday 会先压缩工具结果，再重写较早的对话，同时保留完整的近期 Turn。长期事实、项目知识、情景记忆和当前任务进度彼此分离；Skill 先通过精简元数据发现，只在选中后加载正文与引用资源。
+
+### 验证与恢复
+
+Goal Mode 使用独立验证器检查交付物，并能把具体失败反馈给下一次尝试。Turn 检查点可以同时恢复被修改的文件、对话边界和任务进度，不改动项目自身的 Git 历史或 Index。
+
+### 可观测性
+
+Trace Workbench 记录模型请求、工具调用与结果、耗时、供应商 Token 用量、上下文占用、压缩、审批和验证过程。联网证据与使用它的 Turn 关联，检索内容不会进入私有控制前缀。
 
 ## 架构
 
 ```mermaid
-flowchart TD
-    User["用户"] --> Surface["Friday Desktop / CLI / TUI"]
-    Surface --> Harness["Friday Harness"]
-    Harness --> Core["TypeScript Agent Core"]
-
-    Core --> AgentLoop["Agent Loop<br/>模型 -> 工具 -> 模型 -> 回答"]
-    AgentLoop --> OuterLoop["Verify / Goal Loop<br/>检查交付物 -> 反馈 -> 重试"]
-    OuterLoop --> AgentLoop
-
-    Prefix["Prefix Caching<br/>稳定规则位于动态状态之前"] --> AgentLoop
-    Context["Context Engineering<br/>预算 -> 工具压缩 -> 对话压缩"] --> AgentLoop
-    Memory["Memory Management<br/>常驻事实 + 情景召回 + 任务进度"] --> AgentLoop
-    Skills["Progressive Skills<br/>元数据索引 -> 选中资源"] --> AgentLoop
-    Tools["最小工具集<br/>Read / Edit / Write / Bash / Glob / Grep / Web / Plan"] --> AgentLoop
+flowchart LR
+    Desktop["Tauri 桌面端"] --> Gateway["Harness Gateway"]
+    TUI["TUI / CLI"] --> Gateway
+    Eval["Harbor / 评测器"] --> Run["friday run"] --> Gateway
+    Gateway --> Harness["会话 · 权限 · 记忆 · 验证"]
+    Harness --> Core["Agent Core"]
+    Core --> Models["模型供应商"]
+    Core --> Tools["工作区工具"]
 ```
+
+- `packages/core` 包含公开的 `Agent`、`RunContext`、供应商适配器、工具执行、事件、用量、取消与预检契约。
+- `packages/harness` 构成 Friday 产品层，负责提示词、工具、模型配置、会话、权限、记忆、Skill、检查点、Trace 和验证。
+- `ui-tui` 与 `ui-desktop` 是协议客户端，不包含第二套 Agent Loop。
+- `integrations/harbor` 是 Harbor Python 自定义 Agent 协议的薄适配器，实际安装并调用 TypeScript 包。
+
+架构刻意使用普通的异步控制流，而不是引入通用 Graph 抽象。Runtime 边界和安全约束见[架构文档](docs/architecture.md)。
+
+## 评测
+
+Friday 提供进程级评测契约，不将 Core 绑定到某个 Benchmark。`friday run` 可以输出 ATIF v1.7 轨迹，包含模型标识、工具调用、Observation、最终回答和可用的用量数据。
+
+仓库内置的 Harbor Adapter 可以在 Terminal-Bench 2.1 中运行 npm 分发的 Friday Runtime。调用方式与可复现建议见[评测文档](docs/evaluation.md)。
+
+## 仓库结构
+
+```text
+packages/core/          可复用的 Agent Loop 与供应商适配器
+packages/harness/       Friday Runtime、状态、工具与 Gateway
+ui-tui/                 终端 UI 与跨平台 CLI
+ui-desktop/             React + Tauri 桌面应用
+integrations/harbor/    Terminal-Bench / Harbor 适配器
+docs/                   用户与架构文档
+```
+
+## 开发
+
+```bash
+git clone https://github.com/Lancetwang/friday.git
+cd friday
+npm ci
+npm test
+npm run check
+```
+
+桌面端开发还需要稳定版 Rust Toolchain 和当前平台的 Tauri 依赖：
+
+```bash
+npm ci --prefix ui-desktop
+npm run desktop
+```
+
+CI 会在 Windows、macOS 和 Linux 上验证 Core、Harness、CLI、桌面前端、独立 sidecar 与 Tauri Bridge。Tag 构建还会生成三个桌面安装包、校验和与经过测试的 npm tarball。
 
 ## 文档
 
-- [文档索引](docs/index.md) — 全部指南
-- [安装](docs/install.zh-CN.md) ([English](docs/install.md))
-- [更新日志](CHANGELOG.md)
-- [快速开始](docs/quick-start.zh-CN.md) ([English](docs/quick-start.md))
-- [架构](docs/architecture.md)
+- [快速开始](docs/quick-start.zh-CN.md)
+- [安装](docs/install.zh-CN.md)
 - [模型配置](docs/model-configuration.md)
-- [CLI 命令](docs/cli.md)
-- [工具](docs/tools.md)
-- [记忆](docs/memory.md)
-- [Skills](docs/skills.md)
-- [验证](docs/verification.md)
-- [评测](docs/evaluation.md)
-- [可观测性](docs/observability.md)
-- [检查点与撤回](docs/checkpoints.md)
+- [CLI 参考](docs/cli.md)
+- [架构](docs/architecture.md)
+- [工具与权限](docs/tools.md)
+- [记忆](docs/memory.md)与 [Skill](docs/skills.md)
+- [验证](docs/verification.md)与[检查点](docs/checkpoints.md)
+- [可观测性](docs/observability.md)与[评测](docs/evaluation.md)
+- [更新日志](CHANGELOG.md)
 
-## 验证
+## 参与贡献
 
-```powershell
-npm ci
-npm run check
-npm test
-npm ci --prefix ui-desktop
-npm run build --prefix ui-desktop
-```
+欢迎提交 Issue 和 Pull Request。请保持改动聚焦，维护 Core/Harness 边界，并补充能够证明行为的最小测试。提交前运行 `npm test` 和 `npm run check`；桌面端改动还应通过 `npm run build --prefix ui-desktop`。
+
+如需报告安全问题，请勿在公开 Issue 中粘贴凭据、Trace 或私有工作区内容。
 
 ## 开源协议
 
