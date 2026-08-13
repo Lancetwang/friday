@@ -34,9 +34,10 @@ inside `friday-agent`; users do not assemble the application from internals.
 npm creates `friday` on macOS/Linux and `friday.cmd` on Windows, so the command
 is the same in PowerShell, cmd, bash, and zsh.
 
-The npm names are prepared but not published during branch development. The
-`Friday-npm-packages` workflow artifact contains the exact packages intended
-for publication. Extract it and test the full package with:
+Every `v*` tag runs the three-platform test and packaging matrix. The tested
+installers and npm tarballs are attached to a GitHub Release with SHA-256
+checksums. If npm ownership is still being bootstrapped, the full package can
+be installed directly from that Release:
 
 ```bash
 npm install --global ./friday-agent-0.2.0-alpha.0.tgz
@@ -78,20 +79,28 @@ TypeScript and can be called by any benchmark that can execute a process.
 
 See [Evaluations](evaluation.md) for Terminal-Bench 2.1.
 
-## Desktop artifacts
+## Releases
 
-`.github/workflows/typescript.yml` tests Windows, macOS, and Linux, then uploads:
+`.github/workflows/typescript.yml` tests Windows, macOS, and Linux, then publishes:
 
 - Windows x64 NSIS installer
 - macOS arm64 DMG
 - Linux x64 Debian package
 - `friday-agent` and `friday-agent-core` npm tarballs
 
+npm publishing uses the same tested tarballs and runs only after the GitHub
+Release succeeds. It is gated by the repository variable
+`NPM_PUBLISH_ENABLED=true`: the first publish must authenticate the npm owner
+with an `NPM_TOKEN`; after both package names exist, they can use npm trusted
+publishing for `typescript.yml` and the token can be removed.
+
 ## Deliberate scope
 
 Phone and Feishu connectivity are absent from the TypeScript gateway and hidden
-by its clients. The old Python files remain untouched on this branch only to
-make rollback possible during migration.
+by its clients. The old Python files in Friday remain untouched on this branch
+to make rollback possible during migration. The separate Python
+`agent-core-runtime` repository is outside this migration and remains available
+for independent maintenance.
 
 ## Promotion gates
 
@@ -100,4 +109,6 @@ make rollback possible during migration.
 3. Stored-session migration and rollback pass against representative Python
    conversations.
 4. npm packages and all three desktop installers are reproducible in CI.
-5. Python is removed only after the TypeScript release survives a release cycle.
+5. Friday's legacy Python Harness is retired only after the TypeScript release
+   survives a release cycle; the separate Python Agent Core repository is not
+   deleted by this migration.

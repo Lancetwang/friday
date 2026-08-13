@@ -24,7 +24,7 @@ The TypeScript monorepo contains a small reusable agent core and the Friday Harn
 
 ### Desktop App (Recommended)
 
-Download the Windows x64 NSIS installer, macOS Apple Silicon DMG, or Linux x64 Debian package from the TypeScript workflow artifacts (and from [GitHub Releases](https://github.com/Lancetwang/friday/releases) once promoted). The packaged app contains a standalone TypeScript sidecar; Git, Python, Node.js, Bun, and Rust are not required.
+Download the Windows x64 NSIS installer, macOS Apple Silicon DMG, or Linux x64 Debian package from [GitHub Releases](https://github.com/Lancetwang/friday/releases). The packaged app contains a standalone TypeScript sidecar; Git, Python, Node.js, Bun, and Rust are not required.
 
 Launch Friday, open **Settings > Models**, and configure at least one provider API key. Web search keys and user preferences can be configured from the same Settings page.
 
@@ -43,10 +43,8 @@ Install only the reusable core in another TypeScript project:
 npm install friday-agent-core
 ```
 
-The npm names are not published while the migration branch is under review.
-Download the `Friday-npm-packages` artifact from the
-[TypeScript workflow](https://github.com/Lancetwang/friday/actions/workflows/typescript.yml),
-extract it, and install the already-packed artifact:
+If a prerelease has not reached the npm registry yet, download its
+`friday-agent` tarball from the same GitHub Release and install that exact build:
 
 ```bash
 npm install --global ./friday-agent-0.2.0-alpha.0.tgz

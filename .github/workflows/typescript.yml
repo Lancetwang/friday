@@ -3,7 +3,8 @@ name: TypeScript migration
 on:
   pull_request:
   push:
-    branches: [codex/typescript-rewrite]
+    branches: [codex/typescript-rewrite, main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -120,3 +121,83 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.output }}
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [npm-packages, desktop-installers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: Friday-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify release version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test "$(node -p "require('./package.json').version")" = "$version"
+          test "$(node -p "require('./packages/core/package.json').version")" = "$version"
+          test "$(node -p "require('./ui-desktop/package.json').version")" = "$version"
+          test "$(node -p "require('./ui-desktop/src-tauri/tauri.conf.json').version")" = "$version"
+      - name: Create checksums
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS.txt
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -print | sort)
+          test "${#assets[@]}" -gt 0
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          elif [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --generate-notes --prerelease --title "Friday $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --generate-notes --title "Friday $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          fi
+
+  publish-npm:
+    if: startsWith(github.ref, 'refs/tags/v') && vars.NPM_PUBLISH_ENABLED == 'true'
+    needs: [npm-packages, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Friday-npm-packages
+          path: npm-packages
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Configure npm token fallback
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -n "$NPM_TOKEN" ]]; then
+            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN" --location=user
+          fi
+      - name: Publish tested packages
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          channel=latest
+          [[ "$version" == *-* ]] && channel=next
+          core="$(find npm-packages -maxdepth 1 -name 'friday-agent-core-*.tgz' -print -quit)"
+          full="$(find npm-packages -maxdepth 1 -name 'friday-agent-*.tgz' ! -name 'friday-agent-core-*' -print -quit)"
+          test -n "$core"
+          test -n "$full"
+          if ! npm view "friday-agent-core@$version" version >/dev/null 2>&1; then
+            npm publish "$core" --access public --tag "$channel" --provenance
+          fi
+          if ! npm view "friday-agent@$version" version >/dev/null 2>&1; then
+            npm publish "$full" --access public --tag "$channel" --provenance
+          fi

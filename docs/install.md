@@ -7,9 +7,8 @@ desktop app is the shortest path for normal use.
 
 ## Desktop App (Recommended)
 
-Download the artifact for your platform from the
-[TypeScript workflow](https://github.com/Lancetwang/friday/actions/workflows/typescript.yml),
-or from GitHub Releases after the migration is promoted:
+Download the installer for your platform from
+[GitHub Releases](https://github.com/Lancetwang/friday/releases):
 
 - Windows x64: NSIS `.exe`
 - macOS Apple Silicon: `.dmg`
@@ -46,9 +45,8 @@ friday
 npm creates the appropriate executable shim, so the command is `friday` in
 PowerShell, cmd, bash, and zsh. The package includes Core, Harness, and TUI.
 
-The npm package will be published with the promoted release. While reviewing the
-migration branch, download and extract the `Friday-npm-packages` artifact from
-the TypeScript workflow, then install the already-packed full package:
+If a prerelease is not yet available from npm, download its `friday-agent`
+tarball from the same GitHub Release and install the already-tested package:
 
 ```bash
 npm install --global ./friday-agent-0.2.0-alpha.0.tgz
@@ -71,8 +69,8 @@ package, not Friday's internal Harness:
 npm install friday-agent-core
 ```
 
-Before registry publication, the same workflow artifact contains
-`friday-agent-core-0.2.0-alpha.0.tgz`:
+The same GitHub Release also contains `friday-agent-core-0.2.0-alpha.0.tgz` as a
+fallback before registry publication:
 
 ```bash
 npm install ./friday-agent-core-0.2.0-alpha.0.tgz

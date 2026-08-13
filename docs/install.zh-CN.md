@@ -6,8 +6,8 @@ Friday 同时提供独立桌面安装包和通过 npm 安装的 TUI。普通用�
 
 ## 桌面端（推荐）
 
-从 [TypeScript 工作流](https://github.com/Lancetwang/friday/actions/workflows/typescript.yml)
-下载当前平台的构建产物；迁移正式发布后也会进入 GitHub Releases：
+从 [GitHub Releases](https://github.com/Lancetwang/friday/releases)
+下载当前平台的安装包：
 
 - Windows x64：NSIS `.exe`
 - macOS Apple Silicon：`.dmg`
@@ -40,8 +40,8 @@ friday
 npm 会生成对应平台的可执行 Shim，因此 PowerShell、cmd、bash 与 zsh 中都使用同一个
 `friday` 命令。完整包已经包含 Core、Harness 与 TUI。
 
-迁移分支评审期间 npm 包名尚未正式发布。请从 TypeScript 工作流下载并解压
-`Friday-npm-packages` 构建产物，然后安装已经打好的完整包：
+如果某个预发布版本还没有进入 npm Registry，请从同版本的 GitHub Release 下载
+`friday-agent` tarball，并安装已经通过测试的完整包：
 
 ```bash
 npm install --global ./friday-agent-0.2.0-alpha.0.tgz
@@ -64,7 +64,7 @@ Harness：
 npm install friday-agent-core
 ```
 
-正式发布前，同一个工作流构建产物中也包含 Core 包：
+同一个 GitHub Release 也提供 Core tarball，作为 Registry 发布前的备用安装方式：
 
 ```bash
 npm install ./friday-agent-core-0.2.0-alpha.0.tgz

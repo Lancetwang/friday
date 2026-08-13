@@ -24,7 +24,7 @@ TypeScript Monorepo 同时包含可复用的轻量 Agent Core 与 Friday Harness
 
 ### 桌面端（推荐）
 
-从 TypeScript 工作流产物下载 Windows x64 NSIS 安装程序、macOS Apple Silicon DMG 或 Linux x64 Debian 安装包；迁移正式发布后会进入 [GitHub Releases](https://github.com/Lancetwang/friday/releases)。安装包内置独立的 TypeScript Sidecar，不要求用户安装 Git、Python、Node.js、Bun 或 Rust。
+从 [GitHub Releases](https://github.com/Lancetwang/friday/releases) 下载 Windows x64 NSIS 安装程序、macOS Apple Silicon DMG 或 Linux x64 Debian 安装包。安装包内置独立的 TypeScript Sidecar，不要求用户安装 Git、Python、Node.js、Bun 或 Rust。
 
 启动 Friday 后，在**设置 > 模型**中配置至少一个模型供应商的 API Key。联网搜索 Key 和用户偏好也可以在设置中完成。
 
@@ -43,9 +43,8 @@ friday
 npm install friday-agent-core
 ```
 
-迁移分支评审期间 npm 包名尚未发布。请从
-[TypeScript 工作流](https://github.com/Lancetwang/friday/actions/workflows/typescript.yml)
-下载并解压 `Friday-npm-packages` 构建产物，再安装其中已经打好的完整包：
+如果某个预发布版本还没有进入 npm Registry，请从同版本的 GitHub Release 下载
+`friday-agent` tarball，并安装这个完全相同的构建：
 
 ```bash
 npm install --global ./friday-agent-0.2.0-alpha.0.tgz

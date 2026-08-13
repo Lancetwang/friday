@@ -3,7 +3,10 @@
   "version": "0.2.0-alpha.0",
   "description": "Friday, a local-first general-purpose agent.",
   "license": "MIT",
-  "repository": "github:Lancetwang/friday",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lancetwang/friday.git"
+  },
   "type": "module",
   "bin": {
     "friday": "dist/friday.js"
