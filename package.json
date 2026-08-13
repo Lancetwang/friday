@@ -19,10 +19,10 @@
   ],
   "scripts": {
     "build": "npm run build:cli",
-    "build:runtime": "npm run build -w friday-agent-core && npm run build -w friday-agent-harness",
-    "build:cli": "npm run build:runtime && npm run build -w friday-agent-cli && bun scripts/build-cli.mjs",
-    "check": "npm run build -w friday-agent-core && npm run check -w friday-agent-harness && npm run typecheck -w friday-agent-cli",
-    "gateway": "npm run gateway -w friday-agent-harness",
+    "build:runtime": "npm --global=false run build -w friday-agent-core && npm --global=false run build -w friday-agent-harness",
+    "build:cli": "npm run build:runtime && npm --global=false run build -w friday-agent-cli && bun scripts/build-cli.mjs",
+    "check": "npm --global=false run build -w friday-agent-core && npm --global=false run check -w friday-agent-harness && npm --global=false run typecheck -w friday-agent-cli",
+    "gateway": "npm --global=false run gateway -w friday-agent-harness",
     "tui:ts": "npm run build:cli && node dist/friday.js",
     "desktop:ts": "npm run build:runtime && npm run desktop:ts --prefix ui-desktop",
     "sidecar:ts": "npm run build:runtime && node scripts/build-ts-sidecar.mjs",
@@ -30,7 +30,7 @@
     "bundle:desktop:ts": "npm run sidecar:ts && npm run bundle:ts --prefix ui-desktop",
     "pack:release": "node -e \"require('node:fs').mkdirSync('artifacts/npm',{recursive:true})\" && npm pack --pack-destination artifacts/npm && npm pack -w friday-agent-core --pack-destination artifacts/npm",
     "prepare": "npm run build:cli",
-    "test": "npm run test -w friday-agent-core && npm run test -w friday-agent-harness && npm run test -w friday-agent-cli"
+    "test": "npm --global=false run test -w friday-agent-core && npm --global=false run test -w friday-agent-harness && npm --global=false run test -w friday-agent-cli"
   },
   "engines": {
     "node": ">=22"
