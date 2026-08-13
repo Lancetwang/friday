@@ -16,7 +16,7 @@ const targets = {
 const target = targets[triple]
 if (!target) throw new Error(`Unsupported sidecar target: ${triple}`)
 
-const bun = join(root, 'node_modules', 'bun', 'bin', process.platform === 'win32' ? 'bun.exe' : 'bun')
+const bun = join(root, 'node_modules', 'bun', 'bin', 'bun.exe')
 if (!existsSync(bun)) throw new Error('Bun is not installed. Run npm ci at the repository root.')
 const directory = join(root, 'ui-desktop', 'src-tauri', 'binaries')
 const extension = triple.includes('windows') ? '.exe' : ''

@@ -1,6 +1,8 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 
+import { resolveWorkspace } from './config.js'
+
 export type ArtifactInfo = { kind: 'image' | 'markdown' | 'pdf' | 'text'; name: string; path: string; size: number }
 export type ArtifactDetail = ArtifactInfo & { content?: string; data_url?: string }
 
@@ -45,14 +47,14 @@ async function artifactInfo(workspace: string, path: string): Promise<ArtifactIn
   return {
     kind,
     name: basename(absolute),
-    path: relative(resolve(workspace), absolute).split(sep).join('/'),
+    path: relative(resolveWorkspace(workspace), absolute).split(sep).join('/'),
     size
   }
 }
 
 async function containedFile(workspace: string, value: string): Promise<string> {
   if (!value || isAbsolute(value)) throw new Error('Artifact path must be relative to the workspace.')
-  const root = await realpath(resolve(workspace))
+  const root = resolveWorkspace(workspace)
   const candidate = resolve(root, value)
   const lexical = relative(root, candidate)
   if (!lexical || lexical === '..' || lexical.startsWith(`..${sep}`) || isAbsolute(lexical)) {

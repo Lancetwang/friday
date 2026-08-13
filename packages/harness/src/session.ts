@@ -6,7 +6,7 @@ import {
   Agent, RunContext, type AgentEvent, type Message, type Tool
 } from 'friday-agent-core'
 
-import { loadModelConfig, projectStateDir, type ModelConfig } from './config.js'
+import { loadModelConfig, projectStateDir, resolveWorkspace, type ModelConfig } from './config.js'
 import { compactIfNeeded, contextReport, observeContextUsage } from './context.js'
 import { beginCheckpoint, deleteSessionCheckpoints, finishCheckpoint, type Checkpoint } from './checkpoint.js'
 import { checkpointArtifacts, type ArtifactInfo } from './artifacts.js'
@@ -109,7 +109,7 @@ export class FridaySession {
   private readonly readAllow = new Set<string>()
 
   private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext) {
-    this.workspace = resolve(workspace)
+    this.workspace = resolveWorkspace(workspace)
     this.sessionId = sessionId
     this.config = config
     this.thinking = defaultThinking(config.provider, config.model)
@@ -132,7 +132,7 @@ export class FridaySession {
 
   static async create(workspace = process.cwd(), sessionId = newSessionId()): Promise<FridaySession> {
     if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) throw new Error(`Invalid session id: ${sessionId}`)
-    const root = resolve(workspace)
+    const root = resolveWorkspace(workspace)
     const config = loadModelConfig(root)
     const context = new RunContext()
     const snapshot = await readSnapshot(root, sessionId)

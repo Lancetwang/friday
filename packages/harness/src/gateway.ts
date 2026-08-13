@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { pathToFileURL } from 'node:url'
 
@@ -15,6 +13,7 @@ import {
   readModelCredential,
   recordProject,
   refreshModelProfiles,
+  resolveWorkspace,
   saveModelProfile,
   selectModelProfile,
   setModelEnabled,
@@ -71,7 +70,7 @@ export class Gateway {
   private readonly send: (value: unknown) => void
 
   constructor(workspace = process.cwd(), send: (value: unknown) => void = writeLine) {
-    this.workspace = realpathSync.native(resolve(workspace))
+    this.workspace = resolveWorkspace(workspace)
     this.send = send
   }
 
