@@ -6,7 +6,7 @@ import {
   Agent, RunContext, type AgentEvent, type Message, type Tool, type Usage
 } from 'friday-agent-core'
 
-import { loadModelConfig, projectStateDir, resolveWorkspace, type ModelConfig } from './config.js'
+import { disabledPlugins, loadModelConfig, projectStateDir, resolveWorkspace, type ModelConfig } from './config.js'
 import { compactIfNeeded, contextReport, observeContextUsage, tokenMeasurement } from './context.js'
 import { beginCheckpoint, deleteSessionCheckpoints, finishCheckpoint, type Checkpoint } from './checkpoint.js'
 import { checkpointArtifacts, type ArtifactInfo } from './artifacts.js'
@@ -20,8 +20,8 @@ import {
   type PermissionMode
 } from './permissions.js'
 import { buildInstructions, promptTemplate } from './prompts.js'
-import { applyPlugins, loadPlugins, pluginInfo, pluginInstructionSections, type LoadedPlugin } from './plugins.js'
-import { buildTools, runShell } from './tools.js'
+import { assembleTools, loadPlugins, markDisabled, pluginInfo, pluginSections, type LoadedPlugin } from './plugins.js'
+import { builtinPlugins, runShell } from './tools.js'
 import { writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
 import { consolidateMemory as applyMemoryConsolidation, captureUserMemory, relevantMemory } from './memory.js'
@@ -118,25 +118,31 @@ export class FridaySession {
   private readonly readAllow = new Set<string>()
   private readonly plugins: LoadedPlugin[]
 
-  private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext, plugins: LoadedPlugin[]) {
+  private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext, external: LoadedPlugin[]) {
     this.workspace = resolveWorkspace(workspace)
     this.sessionId = sessionId
     this.config = config
-    this.plugins = plugins
     this.thinking = defaultThinking(config.provider, config.model)
     this.context = context
+    // One registry holds everything outside the core loop: the built-in
+    // capability packs first, then external plugins. Assembly, prompt
+    // sections, and the /plugins report all read this single list.
+    this.plugins = markDisabled([
+      ...builtinPlugins(this.workspace, {
+        sessionId,
+        permissionMode: () => this.permission,
+        sessionAllowed: () => this.sessionAllowed,
+        beforeMutation: () => this.ensureCheckpoint(),
+        updatePlan: value => updatePlan(this.context, value),
+        readPaths: () => [...this.readAllow],
+        reviewCommand: (command, risk, signal) => this.reviewShell(command, risk, signal)
+      }),
+      ...external
+    ], disabledPlugins(this.workspace))
+    this.tools = assembleTools(this.plugins, { workspace: this.workspace })
     if (!context.messages.some(message => message.role === 'system')) {
       context.addMessage({ role: 'system', content: this.instructions() })
     }
-    this.tools = applyPlugins(buildTools(this.workspace, {
-      sessionId,
-      permissionMode: () => this.permission,
-      sessionAllowed: () => this.sessionAllowed,
-      beforeMutation: () => this.ensureCheckpoint(),
-      updatePlan: value => updatePlan(this.context, value),
-      readPaths: () => [...this.readAllow],
-      reviewCommand: (command, risk, signal) => this.reviewShell(command, risk, signal)
-    }), plugins, { workspace: this.workspace })
     context.onEvent = event => this.onEvent?.(event)
     context.onObservation = event => observeContextUsage(context, event)
   }
@@ -184,8 +190,11 @@ export class FridaySession {
     this.abort = new AbortController()
     try {
       beginProgress(this.context, text, mode, options.continueProgress === true)
-      const recalled = options.internal ? '' : await relevantMemory(this.workspace, text)
-      const captured = options.internal ? undefined : await captureUserMemory(this.workspace, text, this.sessionId)
+      // Unplugging the memory capability silences recall and capture too,
+      // not just the Memory tool: disabled means Friday does not remember.
+      const remember = !options.internal && this.pluginEnabled('memory')
+      const recalled = remember ? await relevantMemory(this.workspace, text) : ''
+      const captured = remember ? await captureUserMemory(this.workspace, text, this.sessionId) : undefined
       this.refreshInstructions()
       if (recalled) this.context.addMessage({ role: 'system', content: recalled, friday_memory_recall: true })
       if (captured) this.context.emit('memory.updated', 'memory', { capture: captured })
@@ -831,7 +840,11 @@ export class FridaySession {
   }
 
   private instructions(): string {
-    return buildInstructions(this.workspace, this.config, pluginInstructionSections(this.plugins))
+    return buildInstructions(this.workspace, this.config, pluginSections(this.plugins, { workspace: this.workspace }))
+  }
+
+  private pluginEnabled(name: string): boolean {
+    return this.plugins.some(plugin => plugin.name === name && !plugin.disabled)
   }
 
   private refreshInstructions(): void {

@@ -6,9 +6,11 @@ import { createInterface } from 'node:readline'
 
 import type { JsonObject, Tool } from 'friday-agent-core'
 
+import { disabledPlugins } from './config.js'
 import { defaultPermissionMode, preflightShell, preflightVerifierShell, type PermissionMode } from './permissions.js'
+import { assembleTools, builtinPlugin, markDisabled, type LoadedPlugin } from './plugins.js'
 import { writeTextAtomic } from './storage.js'
-import { buildSkillTool } from './skills.js'
+import { buildSkillTool, skillRouting } from './skills.js'
 import { buildWebTools } from './web.js'
 import { formatMemoryResult, runMemoryCommand } from './memory.js'
 
@@ -42,8 +44,48 @@ type Edit = { old_text: string; new_text: string }
 
 const fileLocks = new Map<string, Promise<void>>()
 
-export function buildTools(workspace: string, options: ToolOptions = {}): Tool[] {
+/**
+ * Friday's built-in capabilities, registered as plugins. The workspace pack
+ * is the required core; web, memory, and skills are unpluggable by listing
+ * them in `disabled_plugins` - the same switch external plugins get.
+ */
+export function builtinPlugins(workspace: string, options: ToolOptions = {}): LoadedPlugin[] {
   const root = realpathSync.native(resolve(workspace))
+  return [
+    builtinPlugin({
+      name: 'workspace',
+      description: 'Read, write, search, shell, and planning inside the workspace.',
+      required: true,
+      verifierTools: ['Read', 'Glob', 'Grep', 'Bash'],
+      tools: () => workspaceTools(root, options)
+    }),
+    builtinPlugin({
+      name: 'web',
+      description: 'Live web search and page fetching.',
+      verifierTools: ['WebSearch', 'WebFetch'],
+      tools: () => buildWebTools()
+    }),
+    builtinPlugin({
+      name: 'memory',
+      description: 'Durable cross-session memory.',
+      tools: () => [memoryTool(root)]
+    }),
+    builtinPlugin({
+      name: 'skills',
+      description: 'Reusable procedures discovered from FridaySkills directories.',
+      verifierTools: ['Skill'],
+      tools: () => [buildSkillTool(root)],
+      // Re-evaluated on every prompt rebuild so new skills appear mid-session.
+      instructions: () => skillRouting(root)
+    })
+  ]
+}
+
+export function buildTools(workspace: string, options: ToolOptions = {}): Tool[] {
+  return assembleTools(builtinPlugins(workspace, options), { workspace: resolve(workspace) })
+}
+
+function workspaceTools(root: string, options: ToolOptions): Tool[] {
   const paths = workspacePaths(root, options.readPaths)
   return [
     {
@@ -57,7 +99,6 @@ export function buildTools(workspace: string, options: ToolOptions = {}): Tool[]
         return readPage(paths.readable(args.path), positive(args.start_line, 1), capped(args.line_count, MAX_OUTPUT_LINES, MAX_OUTPUT_LINES))
       }
     },
-    ...buildWebTools(),
     {
       name: 'Write', description: 'Create or replace a UTF-8 text file inside the workspace.',
       parameters: object({ path: string('Path relative to the workspace.'), content: string('Full file content.') }, ['path', 'content']),
@@ -180,27 +221,40 @@ export function buildTools(workspace: string, options: ToolOptions = {}): Tool[]
           next_action: args.next_action
         })
       }
-    },
-    {
-      name: 'Memory',
-      description: 'Inspect or change durable Friday memory. Supports status, list, search, add, update, and remove commands.',
-      parameters: object({ command: string('Memory command without a leading `friday memory`.') }, ['command']),
-      async execute(args) {
-        if (typeof args.command !== 'string') throw new Error('command must be a string')
-        if (/^\s*consolidate\b/i.test(args.command)) {
-          throw new Error('Run memory consolidation from the UI after the active turn finishes.')
-        }
-        return formatMemoryResult(await runMemoryCommand(args.command, root))
-      }
-    },
-    buildSkillTool(root)
+    }
   ]
 }
 
+function memoryTool(root: string): Tool {
+  return {
+    name: 'Memory',
+    description: 'Inspect or change durable Friday memory. Supports status, list, search, add, update, and remove commands.',
+    parameters: object({ command: string('Memory command without a leading `friday memory`.') }, ['command']),
+    async execute(args) {
+      if (typeof args.command !== 'string') throw new Error('command must be a string')
+      if (/^\s*consolidate\b/i.test(args.command)) {
+        throw new Error('Run memory consolidation from the UI after the active turn finishes.')
+      }
+      return formatMemoryResult(await runMemoryCommand(args.command, root))
+    }
+  }
+}
+
+/**
+ * The verifier assembles only from built-in plugins and only their declared
+ * read-only tools. Declarations are checked against what actually assembled,
+ * so a renamed tool fails loudly here instead of silently vanishing from the
+ * verifier. The user's disabled-plugins list is honored - a capability the
+ * user unplugged stays unplugged during verification too - except for the
+ * required workspace pack.
+ */
 export function buildVerifierTools(workspace: string): Tool[] {
-  return buildTools(workspace)
-    .filter(tool => ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Bash', 'Skill'].includes(tool.name))
-    .map(tool => tool.name === 'Bash' ? { ...tool, preflight: call => preflightVerifierShell(call, workspace) } : tool)
+  const packs = markDisabled(builtinPlugins(workspace), disabledPlugins(workspace))
+  const allowed = packs.flatMap(pack => pack.disabled ? [] : [...pack.module?.verifierTools ?? []])
+  const tools = assembleTools(packs, { workspace: resolve(workspace) }).filter(tool => allowed.includes(tool.name))
+  const missing = allowed.filter(name => !tools.some(tool => tool.name === name))
+  if (missing.length) throw new Error(`Verifier tools are declared but not assembled: ${missing.join(', ')}`)
+  return tools.map(tool => tool.name === 'Bash' ? { ...tool, preflight: call => preflightVerifierShell(call, workspace) } : tool)
 }
 
 export async function runShell(

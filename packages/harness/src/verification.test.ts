@@ -27,7 +27,7 @@ test('verification JSON is strict and verifier shell access is read-only', async
   assert.equal(denied.action, 'deny')
   assert.equal(allowed.action, 'allow')
   assert.deepEqual(buildVerifierTools(process.cwd()).map(tool => tool.name), [
-    'Read', 'WebSearch', 'WebFetch', 'Glob', 'Grep', 'Bash', 'Skill'
+    'Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch', 'Skill'
   ])
 })
 

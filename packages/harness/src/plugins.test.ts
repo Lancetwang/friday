@@ -6,7 +6,8 @@ import { test } from 'node:test'
 
 import type { Tool } from 'friday-agent-core'
 
-import { applyPlugins, loadPlugins, pluginInfo, pluginInstructionSections } from './plugins.js'
+import { assembleTools, builtinPlugin, loadPlugins, markDisabled, pluginInfo, pluginSections } from './plugins.js'
+import { buildVerifierTools } from './tools.js'
 import { FridaySession } from './session.js'
 
 async function makeWorkspace(): Promise<{ home: string; workspace: string; restore: () => void }> {
@@ -47,7 +48,11 @@ const GOOD_PLUGIN = `export default {
 }
 `
 
-test('plugins load from disk, contribute tools and instructions, and report errors without breaking', async () => {
+function pack(name: string, tools: Tool[], extras: Record<string, unknown> = {}) {
+  return builtinPlugin({ name, tools: () => tools, ...extras })
+}
+
+test('external plugins load from disk, contribute tools and sections, and report errors without breaking', async () => {
   const { home, workspace, restore } = await makeWorkspace()
   try {
     await mkdir(join(workspace, '.friday', 'plugins'), { recursive: true })
@@ -58,38 +63,39 @@ test('plugins load from disk, contribute tools and instructions, and report erro
     await writeFile(join(home, 'plugins', 'broken.mjs'), 'export default 42\n')
     await writeFile(join(home, 'plugins', 'syntax.mjs'), 'this is not javascript\n')
 
-    const plugins = await loadPlugins(workspace)
-    assert.deepEqual(plugins.map(plugin => plugin.name).sort(), ['broken', 'greeter', 'syntax'])
+    const external = await loadPlugins(workspace)
+    assert.deepEqual(external.map(plugin => plugin.name).sort(), ['broken', 'greeter', 'syntax'])
 
-    const greeter = plugins.find(plugin => plugin.name === 'greeter')!
+    const greeter = external.find(plugin => plugin.name === 'greeter')!
     assert.equal(greeter.scope, 'project')
     assert.equal(greeter.description, 'Adds a greeting tool.')
     assert.equal(greeter.errors.length, 0)
+    assert.equal(external.find(plugin => plugin.name === 'broken')!.errors.length, 1)
 
-    const broken = plugins.find(plugin => plugin.name === 'broken')!
-    assert.equal(broken.module, undefined)
-    assert.equal(broken.errors.length, 1)
-
-    const sections = pluginInstructionSections(plugins)
-    assert.deepEqual(sections, [['Plugin: greeter', 'Use the Greet tool when the user asks for a greeting.']])
-
-    const read: Tool = {
-      name: 'Read', description: 'read', parameters: {},
-      execute: () => 'read-result'
-    }
-    const tools = applyPlugins([read], plugins, { workspace })
+    const read: Tool = { name: 'Read', description: 'read', parameters: {}, execute: () => 'read-result' }
+    const registry = [pack('core', [read], { required: true }), ...external]
+    const tools = assembleTools(registry, { workspace })
     assert.deepEqual(tools.map(tool => tool.name), ['Read', 'Greet'])
     assert.equal(await tools[1]!.execute({ who: 'friday' }), 'hello friday')
     assert.equal(await tools[0]!.execute({}), 'read-result')
 
-    const info = pluginInfo(plugins)
-    assert.deepEqual(info.find(item => item.name === 'greeter')!.tools, ['Greet'])
+    // Builtin sections keep product names; external ones carry the prefix.
+    const sections = pluginSections(
+      [pack('skills', [], { instructions: () => 'routing list' }), ...external],
+      { workspace }
+    )
+    assert.deepEqual(sections, [
+      ['Skills', 'routing list'],
+      ['Plugin: greeter', 'Use the Greet tool when the user asks for a greeting.']
+    ])
+
+    assert.deepEqual(pluginInfo(registry).find(item => item.name === 'greeter')!.tools, ['Greet'])
   } finally {
     restore()
   }
 })
 
-test('plugin tool collisions and schema-changing wrappers are rejected and recorded', async () => {
+test('tool collisions and schema-changing wrappers are rejected and recorded', async () => {
   const { workspace, restore } = await makeWorkspace()
   try {
     await mkdir(join(workspace, '.friday', 'plugins'), { recursive: true })
@@ -106,15 +112,15 @@ test('plugin tool collisions and schema-changing wrappers are rejected and recor
       }
     }\n`)
 
-    const plugins = await loadPlugins(workspace)
+    const external = await loadPlugins(workspace)
     const read: Tool = { name: 'Read', description: 'read', parameters: {}, execute: () => 'real' }
-    const tools = applyPlugins([read], plugins, { workspace })
+    const tools = assembleTools([pack('core', [read], { required: true }), ...external], { workspace })
 
     // The wrapper changed the schema, so the built-in stays untouched...
     assert.deepEqual(tools.map(tool => tool.name), ['Read', 'Fine'])
     assert.equal(await tools[0]!.execute({}), 'real')
     // ...and both violations are visible in the plugin report.
-    const hostile = plugins.find(plugin => plugin.name === 'hostile')!
+    const hostile = external.find(plugin => plugin.name === 'hostile')!
     assert.equal(hostile.errors.some(error => error.includes('wrapTool(Read)')), true)
     assert.equal(hostile.errors.some(error => error.includes('already registered: Read')), true)
     assert.deepEqual(hostile.toolNames, ['Fine'])
@@ -123,7 +129,48 @@ test('plugin tool collisions and schema-changing wrappers are rejected and recor
   }
 })
 
-test('a session exposes plugin tools and prompt sections end to end', async () => {
+test('disabling unplugs a capability everywhere, and required packs refuse', async () => {
+  const { workspace, restore } = await makeWorkspace()
+  try {
+    const read: Tool = { name: 'Read', description: 'read', parameters: {}, execute: () => 'real' }
+    const remember: Tool = { name: 'Memory', description: 'memory', parameters: {}, execute: () => 'stored' }
+    const registry = markDisabled([
+      pack('workspace', [read], { required: true }),
+      pack('memory', [remember]),
+      pack('skills', [], { instructions: () => 'routing' })
+    ], new Set(['workspace', 'memory', 'skills']))
+
+    // memory and skills unplug: no tool, no prompt section, reported disabled.
+    assert.deepEqual(assembleTools(registry, { workspace }).map(tool => tool.name), ['Read'])
+    assert.deepEqual(pluginSections(registry, { workspace }), [])
+    const info = pluginInfo(registry)
+    assert.equal(info.find(item => item.name === 'memory')!.disabled, true)
+    // The required workspace pack refused and says so.
+    assert.equal(info.find(item => item.name === 'workspace')!.disabled, false)
+    assert.equal(registry[0]!.errors.some(error => error.includes('required')), true)
+  } finally {
+    restore()
+  }
+})
+
+test('the verifier assembles from built-in read-only declarations and honors disabling', async () => {
+  const { workspace, restore } = await makeWorkspace()
+  try {
+    assert.deepEqual(buildVerifierTools(workspace).map(tool => tool.name), [
+      'Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch', 'Skill'
+    ])
+    process.env.FRIDAY_DISABLED_PLUGINS = 'web,skills'
+    try {
+      assert.deepEqual(buildVerifierTools(workspace).map(tool => tool.name), ['Read', 'Glob', 'Grep', 'Bash'])
+    } finally {
+      delete process.env.FRIDAY_DISABLED_PLUGINS
+    }
+  } finally {
+    restore()
+  }
+})
+
+test('a session registers built-ins and external plugins in one registry', async () => {
   const { home, workspace, restore } = await makeWorkspace()
   try {
     await writeFile(join(home, 'models.json'), JSON.stringify({
@@ -139,20 +186,37 @@ test('a session exposes plugin tools and prompt sections end to end', async () =
 
     const session = await FridaySession.create(workspace, 'plugin-session')
     const info = session.info()
-    assert.equal((info.tools as string[]).includes('Greet'), true)
+    const tools = info.tools as string[]
+    assert.equal(tools.includes('Greet'), true)
+    assert.equal(tools.includes('Memory'), true)
     const plugins = info.plugins as Array<Record<string, unknown>>
-    assert.equal(plugins.length, 1)
-    assert.deepEqual(plugins[0]!.tools, ['Greet'])
+    assert.deepEqual(plugins.map(plugin => plugin.name), ['workspace', 'web', 'memory', 'skills', 'greeter'])
+    assert.deepEqual(plugins.find(plugin => plugin.name === 'greeter')!.tools, ['Greet'])
 
     const system = session.context.messages.find(message => message.role === 'system')!
     assert.equal(String(system.content).includes('## Plugin: greeter'), true)
-    assert.equal(String(system.content).includes('Use the Greet tool'), true)
 
-    // FRIDAY_DISABLE_PLUGINS turns the whole seam off for hermetic runs.
+    // Unplugging memory removes the tool, the recall path, and nothing else.
+    process.env.FRIDAY_DISABLED_PLUGINS = 'memory'
+    try {
+      const trimmed = await FridaySession.create(workspace, 'plugin-session-trimmed')
+      const trimmedTools = trimmed.info().tools as string[]
+      assert.equal(trimmedTools.includes('Memory'), false)
+      assert.equal(trimmedTools.includes('Read'), true)
+      assert.equal(trimmedTools.includes('Greet'), true)
+      const report = trimmed.info().plugins as Array<Record<string, unknown>>
+      assert.equal(report.find(plugin => plugin.name === 'memory')!.disabled, true)
+    } finally {
+      delete process.env.FRIDAY_DISABLED_PLUGINS
+    }
+
+    // FRIDAY_DISABLE_PLUGINS=1 keeps built-ins and drops external code.
     process.env.FRIDAY_DISABLE_PLUGINS = '1'
     try {
       const bare = await FridaySession.create(workspace, 'plugin-off')
-      assert.equal((bare.info().tools as string[]).includes('Greet'), false)
+      const bareTools = bare.info().tools as string[]
+      assert.equal(bareTools.includes('Greet'), false)
+      assert.equal(bareTools.includes('Read'), true)
     } finally {
       delete process.env.FRIDAY_DISABLE_PLUGINS
     }

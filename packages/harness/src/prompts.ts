@@ -4,7 +4,6 @@ import { dirname, join, resolve } from 'node:path'
 
 import { fridayHome, projectStateDir, type ModelConfig } from './config.js'
 import { promptAssets } from './prompt-assets.js'
-import { skillRouting } from './skills.js'
 
 export function buildInstructions(
   workspace: string,
@@ -24,9 +23,9 @@ export function buildInstructions(
     ['Global Memory', userFile(home, ['MEMORY.md'])],
     ['Project Instructions', projectInstructions(workspace)],
     ['Project Memory', userFile(state, ['MEMORY.md'])],
-    ['Skills', skillRouting(workspace)],
-    // Plugin sections sit between the durable rules and the environment so
-    // they can guide tool choice without outranking security or user rules.
+    // Capability and plugin sections (Skills routing included) sit between
+    // the durable rules and the environment so they can guide tool choice
+    // without outranking security or user rules.
     ...extraSections,
     ['Environment', environment(workspace, config)]
   ]

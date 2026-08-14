@@ -428,6 +428,23 @@ export function resolveWorkspace(workspace: string): string {
   return value.startsWith('\\\\?\\') ? value.slice(4) : value
 }
 
+/**
+ * Plugins the user turned off, by name: `disabled_plugins` in the global or
+ * project config.json plus the FRIDAY_DISABLED_PLUGINS environment list.
+ * Built-in capabilities (web, memory, skills) and external plugins share
+ * this one switch; the required workspace pack ignores it.
+ */
+export function disabledPlugins(workspace: string): Set<string> {
+  const configured = [
+    readObject(join(fridayHome(), 'config.json')),
+    readObject(join(projectStateDir(workspace), 'config.json'))
+  ].flatMap(config => Array.isArray(config.disabled_plugins) ? config.disabled_plugins : [])
+  const environment = String(process.env.FRIDAY_DISABLED_PLUGINS || '').split(',')
+  return new Set(
+    [...configured, ...environment].map(value => String(value).trim().toLowerCase()).filter(Boolean)
+  )
+}
+
 function baseConfig(workspace: string): typeof DEFAULTS {
   const value = {
     ...DEFAULTS,
