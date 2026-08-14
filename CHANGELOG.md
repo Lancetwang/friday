@@ -2,6 +2,13 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.5.0 - Named things, legible traces (2026-08-15)
+
+- Conversations name themselves after the first user message: one small model call (lowest thinking, ~60 tokens) produces a short title in the user's language, falling back to the message prefix without a key. A manual rename always outranks the generated name, and a `session.titled` event refreshes UI lists as soon as the name lands.
+- Forks are named by the message they split from, not by their parent conversation: the branch title becomes `Fork: <message prefix>`, `session.tree` carries the source text, the desktop fork tooltip shows "Forked at: …", and the TUI branch map labels each branch with the originating message.
+- Rewrote the Trace Workbench as a flat execution log: only user / assistant / tool rows, colour-coded, one fixed-height monospace line each, in order. Clicking a row opens an inspector pane with the complete record - timestamps, arguments, output, token spend, cache hits, context occupancy, verification and guard events. The Trace Analyst lives in a tab of the same pane. Presentation chrome is gone; anomalies are visible from the row colour alone.
+- Redesigned the README architecture diagram around the plugin registry.
+
 ## v0.4.0 - Direct controls (2026-08-15)
 
 - Made every control surface operate directly. `/plugins` is now a picker that switches any plugin on or off (persisted to `disabled_plugins`, applied to the live session immediately) and the desktop gains a matching Settings → Plugins pane with one switch per plugin; the required workspace pack stays on. Bare `/memory` opens a searchable memory browser - `Enter` shows the full entry, `Ctrl+D` forgets it - while `/memory <args>` keeps the command form. Bare `/trace` toggles the Trace Workbench.

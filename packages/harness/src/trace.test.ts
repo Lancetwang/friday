@@ -59,12 +59,11 @@ test('trace RPC serves local structured records and stops idempotently', async (
       fetch(url).then(response => response.text()),
       fetch(`${url}/api/traces`).then(response => response.json()) as Promise<Array<Record<string, unknown>>>
     ])
-    assert.match(page, /Friday Observability/)
-    assert.match(page, /Turn audit/)
-    assert.match(page, /Trace analyst/)
-    assert.match(page, /id="analysis-form"/)
-    assert.match(page, /Execution Audit/)
-    assert.doesNotMatch(page, /id="detail"/)
+    assert.match(page, /friday trace/)
+    assert.match(page, /execution log/)
+    assert.match(page, /id="detail"/)
+    assert.match(page, /id="aform"/)
+    assert.match(page, /analyst/)
     for (const match of page.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Script(match[1]!)
     assert.equal(traces[0]?.user, 'inspect [redacted]')
     assert.equal((traces[0]?.events as Array<{ type: string }>)[0]?.type, 'tool.call')

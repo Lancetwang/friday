@@ -6,6 +6,8 @@ import { createServer, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+
+process.env.FRIDAY_AUTOTITLE = '0'
 import { promisify } from 'node:util'
 
 import {
@@ -470,6 +472,15 @@ test('session RPCs rename, fork, navigate, and delete a branch subtree', async (
     const fork = forkResponse.info.session_id
     assert.notEqual(fork, root)
     assert.deepEqual(forkResponse.history.map(item => item.kind), ['user', 'assistant'])
+    output.length = 0
+    await gateway.handle({ id: 'tree-fork', method: 'session.tree', params: { id: fork } })
+    const forkTree = responseResult(output, 'tree-fork') as { nodes: Array<{ id: string; title: string; fork_source?: string }> }
+    const forkNode = forkTree.nodes.find(node => node.id === fork)!
+    // The fork is named by the assistant message it split from, and the tree
+    // carries that source text so UIs can label the branch origin.
+    const forkedFrom = forkResponse.history.find(item => item.kind === 'assistant')!.text
+    assert.equal(forkNode.title.startsWith('Fork: '), true)
+    assert.equal(forkNode.fork_source, forkedFrom.replace(/\s+/g, ' ').trim().slice(0, 120))
     assert.deepEqual((await sessionChoices(workspace)).map(choice => choice.id), [root])
     output.length = 0
 

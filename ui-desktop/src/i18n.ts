@@ -224,6 +224,7 @@ const en: Record<string, string> = {
   'fork.main': 'Main session',
   'fork.fork': 'Fork session',
   'fork.from': 'Forked from "{title}"',
+  'fork.fromMessage': 'Forked at: \u201c{text}\u201d',
   'fork.open': 'Open',
   'fork.delete': 'Delete',
 
@@ -544,6 +545,7 @@ const zh: Record<string, string> = {
   'fork.main': '主会话',
   'fork.fork': 'Fork 会话',
   'fork.from': '从「{title}」分出',
+  'fork.fromMessage': '分叉自消息：「{text}」',
   'fork.open': '打开',
   'fork.delete': '删除',
 

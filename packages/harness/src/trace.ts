@@ -361,98 +361,195 @@ const TRACE_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>Friday Trace Workbench</title>
+<title>Friday Trace</title>
 <script>try{const t=localStorage.getItem("friday.trace.theme");if(t==="dark"||(!t&&matchMedia("(prefers-color-scheme: dark)").matches))document.documentElement.dataset.theme="dark"}catch(e){}</script>
 <style>
-:root{
-  color-scheme:light;--canvas:#efefeb;--surface:#f7f7f3;
-  --ink:#23262a;--ink-soft:rgba(35,38,42,.78);--muted:rgba(35,38,42,.55);--faint:rgba(35,38,42,.36);
-  --line:rgba(35,38,42,.1);--line-strong:rgba(35,38,42,.19);--fill:rgba(35,38,42,.045);--fill-strong:rgba(35,38,42,.075);
-  --accent:#2b51b5;--accent-ink:#24439a;--accent-soft:rgba(43,81,181,.1);--green:#2e9e5e;--red:#d94830;--amber:#b7791f;
-  --code-bg:rgba(35,38,42,.045);--shadow-1:0 1px 1px rgba(35,38,42,.05);--shadow-2:0 1px 3px rgba(35,38,42,.05),0 10px 24px -10px rgba(35,38,42,.1);
-  --mono:"JetBrains Mono","Cascadia Code",Consolas,monospace;
-  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Noto Serif SC","Source Han Serif SC","Songti SC",SimSun,serif;
-  font-family:var(--serif);font-optical-sizing:auto;color:var(--ink);background:var(--canvas)
-}
-[data-theme="dark"]{
-  color-scheme:dark;--canvas:#151719;--surface:#1d1f22;
-  --ink:#e3e5e8;--ink-soft:rgba(227,229,232,.78);--muted:rgba(227,229,232,.55);--faint:rgba(227,229,232,.36);
-  --line:rgba(227,229,232,.09);--line-strong:rgba(227,229,232,.18);--fill:rgba(227,229,232,.05);--fill-strong:rgba(227,229,232,.09);
-  --accent:#8da4ec;--accent-ink:#a5b7f1;--accent-soft:rgba(141,164,236,.15);--green:#55b87e;--red:#e5604a;--amber:#d6a64d;
-  --code-bg:rgba(227,229,232,.06);--shadow-1:0 1px 2px rgba(0,0,0,.3);--shadow-2:0 1px 4px rgba(0,0,0,.32),0 10px 24px -10px rgba(0,0,0,.48)
-}
-*{box-sizing:border-box}body{margin:0;height:100vh;overflow:hidden}
-body::after{position:fixed;inset:0;z-index:999;pointer-events:none;content:"";background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");mix-blend-mode:multiply;opacity:.05}
-[data-theme="dark"] body::after{mix-blend-mode:overlay;opacity:.07}button,textarea{font:inherit}button{cursor:pointer}::selection{background:var(--accent-soft)}
-.app-header{height:52px;padding:0 18px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
-.brand-dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}.app-header strong{font-size:15px;font-weight:700}.app-header .sub{color:var(--faint);font-size:12px}.spacer{flex:1}
-.theme-btn{display:grid;width:30px;height:30px;place-items:center;padding:0;border:0;border-radius:8px;color:var(--muted);background:transparent;transition:color .12s ease-out,background-color .12s ease-out}.theme-btn:hover{color:var(--ink);background:var(--fill)}
-.theme-btn svg{width:15px;height:15px;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;fill:none}.theme-btn .sun,[data-theme="dark"] .theme-btn .moon{display:none}[data-theme="dark"] .theme-btn .sun{display:block}
-main{height:calc(100vh - 52px);display:grid;grid-template-columns:256px minmax(430px,1fr) minmax(340px,400px)}
-.pane{min-width:0;overflow:auto;border-right:1px solid var(--line);scrollbar-width:thin;scrollbar-color:var(--faint) transparent}
-.pane-title{position:sticky;top:0;z-index:3;margin:0;padding:13px 16px 11px;border-bottom:1px solid var(--line);background:var(--canvas);font-size:11px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
-.sessions-pane>div{padding:6px 8px}.session{display:block;width:100%;margin:1px 0;padding:9px 10px;border:0;border-radius:8px;background:transparent;color:inherit;text-align:left;transition:background-color .12s ease-out}.session:hover{background:var(--fill)}.session.active{background:var(--fill-strong)}
-.session b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:550}.session .meta{margin-top:4px;color:var(--faint);font-size:11px;line-height:1.5}.empty{padding:20px 16px;color:var(--faint);font-size:12px}
-.turns{padding:10px 26px 64px}.turn{border-bottom:1px solid var(--line)}.turn>summary{display:grid;grid-template-columns:14px 92px minmax(0,1fr) auto;gap:10px;align-items:center;padding:14px 0;cursor:pointer;list-style:none;font-size:11px}.turn>summary::-webkit-details-marker,.activity>summary::-webkit-details-marker{display:none}
-.chev{color:var(--faint);font-size:13px;line-height:1;transition:transform .18s cubic-bezier(.32,.72,0,1)}.turn[open]>summary .chev,.activity[open]>summary .chev{transform:rotate(90deg)}
-.turn-index{color:var(--ink);font-size:12px;font-weight:650}.turn-flow{overflow:hidden;color:var(--muted);text-overflow:ellipsis;white-space:nowrap}.turn-meta{color:var(--faint);white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}.turn-body{padding:2px 0 20px 24px}
-.audit-list{overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.activity{border-bottom:1px solid var(--line)}.activity:last-child{border-bottom:0}
-.activity>summary{display:grid;grid-template-columns:14px 66px minmax(120px,1fr) auto;gap:10px;align-items:center;padding:10px 12px;cursor:pointer;list-style:none;font-size:11px}.activity-kind{overflow:hidden;color:var(--faint);font:600 9px var(--mono);letter-spacing:.06em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}.activity-label{min-width:0;color:var(--ink-soft);font-size:12px;font-weight:600}.activity-label small{display:block;overflow:hidden;margin-top:2px;color:var(--faint);font-size:10px;font-weight:450;text-overflow:ellipsis;white-space:nowrap}.activity-meta{color:var(--faint);white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}.activity-cite{margin-right:5px;color:var(--accent-ink);font:9px var(--mono)}
-.status{display:inline-block;width:6px;height:6px;margin-right:7px;border-radius:50%;background:var(--green);vertical-align:1px}.status.failed,.status.error,.status.blocked,.status.cancelled{background:var(--red)}.status.running,.status.working{background:var(--accent)}.status.repair,.status.inconclusive,.status.needs_approval,.status.paused,.status.waiting{background:var(--amber)}
-.activity-body{padding:0 12px 12px 36px}.audit-field{margin-top:9px}.audit-field b{display:block;margin-bottom:5px;color:var(--faint);font:600 9px var(--mono);letter-spacing:.06em;text-transform:uppercase}.activity-body pre{max-height:320px;margin:8px 0 0;padding:11px 13px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--code-bg);white-space:pre-wrap;word-break:break-word;color:var(--ink-soft);font:11px/1.55 var(--mono);scrollbar-width:thin;scrollbar-color:var(--faint) transparent}
-.msg-content code{padding:2px 5px;border-radius:5px;background:var(--code-bg);color:var(--accent-ink);font:12px var(--mono)}.msg-content pre{margin:8px 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--code-bg);white-space:pre-wrap;word-break:break-word;color:var(--ink-soft);font:12px/1.6 var(--mono)}.msg-content pre code{padding:0;background:transparent;color:inherit}
-#analysis-pane{display:flex;flex-direction:column;overflow:hidden;border-right:0}#chat{display:flex;flex:1;flex-direction:column;min-height:0}.messages{flex:1;overflow:auto;padding:10px 18px 90px;scrollbar-width:thin;scrollbar-color:var(--faint) transparent}.messages:empty::before{display:block;padding:22px 2px;color:var(--faint);content:"Ask about a decision, tool call, failure, or token spike in this session.";font-size:12px;line-height:1.6}
-.msg{display:grid;grid-template-columns:38px minmax(0,1fr);gap:10px;padding:14px 0;border-bottom:1px solid var(--line)}.msg-role{padding-top:2px;color:var(--faint);font-size:10px;font-weight:700;letter-spacing:.08em}.msg.user .msg-role{color:var(--accent)}.msg-content{min-width:0;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.65}.msg-content.streaming:after{display:inline-block;width:2px;height:1em;margin-left:3px;border-radius:1px;background:var(--accent);vertical-align:-2px;content:"";animation:blink .9s steps(1) infinite}.msg-content .heading{display:block;margin:10px 0 3px;font-size:15px;font-weight:700}.msg-content .ev{padding:1px 5px;border-radius:5px;background:var(--accent-soft);color:var(--accent-ink);font:11px var(--mono)}
-#analysis-form{display:grid;grid-template-columns:1fr auto;gap:4px 10px;margin:0 14px 14px;padding:10px 10px 10px 12px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow-2);transition:border-color .14s ease-out}#analysis-form:focus-within{border-color:var(--line-strong)}textarea{min-height:42px;max-height:140px;padding:4px 2px;resize:vertical;border:0;outline:0;background:transparent;color:var(--ink);font-size:13px;line-height:1.5}textarea::placeholder{color:var(--faint)}
-#analyze-button{align-self:end;width:34px;height:34px;border:0;border-radius:50%;background:var(--ink);color:var(--canvas);font-size:17px;line-height:1;transition:transform .16s cubic-bezier(.16,1,.3,1)}#analyze-button:hover:not(:disabled){transform:scale(1.06)}#analyze-button:disabled{cursor:default}.analysis-note{grid-column:1/-1;color:var(--faint);font-size:10px;line-height:1.45}.analysis-status{color:var(--accent-ink);font-weight:600}.busy textarea,.busy button{opacity:.5;pointer-events:none}@keyframes blink{50%{opacity:0}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
-@media(max-width:1100px){body{height:auto;overflow:auto}main{height:auto;grid-template-columns:220px minmax(0,1fr)}.pane{min-height:560px}.trace-pane{border-right:0}#analysis-pane{grid-column:1/-1;height:520px;min-height:0;border-top:1px solid var(--line)}}
-@media(max-width:700px){main{display:block}.pane{min-height:auto;max-height:none;border-right:0;border-bottom:1px solid var(--line)}.sessions-pane{max-height:240px}.turns{padding:8px 14px 40px}.turn>summary{grid-template-columns:14px 74px 1fr}.turn-meta{grid-column:3}.turn-body{padding-left:10px}.activity>summary{grid-template-columns:14px 52px minmax(0,1fr)}.activity-meta{grid-column:3}#analysis-pane{height:520px}}
+:root{color-scheme:light;--bg:#f6f6f4;--panel:#fbfbfa;--ink:#24262a;--mut:#71757d;--faint:#a2a6ad;--line:#e2e2de;
+--user:#2b51b5;--asst:#2e7d4f;--tool:#9a6210;--err:#c93a2a;--warn:#b7791f;--sel:rgba(43,81,181,.09);
+--mono:"JetBrains Mono","Cascadia Code",ui-monospace,Consolas,monospace}
+[data-theme="dark"]{color-scheme:dark;--bg:#141619;--panel:#1a1d21;--ink:#dcdee2;--mut:#8f939b;--faint:#5c6069;--line:#26292e;
+--user:#7d97e8;--asst:#5fbb87;--tool:#d0a04a;--err:#e5604a;--warn:#d6a64d;--sel:rgba(125,151,232,.12)}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font:12px/1.5 var(--mono)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+header{display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;border-bottom:1px solid var(--line)}
+header b{font-size:12px}header .sub{color:var(--faint)}header .sp{flex:1}
+.tbtn{color:var(--mut);padding:4px 8px;border:1px solid var(--line);border-radius:4px}.tbtn:hover{color:var(--ink)}
+main{display:grid;grid-template-columns:230px minmax(360px,1fr) minmax(360px,480px);height:calc(100% - 40px)}
+.pane{min-width:0;overflow:auto;border-right:1px solid var(--line)}
+.pane h2{position:sticky;top:0;z-index:2;margin:0;padding:8px 10px;background:var(--bg);border-bottom:1px solid var(--line);color:var(--faint);font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.sess{display:block;width:100%;text-align:left;padding:7px 10px;border-bottom:1px solid var(--line)}
+.sess:hover{background:var(--sel)}.sess.on{background:var(--sel);box-shadow:inset 2px 0 0 var(--user)}
+.sess b{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-weight:600}
+.sess small{color:var(--faint)}
+.empty{padding:16px 12px;color:var(--faint)}
+/* log */
+#log{background:var(--panel)}
+.row{display:grid;grid-template-columns:44px 66px 46px minmax(0,1fr) auto;gap:8px;align-items:center;
+height:26px;padding:0 10px;width:100%;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+.row:hover{background:var(--sel)}.row.on{background:var(--sel);box-shadow:inset 2px 0 0 var(--user)}
+.row.turn0{border-top:2px solid var(--line)}
+.row .n{color:var(--faint);text-align:right;font-size:10px}
+.row .t{color:var(--faint);font-size:10px}
+.row .role{font-size:10px;font-weight:700;letter-spacing:.04em}
+.row.user .role{color:var(--user)}.row.assistant .role{color:var(--asst)}.row.tool .role{color:var(--tool)}
+.row .sum{overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.row.tool .sum{color:var(--mut)}
+.row .meta{color:var(--faint);font-size:10px;text-align:right;font-variant-numeric:tabular-nums}
+.row.err .sum,.row.err .meta,.row.err .role{color:var(--err)}
+.row.warn .meta{color:var(--warn)}
+/* inspector */
+#insp{border-right:0;display:flex;flex-direction:column}
+#tabs{display:flex;gap:2px;padding:6px 8px 0;border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:2}
+#tabs button{padding:5px 10px;color:var(--mut);border:1px solid transparent;border-bottom:0;border-radius:4px 4px 0 0;font-size:11px}
+#tabs button.on{color:var(--ink);border-color:var(--line);background:var(--panel)}
+#detail{flex:1;overflow:auto;padding:10px 12px 40px}
+#detail .kv{display:grid;grid-template-columns:110px 1fr;gap:2px 10px;margin-bottom:10px}
+#detail .kv b{color:var(--faint);font-weight:500}
+#detail .kv span{word-break:break-all}
+#detail h3{margin:14px 0 4px;color:var(--faint);font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+#detail pre{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:var(--bg);
+white-space:pre-wrap;word-break:break-word;max-height:340px;overflow:auto;font-size:11px}
+.role-tag{font-weight:700}.role-tag.user{color:var(--user)}.role-tag.assistant{color:var(--asst)}.role-tag.tool{color:var(--tool)}
+/* analyst */
+#analyst{flex:1;display:none;flex-direction:column;min-height:0}
+#msgs{flex:1;overflow:auto;padding:10px 12px}
+#msgs .m{margin-bottom:10px;white-space:pre-wrap;word-break:break-word}
+#msgs .m b{display:block;font-size:10px;letter-spacing:.06em}
+#msgs .m.user b{color:var(--user)}#msgs .m.assistant b{color:var(--asst)}
+#aform{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line)}
+#aform textarea{flex:1;min-height:34px;max-height:120px;resize:vertical;padding:6px 8px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--ink);font:inherit}
+#aform button{padding:0 12px;border:1px solid var(--line);border-radius:4px;color:var(--mut)}
+#aform button:hover{color:var(--ink)}
+#astatus{padding:0 12px 8px;color:var(--faint);font-size:10px}
+@media(max-width:1000px){main{grid-template-columns:200px 1fr}#insp{display:none}}
 </style>
 </head>
 <body>
-<header class="app-header"><span class="brand-dot"></span><strong>Friday Observability</strong><span class="sub">Execution Audit</span><span class="spacer"></span>
-<button class="theme-btn" id="theme-toggle" aria-label="Toggle color theme" title="Toggle color theme" type="button"><svg class="moon" viewBox="0 0 24 24"><path d="M20.2 14.5A8.3 8.3 0 0 1 9.5 3.8a8.3 8.3 0 1 0 10.7 10.7Z"/></svg><svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg></button></header>
-<main><section class="pane sessions-pane"><h2 class="pane-title">Sessions</h2><div id="sessions" class="empty">Loading…</div></section><section class="pane trace-pane"><h2 class="pane-title" id="trace-title">Turn audit</h2><div id="turns" class="empty">Select a session.</div></section><section class="pane" id="analysis-pane"><h2 class="pane-title">Trace analyst</h2><div id="chat"><div class="messages" id="messages"></div><form id="analysis-form"><div class="analysis-note" id="analysis-status">Select a session first. The analyst reads the same audit evidence shown here.</div><textarea id="question" maxlength="8000" placeholder="Ask why this session behaved this way..." disabled></textarea><button id="analyze-button" type="submit" aria-label="Analyze" title="Analyze" disabled>&uarr;</button></form></div></section></main>
+<header><b>friday trace</b><span class="sub" id="hdr">execution log</span><span class="sp"></span>
+<button class="tbtn" id="theme">theme</button></header>
+<main>
+<section class="pane"><h2>sessions</h2><div id="sessions" class="empty">loading…</div></section>
+<section class="pane" id="log"><h2 id="logtitle">log</h2><div id="rows" class="empty">select a session</div></section>
+<section class="pane" id="insp">
+  <div id="tabs"><button id="tab-i" class="on">inspect</button><button id="tab-a">analyst</button></div>
+  <div id="detail"><div class="empty">click a row</div></div>
+  <div id="analyst">
+    <div id="msgs"></div>
+    <div id="astatus">the analyst reads the same trace evidence.</div>
+    <form id="aform"><textarea id="q" maxlength="8000" placeholder="why did this session behave this way?" disabled></textarea><button id="go" disabled>ask</button></form>
+  </div>
+</section>
+</main>
 <script>
-let sessionId='',analysisId='',analysisRunning=false,sessions=[],rendered='';
+let sessions=[],sessionId='',rows=[],selectedKey='',analysisId='',running=false,renderedKey='';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const md=s=>{const blocks=[],marker=String.fromCharCode(1);let h=esc(s).replace(/\\x60\\x60\\x60(\\w*)\\n([\\s\\S]*?)\\x60\\x60\\x60/g,function(_match,_language,content){blocks.push('<pre><code>'+content.replace(/\\n$/,'')+'</code></pre>');return marker+(blocks.length-1)+marker});h=h.replace(/^#{2,4} (.+)$/gm,'<span class="heading">$1</span>').replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>').replace(/\\x60([^\\x60\\n]+)\\x60/g,'<code>$1</code>').replace(/\\[event:([\\d,]+)\\]/g,'<code class="ev">[event:$1]</code>').replace(/^- (.+)$/gm,'• $1');blocks.forEach(function(block,index){h=h.replace(marker+index+marker,block)});return h};
-const object=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:{};
+const one=s=>String(s??'').replace(/\\s+/g,' ').trim();
 const num=n=>Number(n).toLocaleString();
-const time=v=>{if(!v)return'';const d=new Date(v);return Number.isNaN(d.valueOf())?String(v):d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})};
-const date=v=>{if(!v)return'';const d=new Date(v);return Number.isNaN(d.valueOf())?String(v):d.toLocaleString()};
-const duration=ms=>ms==null?'':ms<1000?ms+' ms':(ms/1000).toFixed(ms<10000?2:1)+' s';
-async function api(path){const response=await fetch(path,{cache:'no-store'}),value=await response.json();if(!response.ok)throw new Error(value.error||response.statusText);return value}
-function grouped(rows){const groups=new Map();for(const row of rows){const id=String(row.session_id||'unknown');let group=groups.get(id);if(!group){group={id,title:id,status:row.status||'done',updated:row.created||'',turns:[]};groups.set(id,group)}group.turns.push(row);if(row.user)group.title=row.user}return [...groups.values()].map(group=>({...group,turns:group.turns.reverse()}))}
-function tokenMeta(value){const parts=[];if(value.input_tokens!=null)parts.push('in '+num(value.input_tokens));if(value.output_tokens!=null)parts.push('out '+num(value.output_tokens));if(value.cached_tokens!=null)parts.push('cached '+num(value.cached_tokens));if(value.requests!=null)parts.push(num(value.requests)+' req');return parts.join(' · ')}
-function auditField(label,value,json=false){if(value==null||value==='')return'';const text=json?JSON.stringify(value,null,2):String(value);return '<div class="audit-field"><b>'+esc(label)+'</b><pre>'+esc(text)+'</pre></div>'}
-function activities(trace,firstCitation=0){const result=[],tools=new Map(),events=Array.isArray(trace.events)?trace.events:[];let model=null,verification=null;for(let eventIndex=0;eventIndex<events.length;eventIndex++){const event=events[eventIndex],data=object(event.data),at=event.timestamp||trace.created,refs=firstCitation?[firstCitation+eventIndex]:[];let item;
-  if(event.type==='model.request'){model={kind:'model',label:'Model request',summary:String(data.message_count||0)+' messages',status:'running',time:at,details:{request:data},citations:refs};result.push(model);continue}
-  if(event.type==='model.response'){item=model||{kind:'model',label:'Model response',status:'done',time:at,details:{},citations:[]};if(!model)result.push(item);item.citations.push(...refs);item.label='Model response';item.summary=data.has_tool_calls?'Tool calls requested':'Response recorded';item.status='done';item.details.response=data;Object.assign(item,object(data.usage));model=null;continue}
-  if(event.type==='tool.call'){item={kind:'tool',label:String(data.name||'Tool'),summary:'Tool call',status:'running',time:at,arguments:data.arguments,details:{tool_call_id:data.tool_call_id},citations:refs};tools.set(String(data.tool_call_id||''),item);result.push(item);continue}
-  if(event.type==='tool.result'){item=tools.get(String(data.tool_call_id||''))||{kind:'tool',label:'Tool result',summary:'Tool result',time:at,citations:[]};if(!tools.has(String(data.tool_call_id||'')))result.push(item);item.citations.push(...refs);item.status=data.is_error?'error':'done';item.result=data.content;item.duration_ms=data.elapsed_ms;continue}
-  if(event.type==='tool.progress'){item=tools.get(String(data.tool_call_id||''));if(item)item.citations.push(...refs);continue}
-  if(event.type==='verification.start'){verification={kind:'verification',label:'Verification',summary:'Attempt '+String(data.attempt||''),status:'running',time:at,details:{start:data},citations:refs};result.push(verification);continue}
-  if(event.type==='verification.result'){item=verification||{kind:'verification',label:'Verification',time:at,details:{},citations:[]};if(!verification)result.push(item);item.citations.push(...refs);item.status=data.verdict==='pass'?'done':String(data.verdict||'inconclusive');item.summary=String(data.reason||data.verdict||'Verification complete');item.details.result=data;Object.assign(item,data);verification=null;continue}
-  const labels={'context.compacted':'Context compacted','approval.review':'Permission review','memory.updated':'Memory updated','loop.warning':'Loop warning','loop.guard':'Run stopped','agent.paused':'Waiting for approval','progress.updated':'Progress updated'};
-  item={kind:String(event.category||'runtime'),label:labels[event.type]||String(event.type||'Event'),summary:'',status:event.type==='loop.guard'?'blocked':event.type==='agent.paused'?'paused':'done',time:at,details:data,citations:refs};result.push(item)
-}return result}
-function activityBody(item){return (item.content?auditField(item.kind==='user'?'User message':'Model output',item.content):'')+(item.arguments!==undefined?auditField('Tool input',item.arguments,true):'')+(item.result!==undefined?auditField('Tool output',item.result):'')+(item.details&&Object.keys(item.details).length?auditField('Event data',item.details,true):'')}
-function activityRow(item){const meta=[tokenMeta(item),duration(item.duration_ms),time(item.time)].filter(Boolean).join(' · '),cite=item.citations&&item.citations.length?'<code class="activity-cite">[event:'+item.citations.join(',')+']</code>':'';return '<details class="activity"><summary><span class="chev">›</span><span class="activity-kind">'+esc(item.kind)+'</span><span class="activity-label"><i class="status '+esc(item.status||'done')+'"></i>'+esc(item.label)+'<small>'+esc(item.summary||'')+'</small></span><span class="activity-meta">'+cite+esc(meta)+'</span></summary><div class="activity-body">'+activityBody(item)+'</div></details>'}
-function auditRows(trace,firstCitation){const events=Array.isArray(trace.events)?trace.events:[],rows=[{kind:'user',label:'User input',summary:trace.user||'Empty input',content:trace.user||'',status:'done',time:trace.created,citations:[firstCitation]}];rows.push(...activities(trace,firstCitation+1));if(trace.assistant)rows.push({kind:'model',label:'Recorded response',summary:trace.assistant.length+' chars',content:trace.assistant,status:trace.status||'done',time:trace.created,citations:[firstCitation+events.length+1]});return rows}
-function flowSummary(trace){const counts={model:0,tool:0,verification:0,context:0,approval:0};for(const item of activities(trace))if(item.kind in counts)counts[item.kind]++;const stages=['input',counts.model?counts.model+' model':'',counts.tool?counts.tool+' tool':'',counts.verification?counts.verification+' verify':'',counts.context?counts.context+' compact':'',counts.approval?counts.approval+' approval':'','output'];return stages.filter(Boolean).join(' → ')}
-function turnRow(trace,index,last,firstCitation){const metrics=object(trace.metrics),meta=[tokenMeta(metrics),duration(metrics.elapsed_ms)].filter(Boolean).join(' · '),rows=auditRows(trace,firstCitation);return '<details class="turn"'+(last?' open':'')+'><summary><span class="chev">›</span><span class="turn-index">Turn '+(index+1)+'</span><span class="turn-flow"><i class="status '+esc(trace.status||'done')+'"></i>'+esc(flowSummary(trace))+'</span><span class="turn-meta">'+esc(meta||trace.status||'done')+' · '+esc(time(trace.created))+'</span></summary><div class="turn-body"><div class="audit-list">'+rows.map(activityRow).join('')+'</div></div></details>'}
-function renderTurns(session){const key=session.id+':'+session.turns.map(turn=>turn.id).join(',');if(key===rendered)return;rendered=key;document.querySelector('#trace-title').textContent='Audit / '+session.title;const el=document.querySelector('#turns');el.className='turns';let citation=1;const html=session.turns.map((turn,index)=>{const row=turnRow(turn,index,index===session.turns.length-1,citation),events=Array.isArray(turn.events)?turn.events:[];citation+=1+events.length+(turn.assistant?1:0);return row});el.innerHTML=html.length?html.join(''):'<div class="empty">No turns recorded.</div>'}
-function appendMessage(role,content){const el=document.querySelector('#messages'),node=document.createElement('article');node.className='msg '+role;node.innerHTML='<div class="msg-role">'+(role==='user'?'YOU':'FRI')+'</div><div class="msg-content">'+md(content)+'</div>';el.appendChild(node);el.scrollTop=el.scrollHeight;return node.querySelector('.msg-content')}
-function renderMessages(items){const el=document.querySelector('#messages');el.innerHTML='';for(const item of items)appendMessage(item.role,item.content)}
-function clearSession(){sessionId='';analysisId='';rendered='';document.querySelector('#trace-title').textContent='Turn audit';const turns=document.querySelector('#turns');turns.className='empty';turns.textContent='Select a session.';renderMessages([]);const question=document.querySelector('#question'),button=document.querySelector('#analyze-button');question.disabled=true;button.disabled=true;document.querySelector('#analysis-status').textContent='Select a session first. The analyst reads the same audit evidence shown here.'}
-async function selectSession(session){if(analysisRunning)return;sessionId=session.id;analysisId='';document.querySelectorAll('.session').forEach(node=>node.classList.toggle('active',node.dataset.id===sessionId));renderTurns(session);renderMessages([]);const selected=sessionId,question=document.querySelector('#question'),button=document.querySelector('#analyze-button'),status=document.querySelector('#analysis-status');question.disabled=false;button.disabled=false;status.textContent='Loading analysis history for this bounded audit view…';try{const value=await api('/api/sessions/'+encodeURIComponent(selected)+'/analyses');if(sessionId!==selected)return;const latest=value.analyses&&value.analyses[0];if(latest){analysisId=latest.analysis_id;renderMessages(latest.messages||[])}status.textContent="Uses Friday's configured model and cannot execute tools. Ask a follow-up about this session."}catch(error){if(sessionId===selected)status.textContent='Could not load analysis history: '+String(error.message||error)}}
-function renderSessions(){const el=document.querySelector('#sessions');el.className='';el.innerHTML=sessions.length?'':'<div class="empty">No TypeScript traces yet.</div>';for(const session of sessions){const button=document.createElement('button');button.className='session'+(session.id===sessionId?' active':'');button.dataset.id=session.id;button.title=session.id;button.innerHTML='<b>'+esc(session.title)+'</b><div class="meta">'+esc(session.status)+' · '+session.turns.length+' turns<br>'+esc(date(session.updated))+'</div>';button.onclick=()=>selectSession(session);el.appendChild(button)}const selected=sessions.find(session=>session.id===sessionId);if(sessionId&&!selected)clearSession();else if(!sessionId&&sessions[0])selectSession(sessions[0]);else if(selected)renderTurns(selected)}
+const hms=v=>{if(!v)return'';const d=new Date(v);return Number.isNaN(d.valueOf())?String(v):d.toLocaleTimeString([],{hour12:false})};
+const dur=ms=>ms==null?'':ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(ms<10000?2:1)+'s';
+const pretty=v=>{if(typeof v==='string'){try{return JSON.stringify(JSON.parse(v),null,2)}catch(e){return v}}return JSON.stringify(v,null,2)};
+async function api(path){const r=await fetch(path,{cache:'no-store'});const v=await r.json();if(!r.ok)throw new Error(v.error||r.statusText);return v}
+function grouped(list){const g=new Map();for(const t of list){const id=String(t.session_id||'unknown');let e=g.get(id);if(!e){e={id,title:id,status:t.status||'done',updated:'',turns:[]};g.set(id,e)}e.turns.push(t);if(t.user)e.title=t.user;e.updated=t.created||e.updated;e.status=t.status||e.status}return[...g.values()].sort((a,b)=>String(b.updated).localeCompare(String(a.updated)))}
+function tokenMeta(m){const p=[];if(m.requests!=null)p.push(num(m.requests)+'req');if(m.input_tokens!=null)p.push('in '+num(m.input_tokens)+(m.cached_tokens!=null?'('+num(m.cached_tokens)+'c)':''));if(m.output_tokens!=null)p.push('out '+num(m.output_tokens));if(m.elapsed_ms!=null)p.push(dur(m.elapsed_ms));return p.join(' ')}
+const BAD={failed:1,error:1,blocked:1,cancelled:1,no_progress:1,context_window:1};
+const WARN={repair:1,inconclusive:1,needs_approval:1,paused:1,waiting:1,max_attempts:1};
+function buildRows(session){
+  const out=[];let n=0;
+  for(const trace of session.turns){
+    const events=Array.isArray(trace.events)?trace.events:[];
+    const other=[];const calls=new Map();let first=true;
+    const push=r=>{r.n=++n;r.turn0=first;first=false;out.push(r)};
+    if(trace.user)push({key:trace.id+':u',role:'user',time:trace.created,sum:one(trace.user),
+      meta:trace.mode&&trace.mode!=='normal'?trace.mode:'',trace,detail:{content:trace.user}});
+    for(const ev of events){const d=ev.data&&typeof ev.data==='object'?ev.data:{};
+      if(ev.type==='tool.call'){const item={key:trace.id+':t:'+String(d.tool_call_id||n),role:'tool',time:ev.timestamp,
+        name:String(d.name||'tool'),args:d.arguments,sum:String(d.name||'tool')+' '+one(JSON.stringify(d.arguments||{})),
+        meta:'…',trace,detail:{}};calls.set(String(d.tool_call_id||''),item);push(item);continue}
+      if(ev.type==='tool.result'){const item=calls.get(String(d.tool_call_id||''));
+        if(item){item.err=!!d.is_error;item.result=d.content;item.elapsed=d.elapsed_ms;item.resultTime=ev.timestamp;
+          item.meta=(d.is_error?'ERR ':'')+dur(d.elapsed_ms)}continue}
+      if(!['tool.progress','model.request','message.add'].includes(ev.type))other.push(ev)}
+    const st=String(trace.status||'done');
+    const isVerify=trace.mode==='verification';
+    if(trace.assistant||isVerify||BAD[st]||WARN[st]){
+      const m=trace.metrics&&typeof trace.metrics==='object'?trace.metrics:{};
+      push({key:trace.id+':a',role:'assistant',time:trace.created,
+        sum:isVerify?'verification → '+st:one(trace.assistant||'('+st+')'),
+        meta:tokenMeta(m)||st,err:!!BAD[st],warn:!!WARN[st],trace,other,metrics:m,
+        detail:{content:trace.assistant}})}
+    else if(other.length&&out.length)Object.assign(out[out.length-1],{other})}
+  return out}
+function kv(pairs){return '<div class="kv">'+pairs.filter(p=>p[1]!==''&&p[1]!=null).map(p=>'<b>'+esc(p[0])+'</b><span>'+esc(p[1])+'</span>').join('')+'</div>'}
+function sec(title,body){return body?'<h3>'+esc(title)+'</h3><pre>'+esc(body)+'</pre>':''}
+function renderDetail(row){const el=document.querySelector('#detail');if(!row){el.innerHTML='<div class="empty">click a row</div>';return}
+  const t=row.trace,m=row.metrics||{},base=[['role',row.role],['time',hms(row.time)+(row.resultTime?' → '+hms(row.resultTime):'')],
+    ['turn',String(t.id||'')],['mode',String(t.mode||'')],['status',String(t.status||'')],['session',String(t.session_id||'')]];
+  let html='<div class="role-tag '+row.role+'">'+row.role.toUpperCase()+'</div>'+kv(base);
+  if(row.role==='tool'){html+=kv([['tool',row.name],['elapsed',dur(row.elapsed)],['error',row.err?'yes':'no']])
+    +sec('arguments',pretty(row.args||{}))+sec('output',typeof row.result==='string'?row.result:pretty(row.result))}
+  if(row.role==='user')html+=sec('message',row.detail.content||'');
+  if(row.role==='assistant'){const mk=[['requests',m.requests],['input tokens',m.input_tokens],['cached',m.cached_tokens],
+    ['output tokens',m.output_tokens],['elapsed',m.elapsed_ms!=null?dur(m.elapsed_ms):null],
+    ['context',m.window_tokens!=null&&m.window?num(m.window_tokens)+' / '+num(m.window)+' ('+Math.round(m.window_tokens/m.window*100)+'%)':null]]
+    .filter(p=>p[1]!=null).map(p=>[p[0],String(p[1])]);
+    html+=kv(mk)+sec('response',row.detail.content||'')
+    +(t.progress&&Object.keys(t.progress).length?sec('progress',pretty(t.progress)):'')
+    +(row.other&&row.other.length?sec('other events ('+row.other.length+')',row.other.map(e=>hms(e.timestamp)+' '+e.type+' '+JSON.stringify(e.data)).join('\\n')):'')}
+  el.innerHTML=html}
+function renderRows(session){const key=session.id+':'+session.turns.length+':'+String(session.turns.map(t=>t.id).join(','));
+  const el=document.querySelector('#rows');
+  document.querySelector('#logtitle').textContent='log · '+session.title.slice(0,60);
+  if(key!==renderedKey){renderedKey=key;rows=buildRows(session);el.className='';
+    el.innerHTML=rows.map(r=>'<button class="row '+r.role+(r.err?' err':'')+(r.warn?' warn':'')+(r.turn0?' turn0':'')+(r.key===selectedKey?' on':'')+'" data-key="'+esc(r.key)+'">'
+      +'<span class="n">'+r.n+'</span><span class="t">'+esc(hms(r.time))+'</span><span class="role">'+(r.role==='assistant'?'ASST':r.role.toUpperCase())+'</span>'
+      +'<span class="sum">'+esc(r.sum)+'</span><span class="meta">'+esc(r.meta||'')+'</span></button>').join('')||'<div class="empty">no rows</div>';
+    for(const b of el.querySelectorAll('.row'))b.onclick=()=>select(b.dataset.key);
+    if(!selectedKey)el.scrollTop=el.scrollHeight}
+  const current=rows.find(r=>r.key===selectedKey);renderDetail(current||null)}
+function select(key){selectedKey=key;for(const b of document.querySelectorAll('#rows .row'))b.classList.toggle('on',b.dataset.key===key);
+  showTab('i');renderDetail(rows.find(r=>r.key===key)||null)}
+function renderSessions(){const el=document.querySelector('#sessions');el.className='';
+  el.innerHTML=sessions.length?'':'<div class="empty">no traces yet</div>';
+  for(const s of sessions){const b=document.createElement('button');b.className='sess'+(s.id===sessionId?' on':'');
+    b.innerHTML='<b>'+esc(one(s.title).slice(0,60))+'</b><small>'+esc(s.status)+' · '+s.turns.length+' turns · '+esc(hms(s.updated))+'</small>';
+    b.onclick=()=>{if(running)return;sessionId=s.id;selectedKey='';renderedKey='';analysisId='';document.querySelector('#msgs').innerHTML='';enableAnalyst();renderSessions()};
+    el.appendChild(b)}
+  const sel=sessions.find(s=>s.id===sessionId);
+  if(sessionId&&!sel){sessionId='';selectedKey='';renderedKey='';const r=document.querySelector('#rows');r.className='empty';r.textContent='select a session'}
+  else if(!sessionId&&sessions[0]){sessionId=sessions[0].id;enableAnalyst();renderSessions();return}
+  else if(sel)renderRows(sel)}
 async function load(){sessions=grouped(await api('/api/traces'));renderSessions()}
-document.querySelector('#analysis-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,question=document.querySelector('#question'),button=document.querySelector('#analyze-button'),status=document.querySelector('#analysis-status'),text=question.value.trim();if(!sessionId||!text||analysisRunning)return;question.value='';appendMessage('user',text);const answerNode=appendMessage('assistant','');answerNode.classList.add('streaming');analysisRunning=true;form.classList.add('busy');question.disabled=true;button.disabled=true;button.textContent='…';status.textContent='Analyzing the selected session…';status.classList.add('analysis-status');let answer='',finished=false;try{const response=await fetch('/api/sessions/'+encodeURIComponent(sessionId)+'/analyze/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:text,analysis_id:analysisId||null})});if(!response.ok){let problem={};try{problem=await response.json()}catch(_error){}throw new Error(problem.error||response.statusText)}if(!response.body)throw new Error('Streaming response is unavailable.');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';const consume=line=>{if(!line.trim())return;const item=JSON.parse(line);if(item.type==='delta'){answer+=item.delta||'';answerNode.textContent=answer;document.querySelector('#messages').scrollTop=document.querySelector('#messages').scrollHeight}else if(item.type==='final'){analysisId=item.analysis_id;answer=item.answer||answer;answerNode.innerHTML=md(answer);finished=true}else if(item.type==='error')throw new Error(item.message||'Analysis failed.')};while(true){const chunk=await reader.read();buffer+=decoder.decode(chunk.value||new Uint8Array(),{stream:!chunk.done});const lines=buffer.split('\\n');buffer=lines.pop()||'';for(const line of lines)consume(line);if(chunk.done){consume(buffer);break}}if(!finished)throw new Error('Analysis stream ended before completion.');status.textContent='Analysis complete. Ask a follow-up about the same session.'}catch(error){const message=String(error.message||error);answerNode.textContent=answer?answer+'\\n\\n[Analysis interrupted: '+message+']':'Analysis failed: '+message;status.textContent='Analysis failed: '+message}finally{answerNode.classList.remove('streaming');analysisRunning=false;form.classList.remove('busy');status.classList.remove('analysis-status');question.disabled=false;button.disabled=false;button.innerHTML='&uarr;';question.focus()}};
-document.querySelector('#question').onkeydown=event=>{if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();document.querySelector('#analysis-form').requestSubmit()}};
-document.querySelector('#theme-toggle').onclick=()=>{const root=document.documentElement,next=root.dataset.theme==='dark'?'':'dark';if(next)root.dataset.theme=next;else root.removeAttribute('data-theme');try{localStorage.setItem('friday.trace.theme',next)}catch(e){}};
-setInterval(()=>{if(!analysisRunning)load().catch(()=>{})},3000);load().catch(error=>{const el=document.querySelector('#sessions');el.className='empty';el.textContent=String(error)});
+function showTab(which){document.querySelector('#tab-i').classList.toggle('on',which==='i');
+  document.querySelector('#tab-a').classList.toggle('on',which==='a');
+  document.querySelector('#detail').style.display=which==='i'?'':'none';
+  document.querySelector('#analyst').style.display=which==='a'?'flex':'none'}
+document.querySelector('#tab-i').onclick=()=>showTab('i');
+document.querySelector('#tab-a').onclick=()=>showTab('a');
+function msg(role,text){const el=document.querySelector('#msgs'),d=document.createElement('div');d.className='m '+role;
+  d.innerHTML='<b>'+(role==='user'?'YOU':'ANALYST')+'</b>'+esc(text);el.appendChild(d);el.scrollTop=el.scrollHeight;return d}
+async function enableAnalyst(){const q=document.querySelector('#q'),go=document.querySelector('#go');q.disabled=false;go.disabled=false;
+  try{const v=await api('/api/sessions/'+encodeURIComponent(sessionId)+'/analyses');const latest=v.analyses&&v.analyses[0];
+    if(latest){analysisId=latest.analysis_id;document.querySelector('#msgs').innerHTML='';for(const m of latest.messages||[])msg(m.role,m.content)}}catch(e){}}
+document.querySelector('#aform').onsubmit=async ev=>{ev.preventDefault();const q=document.querySelector('#q'),go=document.querySelector('#go'),st=document.querySelector('#astatus');
+  const text=q.value.trim();if(!sessionId||!text||running)return;q.value='';msg('user',text);const node=msg('assistant','…');
+  running=true;q.disabled=true;go.disabled=true;st.textContent='analyzing…';let answer='',done=false;
+  try{const r=await fetch('/api/sessions/'+encodeURIComponent(sessionId)+'/analyze/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:text,analysis_id:analysisId||null})});
+    if(!r.ok){let p={};try{p=await r.json()}catch(e){}throw new Error(p.error||r.statusText)}
+    const reader=r.body.getReader(),dec=new TextDecoder();let buf='';
+    const eat=line=>{if(!line.trim())return;const item=JSON.parse(line);
+      if(item.type==='delta'){answer+=item.delta||'';node.innerHTML='<b>ANALYST</b>'+esc(answer);document.querySelector('#msgs').scrollTop=1e9}
+      else if(item.type==='final'){analysisId=item.analysis_id;answer=item.answer||answer;node.innerHTML='<b>ANALYST</b>'+esc(answer);done=true}
+      else if(item.type==='error')throw new Error(item.message||'failed')};
+    while(true){const c=await reader.read();buf+=dec.decode(c.value||new Uint8Array(),{stream:!c.done});
+      const lines=buf.split('\\n');buf=lines.pop()||'';for(const l of lines)eat(l);if(c.done){eat(buf);break}}
+    if(!done)throw new Error('stream ended early');st.textContent='done. ask a follow-up.'}
+  catch(e){node.innerHTML='<b>ANALYST</b>'+esc(answer?answer+'\\n[interrupted: '+String(e.message||e)+']':'failed: '+String(e.message||e));st.textContent='failed: '+String(e.message||e)}
+  finally{running=false;q.disabled=false;go.disabled=false;q.focus()}};
+document.querySelector('#q').onkeydown=ev=>{if((ev.ctrlKey||ev.metaKey)&&ev.key==='Enter'){ev.preventDefault();document.querySelector('#aform').requestSubmit()}};
+document.querySelector('#theme').onclick=()=>{const root=document.documentElement,next=root.dataset.theme==='dark'?'':'dark';
+  if(next)root.dataset.theme=next;else root.removeAttribute('data-theme');try{localStorage.setItem('friday.trace.theme',next)}catch(e){}};
+setInterval(()=>{if(!running)load().catch(()=>{})},3000);
+load().catch(e=>{const el=document.querySelector('#sessions');el.className='empty';el.textContent=String(e)});
 </script>
 </body></html>`

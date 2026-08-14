@@ -63,6 +63,7 @@ export class Gateway {
   private globalRun: Promise<unknown> | undefined
   private navigationRun: Promise<unknown> | undefined
   private readonly toolNames = new Map<string, string>()
+  private readonly titling = new Set<string>()
   private readonly reasoning = new Map<string, { id: string; started: number }>()
   private reasoningSequence = 0
   private permissionMode: PermissionMode | undefined
@@ -270,6 +271,7 @@ export class Gateway {
               { images, attachments }
             )
             this.emitTurn(session, result)
+            this.titleSession(session)
             requestFinalized = true
             return result
           } catch (error) {
@@ -360,6 +362,7 @@ export class Gateway {
               { images, attachments }
             )
             this.emitTurn(session, result)
+            this.titleSession(session)
             requestFinalized = true
             return result
           } catch (error) {
@@ -502,6 +505,22 @@ export class Gateway {
     this.ok(id, outcome.continued
       ? { approval: outcome.approval, approved: decision === 'approve', continued: true, message: { text: outcome.turn?.text || '' } }
       : outcome.approval)
+  }
+
+  /**
+   * Name a conversation after its first turn, off the request path. The
+   * session method is idempotent, so firing after every turn is safe; the
+   * event tells UIs to refresh their lists without polling.
+   */
+  private titleSession(session: FridaySession): void {
+    // Tests script their mock model responses; an extra naming request would
+    // consume them, so the switch exists for deterministic runs.
+    if (process.env.FRIDAY_AUTOTITLE === '0') return
+    if (this.titling.has(session.sessionId)) return
+    this.titling.add(session.sessionId)
+    void session.ensureTitle().then(title => {
+      if (title) this.event('session.titled', { session_id: session.sessionId, title })
+    }).catch(() => {}).finally(() => this.titling.delete(session.sessionId))
   }
 
   private attach(session: FridaySession): void {

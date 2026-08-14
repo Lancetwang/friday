@@ -111,6 +111,7 @@ export class FridaySession {
   private activeCheckpoint = ''
   private permission: PermissionMode = defaultPermissionMode()
   private thinking: string
+  private title = ''
   private sessionAllowed = false
   private pending: Record<string, unknown> = { pending: false }
   private pendingMetrics: TurnMetrics | undefined
@@ -155,6 +156,47 @@ export class FridaySession {
     this.tools = assembleTools(this.plugins, { workspace: this.workspace })
   }
 
+  /**
+   * Give the conversation its own name once it has a first user message: a
+   * small model call when a key is configured, the message prefix otherwise.
+   * Idempotent and safe to fire after a turn - a name that already exists
+   * (loaded, generated, or set by a manual rename) is never overwritten.
+   */
+  async ensureTitle(): Promise<string> {
+    if (this.title) return ''
+    const first = this.transcript().find(message => message.role === 'user' && !message.friday_internal)
+    const text = first
+      ? String(typeof first.friday_display_text === 'string' ? first.friday_display_text : messageText(first.content))
+        .replace(/\s+/g, ' ').trim()
+      : ''
+    if (!text) return ''
+    let generated = ''
+    if (this.config.apiKey) {
+      try {
+        const options = thinkingOptions(this.config.provider, this.config.model)
+        const effort = ['off', 'none', 'minimal', 'low'].find(value => options.includes(value)) ?? this.thinking
+        const response = await modelFor(this.config, effort, 60).complete({
+          messages: [
+            {
+              role: 'system',
+              content: 'Name this conversation from its opening request. Return only the name: at most six words (or sixteen CJK characters), in the language of the request, no quotes, no trailing punctuation.'
+            },
+            { role: 'user', content: text.slice(0, 2_000) }
+          ]
+        })
+        this.context.recordUsage(response.usage)
+        generated = response.content.split('\n')[0]!.trim().replace(/^["'“”「『]+|["'“”」』]+$/g, '').slice(0, 60)
+      } catch {
+        // The prefix fallback below is always available.
+      }
+    }
+    if (this.title) return ''
+    this.title = generated || text.slice(0, 48)
+    // A running turn persists the name with its own save; otherwise write now.
+    if (!this.abort) await this.save('', '', emptyMetrics())
+    return this.title
+  }
+
   /** Re-read the disabled list and plugin directories, then rebuild the agent. */
   async reloadPlugins(): Promise<void> {
     if (this.abort) throw new Error('Stop the running request before changing plugins.')
@@ -176,6 +218,7 @@ export class FridaySession {
       session.archived.push(...snapshot.archived)
       session.turns = snapshot.turns
       session.thinking = normalizeThinking(config.provider, config.model, snapshot.thinkingEffort)
+      session.title = typeof snapshot.title === 'string' ? snapshot.title : ''
       restoreProgress(context, snapshot.progress)
       session.refreshReadPaths()
     }
@@ -497,6 +540,8 @@ export class FridaySession {
     )
     await writeJsonAtomic(path, {
       ...existing,
+      // A manual rename on disk always outranks the generated name.
+      ...(!existing.title && this.title ? { title: this.title } : {}),
       session_id: this.sessionId,
       created: existing.created || now,
       updated: now,
@@ -963,6 +1008,7 @@ type Snapshot = {
   messages: Message[]
   progress: unknown
   thinkingEffort: unknown
+  title: unknown
   lastUsage: unknown
   turns: number
 }
@@ -1111,11 +1157,14 @@ export async function forkSession(
   const sessionId = newSessionId()
   const created = now()
   const turns = messages.filter(message => message.role === 'user' && !message.friday_internal).length
+  // A fork is named by the message it split from, not by its parent session:
+  // that is the fact the user needs to tell branches apart.
+  const sourceText = messageText(body[messageIndex]!.content).replace(/\s+/g, ' ').trim().slice(0, 120)
   const snapshot = {
     session_id: sessionId,
     created,
     updated: created,
-    title: `Fork of ${String(source.title || source.user || sourceId)}`.slice(0, 120),
+    title: (sourceText ? `Fork: ${sourceText}` : `Fork of ${String(source.title || source.user || sourceId)}`).slice(0, 120),
     turns,
     user: String(source.user || ''),
     assistant: '',
@@ -1126,6 +1175,7 @@ export async function forkSession(
     fork_parent: sourceId,
     fork_root: String(source.fork_root || sourceId),
     fork_message_index: messageIndex,
+    fork_source_text: sourceText,
     ...legacySnapshotMetadata(messages)
   }
   await writeJsonAtomic(sessionPath(workspace, sessionId), snapshot)
@@ -1176,6 +1226,9 @@ export async function sessionTree(workspace: string, sessionId: string): Promise
         // Where in the parent the branch split off, so UIs can label the origin.
         ...(Number.isSafeInteger(record.fork_message_index)
           ? { fork_message_index: record.fork_message_index as number }
+          : {}),
+        ...(typeof record.fork_source_text === 'string' && record.fork_source_text
+          ? { fork_source: record.fork_source_text.slice(0, 120) }
           : {})
       }))
   }
@@ -1218,6 +1271,7 @@ async function readSnapshot(workspace: string, sessionId: string): Promise<Snaps
       archived,
       progress: snapshot.progress,
       thinkingEffort: snapshot.thinking_effort,
+      title: snapshot.title,
       lastUsage: snapshot.last_usage,
       turns: typeof snapshot.turns === 'number' ? snapshot.turns : 0
     }

@@ -108,15 +108,29 @@ Trace Workbench 记录模型请求、工具调用与结果、耗时、供应商 
 ## 架构
 
 ```mermaid
-flowchart LR
-    Desktop["Tauri 桌面端"] --> Gateway["Harness Gateway"]
-    TUI["TUI / CLI"] --> Gateway
-    Eval["Harbor / 评测器"] --> Run["friday run"] --> Gateway
-    Gateway --> Harness["会话 · 权限 · 记忆 · 验证"]
-    Harness --> Core["Agent Core"]
-    Core --> Models["模型供应商"]
-    Core --> Tools["工作区工具"]
+flowchart TB
+    subgraph Surfaces["界面层 — 纯协议客户端，不含 Agent 逻辑"]
+        direction LR
+        Desktop["桌面端 (Tauri)"]
+        TUI["TUI / CLI"]
+        Headless["friday run · Harbor / 评测器"]
+    end
+    Surfaces --> Gateway["Gateway — NDJSON JSON-RPC"]
+    Gateway --> Session["会话 — 统一 Turn 框架：<br/>检查点 · 审批 · 压缩 · Goal 验证"]
+    subgraph Registry["插件注册表 — 核心循环之外的一切"]
+        direction LR
+        Workspace["workspace*<br/>文件 · Shell · 计划"]
+        Web["web<br/>搜索 · 抓取"]
+        Memory["memory<br/>召回 · 存储"]
+        Skills["skills<br/>技能"]
+        External["你的插件<br/>.friday/plugins"]
+    end
+    Registry -- "工具 + 提示段" --> Session
+    Session --> Core["Core — 完整运行时：<br/>带守护的 模型 ⇄ 工具 循环"]
+    Core --> Providers["模型供应商<br/>Anthropic · OpenAI · 兼容端点"]
 ```
+
+`*` 为必需插件；其余每一个——内置或自建——都可在 TUI（`/plugins`）、桌面设置或 `disabled_plugins` 中关闭。
 
 - `packages/core` 包含公开的 `Agent`、`RunContext`、供应商适配器、工具执行、事件、用量、取消与预检契约。
 - `packages/harness` 构成 Friday 产品层，负责提示词、工具、模型配置、会话、权限、记忆、Skill、检查点、Trace 和验证。

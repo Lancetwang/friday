@@ -171,6 +171,32 @@ test('the verifier assembles from built-in read-only declarations and honors dis
   }
 })
 
+test('a conversation names itself from its first message and never renames', async () => {
+  const { home, workspace, restore } = await makeWorkspace()
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'local',
+      profiles: [{
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock',
+        base_url: 'http://127.0.0.1:9', context_window: 100_000, max_output_tokens: 2_000, vision: false
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
+    const session = await FridaySession.create(workspace, 'title-session')
+    assert.equal(await session.ensureTitle(), '')
+    const text = 'Fix the flaky login test and explain the exact root cause afterwards'
+    session.context.addMessage({ role: 'user', content: text })
+    // The model endpoint is dead, so the prefix fallback names the session.
+    assert.equal(await session.ensureTitle(), text.slice(0, 48))
+    assert.equal(await session.ensureTitle(), '')
+    // The name is persisted and survives a reload.
+    const reloaded = await FridaySession.create(workspace, 'title-session')
+    assert.equal(await reloaded.ensureTitle(), '')
+  } finally {
+    restore()
+  }
+})
+
 test('a session registers built-ins and external plugins in one registry', async () => {
   const { home, workspace, restore } = await makeWorkspace()
   try {

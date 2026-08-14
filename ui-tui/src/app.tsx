@@ -105,6 +105,7 @@ type CredentialInput =
 
 type BranchNode = {
   fork_message_index?: number
+  fork_source?: string
   id: string
   parent: string
   time: string
@@ -1529,7 +1530,7 @@ function BranchesView({ active, view }: { active: string; view: BranchView }) {
         const markers = [
           node.id === view.tree.root ? 'root' : '',
           node.id === active ? 'current' : '',
-          node.fork_message_index !== undefined ? `from #${node.fork_message_index}` : '',
+          node.fork_source ? `from “${shortText(node.fork_source, 40)}”` : '',
           node.turns ? `${node.turns}t` : ''
         ].filter(Boolean).join(' · ')
         return (

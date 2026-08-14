@@ -343,6 +343,7 @@ type TimelineItem = {
 }
 
 type ForkNode = {
+  fork_source?: string
   id: string
   parent: string
   time: string
@@ -998,7 +999,7 @@ function App() {
       const activeSessionId = activeSessions.current.get(pathKey(workspace)) || ''
       const eventKey = sessionEventKey(workspace, sessionId || activeSessionId)
       if (sessionId && activeSessionId && sessionId !== activeSessionId) {
-        if (type === 'message.complete' || type === 'message.cancelled' || type === 'session.updated') {
+        if (type === 'message.complete' || type === 'message.cancelled' || type === 'session.updated' || type === 'session.titled') {
           activeAssistants.current.delete(eventKey)
           void refreshSessions(workspace).catch(() => undefined)
         }
@@ -1161,6 +1162,9 @@ function App() {
         }))
       } else if (type === 'session.updated') {
         void refreshSessions(workspace).catch(() => undefined)
+      } else if (type === 'session.titled') {
+        void refreshSessions(workspace).catch(() => undefined)
+        void refreshTree(workspace).catch(() => undefined)
       } else if (type === 'tool.start') {
         flushStream(`${eventKey}\u0000assistant`)
         const assistantId = activeAssistants.current.get(eventKey)
@@ -2939,7 +2943,9 @@ function ForkMap({
         >
           <p>{hoveredNode.id === tree.root ? t('fork.main') : t('fork.fork')}</p>
           <strong>{hoveredNode.title || 'Untitled conversation'}</strong>
-          {hoveredParent && <span className="fork-tip-parent">{t('fork.from', { title: hoveredParent.title })}</span>}
+          {hoveredNode.fork_source
+            ? <span className="fork-tip-parent">{t('fork.fromMessage', { text: hoveredNode.fork_source })}</span>
+            : hoveredParent && <span className="fork-tip-parent">{t('fork.from', { title: hoveredParent.title })}</span>}
           <span className="fork-tip-meta">{formatSessionTime(hoveredNode.time)}</span>
           <div className="fork-tip-actions">
             <button onClick={() => onOpen(hoveredNode)} type="button">{t('fork.open')}</button>

@@ -108,15 +108,30 @@ The trace workbench records model requests, tool calls and results, timing, prov
 ## Architecture
 
 ```mermaid
-flowchart LR
-    Desktop["Tauri desktop"] --> Gateway["Harness gateway"]
-    TUI["TUI / CLI"] --> Gateway
-    Eval["Harbor / evaluator"] --> Run["friday run"] --> Gateway
-    Gateway --> Harness["Sessions · permissions · memory · verification"]
-    Harness --> Core["Agent Core"]
-    Core --> Models["Model providers"]
-    Core --> Tools["Workspace tools"]
+flowchart TB
+    subgraph Surfaces["Surfaces — protocol clients, no agent logic"]
+        direction LR
+        Desktop["Desktop (Tauri)"]
+        TUI["TUI / CLI"]
+        Headless["friday run · Harbor / evaluators"]
+    end
+    Surfaces --> Gateway["Gateway — NDJSON JSON-RPC"]
+    Gateway --> Session["Session — one turn frame:<br/>checkpoints · approvals · compaction · goal verification"]
+    subgraph Registry["Plugin registry — everything outside the core loop"]
+        direction LR
+        Workspace["workspace*<br/>files · shell · plan"]
+        Web["web<br/>search · fetch"]
+        Memory["memory<br/>recall · store"]
+        Skills["skills<br/>procedures"]
+        External["your plugins<br/>.friday/plugins"]
+    end
+    Registry -- "tools + prompt sections" --> Session
+    Session --> Core["Core — the whole runtime:<br/>model ⇄ tools loop, guarded"]
+    Core --> Providers["Model providers<br/>Anthropic · OpenAI · compatible"]
 ```
+
+`*` required; every other plugin — built-in or yours — can be switched off in
+the TUI (`/plugins`), desktop Settings, or `disabled_plugins`.
 
 - `packages/core` contains the public `Agent`, `RunContext`, provider adapters, tool execution, events, usage, cancellation, and preflight contracts.
 - `packages/harness` owns the Friday product: prompts, tools, model profiles, sessions, permissions, memory, skills, checkpoints, traces, and verification.
