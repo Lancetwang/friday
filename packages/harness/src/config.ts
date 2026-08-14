@@ -445,6 +445,30 @@ export function disabledPlugins(workspace: string): Set<string> {
   )
 }
 
+/**
+ * Persist one plugin's on/off switch. Enabling removes the name from both
+ * config layers so a global entry cannot silently win over the user's
+ * choice; disabling records it in the global config, which every workspace
+ * reads.
+ */
+export async function setPluginEnabled(workspace: string, name: string, enabled: boolean): Promise<Set<string>> {
+  const key = name.trim().toLowerCase()
+  if (!key) throw new Error('Plugin name is required.')
+  const layers = [join(fridayHome(), 'config.json'), join(projectStateDir(workspace), 'config.json')]
+  for (const [index, path] of layers.entries()) {
+    const config = readObject(path)
+    const current = Array.isArray(config.disabled_plugins)
+      ? config.disabled_plugins.map(value => String(value).trim().toLowerCase()).filter(Boolean)
+      : []
+    const next = enabled
+      ? current.filter(value => value !== key)
+      : index === 0 ? [...new Set([...current, key])] : current
+    if (next.length === current.length && next.every((value, position) => value === current[position])) continue
+    await writeJsonAtomic(path, { ...config, disabled_plugins: next })
+  }
+  return disabledPlugins(workspace)
+}
+
 function baseConfig(workspace: string): typeof DEFAULTS {
   const value = {
     ...DEFAULTS,

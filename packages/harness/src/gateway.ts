@@ -17,6 +17,7 @@ import {
   saveModelProfile,
   selectModelProfile,
   setModelEnabled,
+  setPluginEnabled,
   type ModelCatalog
 } from './config.js'
 import {
@@ -106,7 +107,9 @@ export class Gateway {
         const result = await runMemoryCommand(String(params.command || ''), this.workspace, {
           consolidate: days => this.runVisibleSession(session, 'Consolidating memory', () => session.consolidateMemory(days))
         })
-        this.ok(id, { text: formatMemoryResult(result) })
+        // Structured result rides along so UIs can build pickers; the
+        // formatted text stays the answer for plain command usage.
+        this.ok(id, { text: formatMemoryResult(result), ...(typeof result === 'object' ? { result } : {}) })
       }
       else if (method === 'checkpoint.list') this.ok(id, { checkpoints: await checkpointChoices(this.workspace) })
       else if (method === 'checkpoint.undo') {
@@ -132,6 +135,21 @@ export class Gateway {
         // The session's registry is the truth: built-in capability packs and
         // external plugins together, with live disabled/error state.
         this.ok(id, { plugins: this.session.info().plugins })
+      }
+      else if (method === 'plugin.toggle') {
+        const name = String(params.name || '').trim()
+        if (!name) throw new Error('Plugin name is required.')
+        const enabled = params.enabled === true
+        const result = await this.runGlobal(async () => {
+          const known = this.session.info().plugins as Array<Record<string, unknown>>
+          const target = known.find(plugin => String(plugin.name).toLowerCase() === name.toLowerCase())
+          if (!target) throw new Error(`Unknown plugin: ${name}`)
+          if (target.required === true && !enabled) throw new Error(`Plugin '${name}' is required and cannot be disabled.`)
+          await setPluginEnabled(this.workspace, name, enabled)
+          await this.session.reloadPlugins()
+          return { plugins: this.session.info().plugins, info: this.sessionInfo() }
+        }, 'Stop running requests before changing plugins.')
+        this.ok(id, result)
       }
       else if (method === 'skill.list') this.ok(id, { skills: discoverSkills(this.workspace) })
       else if (method === 'skill.get') this.ok(id, skillDetail(this.workspace, String(params.path || '')))
@@ -224,19 +242,6 @@ export class Gateway {
           this.session = await this.loadSession(String(snapshot.session_id))
           return {
             history: sessionHistory(this.session), info: this.sessionInfo(),
-            tree: await sessionTree(this.workspace, this.session.sessionId)
-          }
-        })
-        this.ok(id, result)
-      } else if (method === 'session.backward') {
-        const result = await this.runNavigation(async () => {
-          const tree = await sessionTree(this.workspace, this.session.sessionId) as { nodes?: Array<{ id?: unknown; parent?: unknown }> }
-          const current = tree.nodes?.find(node => node.id === this.session.sessionId)
-          const parent = String(current?.parent || '')
-          if (!parent) throw new Error('This conversation is already at the root branch.')
-          this.session = await this.loadSession(parent)
-          return {
-            history: sessionHistory(this.session), info: this.sessionInfo(), progress: this.session.progress(),
             tree: await sessionTree(this.workspace, this.session.sessionId)
           }
         })

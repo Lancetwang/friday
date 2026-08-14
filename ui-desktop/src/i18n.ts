@@ -261,6 +261,8 @@ const en: Record<string, string> = {
   'settings.web.hint': 'Tavily and AnySearch',
   'settings.memory': 'Memory',
   'settings.memory.hint': 'Persistent memory files',
+  'settings.plugins': 'Plugins',
+  'settings.plugins.hint': 'Switch capabilities on or off',
   'settings.docs': 'Docs',
   'settings.docs.hint': 'Getting started',
 
@@ -317,6 +319,19 @@ const en: Record<string, string> = {
   'memory.globalFile': 'Global memory',
   'memory.chars': '{chars} / {limit} chars',
   'memory.saved': 'Saved.',
+
+  // Plugins
+  'plugins.title': 'Plugins',
+  'plugins.desc': 'Everything outside the core loop is a plugin: the built-in capabilities and your own. Switching one off removes its tools and prompt sections everywhere, including Goal verification.',
+  'plugins.required': 'Required',
+  'plugins.on': 'On',
+  'plugins.off': 'Off',
+  'plugins.tools': 'Tools: {tools}',
+  'plugins.noTools': 'No tools',
+  'plugins.enabled': '{name} is on.',
+  'plugins.disabled': '{name} is off.',
+  'plugins.external': 'External plugins are ES modules in .friday/plugins (project) or ~/.friday/plugins (user).',
+  'plugins.error': 'Problem: {error}',
 
   // Docs
   'docs.title': 'Docs',
@@ -566,6 +581,8 @@ const zh: Record<string, string> = {
   'settings.web.hint': 'Tavily 与 AnySearch',
   'settings.memory': '记忆',
   'settings.memory.hint': '持久记忆文件',
+  'settings.plugins': '插件',
+  'settings.plugins.hint': '开启或关闭能力',
   'settings.docs': '文档',
   'settings.docs.hint': '快速上手',
 
@@ -620,6 +637,19 @@ const zh: Record<string, string> = {
   'memory.globalFile': '全局记忆',
   'memory.chars': '{chars} / {limit} 字符',
   'memory.saved': '已保存。',
+
+  // Plugins
+  'plugins.title': '插件',
+  'plugins.desc': '核心循环之外的一切都是插件：内置能力与你自己的扩展。关闭一个插件会在所有地方移除它的工具与提示段，包括 Goal 验证。',
+  'plugins.required': '必需',
+  'plugins.on': '开启',
+  'plugins.off': '关闭',
+  'plugins.tools': '工具：{tools}',
+  'plugins.noTools': '无工具',
+  'plugins.enabled': '{name} 已开启。',
+  'plugins.disabled': '{name} 已关闭。',
+  'plugins.external': '外部插件是放在 .friday/plugins（项目）或 ~/.friday/plugins（用户）下的 ES 模块。',
+  'plugins.error': '问题：{error}',
 
   // Docs
   'docs.title': '文档',

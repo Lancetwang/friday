@@ -10,24 +10,33 @@ export const COMMANDS = [
   { name: '/login', detail: 'Configure a model provider API key' },
   { name: '/model', detail: 'Choose a configured model and thinking level' },
   { name: '/search', detail: 'Configure a Web Search provider API key' },
-  { name: '/memory', detail: 'Inspect or manage persistent memory' },
-  { name: '/plugins', detail: 'List loaded Friday plugins' },
+  { name: '/memory', detail: 'Browse, view, and delete stored memories' },
+  { name: '/plugins', detail: 'Switch plugins on or off' },
   { name: '/context', detail: 'Show current context usage' },
-  { name: '/trace', detail: 'Usage: /trace on | /trace off' },
+  { name: '/trace', detail: 'Toggle the Trace Workbench' },
   { name: '/compact', detail: 'Compact the current conversation' },
   { name: '/clear', detail: 'Delete and clear the current conversation' },
   { name: '/resume', detail: 'Switch to or delete a saved conversation' },
   { name: '/permission', detail: 'Choose approval behavior' },
   { name: '/fork', detail: 'Fork from the latest Friday response' },
   { name: '/branches', detail: 'Navigate the fork map with ↑↓←→, Enter, Ctrl+D' },
-  { name: '/backward', detail: 'Return to the parent conversation branch' },
   { name: '/goal', detail: 'Run a strongly verified goal' },
   { name: '/exit', detail: 'Close Friday' },
 ] as const
 
 export type CommandChoice = typeof COMMANDS[number]
 
-export type MenuKind = 'login' | 'model' | 'permission' | 'resume' | 'resume-delete' | 'search' | 'thinking'
+export type MenuKind =
+  | 'login'
+  | 'memory'
+  | 'memory-delete'
+  | 'model'
+  | 'permission'
+  | 'plugins'
+  | 'resume'
+  | 'resume-delete'
+  | 'search'
+  | 'thinking'
 
 export type MenuOption = {
   data?: unknown

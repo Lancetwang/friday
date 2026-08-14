@@ -1574,6 +1574,14 @@ function App() {
     sendGateway<MemoryFileDetail>(settingsWorkspace, 'settings.memory.read', { file })
   const saveMemoryFileContent = (file: MemoryFileScope, content: string) =>
     sendGateway<MemoryFileInfo>(settingsWorkspace, 'settings.memory.save', { content, file })
+  // Stable identity: the plugins pane fetches from an effect keyed on this.
+  const listPlugins = useCallback(
+    () => sendGateway<{ plugins: PluginInfo[] }>(settingsWorkspace, 'plugin.list'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [settingsWorkspace]
+  )
+  const togglePlugin = (name: string, enabled: boolean) =>
+    sendGateway<{ plugins: PluginInfo[] }>(settingsWorkspace, 'plugin.toggle', { enabled, name })
 
   const resolveApproval = (method: string, params: Record<string, unknown> = {}) => {
     const approval = pendingApproval
@@ -2335,6 +2343,7 @@ function App() {
             onClearKey={clearModelKey}
             onEnable={setProviderEnabled}
             onLanguageChange={changeLanguage}
+            onListPlugins={listPlugins}
             onLoad={loadSettings}
             onReadMemory={readMemoryFile}
             onRefreshModels={refreshProviderModels}
@@ -2345,6 +2354,7 @@ function App() {
             onSaveMemory={saveMemoryFileContent}
             onSaveProfile={saveUserProfile}
             onSaveWeb={saveWebSettings}
+            onTogglePlugin={togglePlugin}
           />
         ) : page === 'skills' ? (
           <SkillBrowser
@@ -3041,15 +3051,99 @@ function MoonIcon() {
   )
 }
 
-type SettingsSection = 'docs' | 'general' | 'models' | 'web' | 'memory'
+type SettingsSection = 'docs' | 'general' | 'models' | 'web' | 'memory' | 'plugins'
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ hintKey: string; id: SettingsSection; labelKey: string }> = [
   { hintKey: 'settings.general.hint', id: 'general', labelKey: 'settings.general' },
   { hintKey: 'settings.models.hint', id: 'models', labelKey: 'settings.models' },
   { hintKey: 'settings.web.hint', id: 'web', labelKey: 'settings.web' },
   { hintKey: 'settings.memory.hint', id: 'memory', labelKey: 'settings.memory' },
+  { hintKey: 'settings.plugins.hint', id: 'plugins', labelKey: 'settings.plugins' },
   { hintKey: 'settings.docs.hint', id: 'docs', labelKey: 'settings.docs' }
 ]
+
+type PluginInfo = {
+  description: string
+  disabled: boolean
+  errors: string[]
+  name: string
+  required: boolean
+  scope: string
+  source: string
+  tools: string[]
+  version: string
+}
+
+/**
+ * The plugin registry with one switch per row - the same on/off the TUI's
+ * /plugins picker offers, persisted through the same gateway call.
+ */
+function PluginsSettings({
+  onList,
+  onToggle
+}: {
+  onList: () => Promise<{ plugins: PluginInfo[] }>
+  onToggle: (name: string, enabled: boolean) => Promise<{ plugins: PluginInfo[] }>
+}) {
+  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
+  const [error, setError] = useState('')
+  const form = useSettingsSave()
+
+  useEffect(() => {
+    let cancelled = false
+    onList().then(result => {
+      if (!cancelled) setPlugins(result.plugins)
+    }).catch(problem => {
+      if (!cancelled) setError(String(problem))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [onList])
+
+  if (!plugins) return <SettingsLoading error={error} />
+
+  const toggle = (plugin: PluginInfo, enabled: boolean) => {
+    form.submit(
+      onToggle(plugin.name, enabled).then(result => setPlugins(result.plugins)),
+      () => t(enabled ? 'plugins.enabled' : 'plugins.disabled', { name: plugin.name }),
+      plugin.name
+    )
+  }
+
+  return (
+    <div className="plugin-list">
+      {plugins.map(plugin => (
+        <div className={`model-provider ${plugin.disabled ? '' : 'enabled'}`} key={plugin.name}>
+          <div className="model-provider-identity">
+            <span className="model-provider-name">
+              <strong>{plugin.name}</strong>
+              <small>{plugin.description || plugin.source}</small>
+            </span>
+          </div>
+          <div className="model-provider-meta">
+            <span>
+              {plugin.required ? `${t('plugins.required')} · ` : ''}
+              {plugin.scope} · {plugin.tools.length ? t('plugins.tools', { tools: plugin.tools.join(', ') }) : t('plugins.noTools')}
+            </span>
+            {plugin.errors.length ? <span className="plugin-error">{t('plugins.error', { error: plugin.errors[0]! })}</span> : null}
+          </div>
+          <label className="settings-switch" title={plugin.disabled ? t('plugins.off') : t('plugins.on')}>
+            <input
+              checked={!plugin.disabled}
+              disabled={plugin.required || form.pending === plugin.name}
+              onChange={event => toggle(plugin, event.target.checked)}
+              type="checkbox"
+            />
+            <span aria-hidden="true" />
+          </label>
+        </div>
+      ))}
+      <p className="settings-note">{t('plugins.external')}</p>
+      <SettingsMessage failed={form.failed} message={form.message} />
+    </div>
+  )
+}
 
 function ModelCredentialRow({
   configured,
@@ -3223,6 +3317,7 @@ function SettingsPage({
   onDelete,
   onEnable,
   onLanguageChange,
+  onListPlugins,
   onLoad,
   onReadMemory,
   onRefreshModels,
@@ -3231,7 +3326,8 @@ function SettingsPage({
   onSave,
   onSaveMemory,
   onSaveProfile,
-  onSaveWeb
+  onSaveWeb,
+  onTogglePlugin
 }: {
   catalog: ModelCatalog
   initialSection: SettingsSection
@@ -3241,6 +3337,7 @@ function SettingsPage({
   onDelete: (profileId: string) => Promise<ModelCatalog>
   onEnable: (target: ModelTarget, enabled: boolean) => Promise<ModelCatalog>
   onLanguageChange: (language: Language) => void
+  onListPlugins: () => Promise<{ plugins: PluginInfo[] }>
   onLoad: () => Promise<AppSettings>
   onReadMemory: (file: MemoryFileScope) => Promise<MemoryFileDetail>
   onRefreshModels: (target: ModelTarget) => Promise<{ catalog: ModelCatalog; models: string[] }>
@@ -3250,6 +3347,7 @@ function SettingsPage({
   onSaveMemory: (file: MemoryFileScope, content: string) => Promise<MemoryFileInfo>
   onSaveProfile: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
   onSaveWeb: (value: Record<string, unknown>) => Promise<WebSearchSettings>
+  onTogglePlugin: (name: string, enabled: boolean) => Promise<{ plugins: PluginInfo[] }>
 }) {
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -3532,6 +3630,15 @@ function SettingsPage({
                   })}
                 />
               )}
+            </div>
+          )}
+          {section === 'plugins' && (
+            <div className="settings-section-wrap">
+              <header className="settings-head">
+                <h2>{t('plugins.title')}</h2>
+                <p>{t('plugins.desc')}</p>
+              </header>
+              <PluginsSettings onList={onListPlugins} onToggle={onTogglePlugin} />
             </div>
           )}
           {section === 'docs' && (

@@ -6,6 +6,7 @@ import { test } from 'node:test'
 
 import type { Tool } from 'friday-agent-core'
 
+import { disabledPlugins, setPluginEnabled } from './config.js'
 import { assembleTools, builtinPlugin, loadPlugins, markDisabled, pluginInfo, pluginSections } from './plugins.js'
 import { buildVerifierTools } from './tools.js'
 import { FridaySession } from './session.js'
@@ -220,6 +221,16 @@ test('a session registers built-ins and external plugins in one registry', async
     } finally {
       delete process.env.FRIDAY_DISABLE_PLUGINS
     }
+
+    // The persisted toggle unplugs a live session on reload and back.
+    await setPluginEnabled(workspace, 'memory', false)
+    assert.equal(disabledPlugins(workspace).has('memory'), true)
+    await session.reloadPlugins()
+    assert.equal((session.info().tools as string[]).includes('Memory'), false)
+    await setPluginEnabled(workspace, 'memory', true)
+    assert.equal(disabledPlugins(workspace).has('memory'), false)
+    await session.reloadPlugins()
+    assert.equal((session.info().tools as string[]).includes('Memory'), true)
   } finally {
     restore()
   }

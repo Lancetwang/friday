@@ -124,6 +124,13 @@ type PluginInfo = {
   version: string
 }
 
+type MemoryRecord = {
+  content: string
+  count?: number
+  id: string
+  scope: string
+}
+
 type BranchTree = { nodes: BranchNode[]; root: string }
 
 type BranchRow = { depth: number; guide: string; node: BranchNode }
@@ -184,6 +191,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   const [activity, setActivity] = useState('')
   const [now, setNow] = useState(Date.now())
   const lastEscape = useRef(0)
+  const traceOn = useRef(false)
 
   useEffect(() => {
     const onEvent = (event: GatewayEvent) => {
@@ -364,6 +372,21 @@ export function App({ gateway }: { gateway: GatewayClient }) {
             parent: menu,
             query: '',
             title: 'Delete conversation?',
+          })
+        }
+      } else if (menu.kind === 'memory' && ((key.ctrl && char.toLowerCase() === 'd') || (key.delete && !menu.query))) {
+        const record = selectedOption(menu)?.data as MemoryRecord | undefined
+        if (record) {
+          setMenu({
+            index: 1,
+            kind: 'memory-delete',
+            options: [
+              { data: record, id: 'delete', label: `Forget: ${shortText(record.content, 60)}` },
+              { id: 'cancel', label: 'Cancel' },
+            ],
+            parent: menu,
+            query: '',
+            title: 'Forget this memory?',
           })
         }
       }
@@ -685,6 +708,72 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     })
   }
 
+  function pluginMenu(plugins: PluginInfo[], selected = ''): PickerMenu {
+    return {
+      footer: 'Enter switches the selected plugin on or off',
+      index: Math.max(0, plugins.findIndex(plugin => plugin.name === selected)),
+      kind: 'plugins',
+      options: plugins.map(plugin => ({
+        data: plugin,
+        detail: [
+          plugin.disabled ? 'off' : 'on',
+          plugin.required ? 'required' : plugin.scope,
+          plugin.tools.length ? plugin.tools.join(', ') : '',
+          plugin.description,
+          plugin.errors.length ? `error: ${plugin.errors[0]}` : ''
+        ].filter(Boolean).join(' · '),
+        id: plugin.name,
+        keywords: `${plugin.description} ${plugin.scope}`,
+        label: `${plugin.disabled ? '○' : '●'} ${plugin.name}`,
+      })),
+      query: '',
+      title: 'Plugins',
+    }
+  }
+
+  function openPluginMenu() {
+    setActivity('Loading plugins...')
+    void gateway.request<{ plugins: PluginInfo[] }>('plugin.list').then(result => {
+      setActivity('')
+      if (!result.plugins.length) {
+        appendSystem('No plugins. Put an ES module in `.friday/plugins/` (project) or `~/.friday/plugins/` (user).')
+        return
+      }
+      setMenu(pluginMenu(result.plugins))
+    }).catch(requestError)
+  }
+
+  function memoryMenu(memories: MemoryRecord[], parent?: PickerMenu): PickerMenu {
+    return {
+      footer: 'Enter shows the full entry · Ctrl+D forgets it · /memory add <scope> <text> stores one',
+      index: 0,
+      kind: 'memory',
+      options: memories.map(record => ({
+        data: record,
+        detail: `${record.scope}${(record.count ?? 1) > 1 ? ` · x${record.count}` : ''} · ${record.id}`,
+        id: record.id,
+        keywords: `${record.content} ${record.scope} ${record.id}`,
+        label: shortText(record.content, 70),
+      })),
+      ...(parent ? { parent } : {}),
+      query: '',
+      title: 'Memory',
+    }
+  }
+
+  function openMemoryMenu() {
+    setActivity('Loading memory...')
+    void gateway.request<{ result?: { memories?: MemoryRecord[] } }>('memory.command', { command: 'list' }).then(result => {
+      setActivity('')
+      const memories = result.result?.memories ?? []
+      if (!memories.length) {
+        appendSystem('No stored memories yet. Friday saves them as it works, or use `/memory add <scope> <text>`.')
+        return
+      }
+      setMenu(memoryMenu(memories))
+    }).catch(requestError)
+  }
+
   function openBranchView() {
     setActivity('Loading branches...')
     void gateway.request<BranchTree>('session.tree').then(tree => {
@@ -828,6 +917,33 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         const result = await gateway.request<SessionResult>('session.delete', { id: choice.id })
         applySession(result)
         openResumeMenu()
+      } else if (current.kind === 'plugins') {
+        const plugin = option.data as PluginInfo
+        if (plugin.required && !plugin.disabled) {
+          setActivity(`${plugin.name} is required and stays on.`)
+          return
+        }
+        setActivity(`${plugin.disabled ? 'Enabling' : 'Disabling'} ${plugin.name}...`)
+        const result = await gateway.request<{ info: SessionInfo; plugins: PluginInfo[] }>(
+          'plugin.toggle', { enabled: plugin.disabled === true, name: plugin.name }
+        )
+        setActivity('')
+        infoRef.current = result.info
+        setInfo(result.info)
+        setMenu(pluginMenu(result.plugins, plugin.name))
+      } else if (current.kind === 'memory') {
+        const record = option.data as MemoryRecord
+        setMenu(null)
+        appendSystem(`**Memory \`${record.id}\`** [${record.scope}]\n\n${record.content}`)
+      } else if (current.kind === 'memory-delete') {
+        if (option.id === 'cancel') {
+          setMenu(current.parent ?? null)
+          return
+        }
+        const record = option.data as MemoryRecord
+        const result = await gateway.request<{ text: string }>('memory.command', { command: `remove ${record.id}` })
+        appendSystem(result.text)
+        openMemoryMenu()
       }
     } catch (error) {
       requestError(error)
@@ -899,18 +1015,28 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     } else if (command === '/search') {
       openSearchMenu()
     } else if (command === '/memory') {
-      void gateway.request<{ text: string }>('memory.command', { command: argument }).then(result => appendSystem(result.text)).catch(requestError)
+      // Bare /memory opens the browser; with arguments it stays a command
+      // (`/memory add user ...`, `/memory status`, ...).
+      if (argument) {
+        void gateway.request<{ text: string }>('memory.command', { command: argument }).then(result => appendSystem(result.text)).catch(requestError)
+      } else {
+        openMemoryMenu()
+      }
     } else if (command === '/context') {
       void gateway.request<{ text: string }>('context.get').then(result => appendSystem(result.text)).catch(requestError)
     } else if (command === '/trace') {
       const mode = argument.toLowerCase()
-      if (mode === 'on') {
-        void gateway.request<{ url: string }>('trace.serve').then(result => appendSystem(`Trace is running in the background: ${result.url}`)).catch(requestError)
-      } else if (mode === 'off') {
-        void gateway.request<{ stopped: boolean }>('trace.stop').then(result => appendSystem(result.stopped ? 'Trace stopped.' : 'Trace was not running.')).catch(requestError)
-      } else {
-        appendSystem('Usage: /trace on | /trace off')
-      }
+      const start = () => gateway.request<{ url: string }>('trace.serve').then(result => {
+        traceOn.current = true
+        appendSystem(`Trace is running in the background: ${result.url}`)
+      }).catch(requestError)
+      const stop = () => gateway.request<{ stopped: boolean }>('trace.stop').then(result => {
+        traceOn.current = false
+        appendSystem(result.stopped ? 'Trace stopped.' : 'Trace was not running.')
+      }).catch(requestError)
+      if (mode === 'on') void start()
+      else if (mode === 'off') void stop()
+      else void (traceOn.current ? stop() : start())
     } else if (command === '/compact') {
       void gateway.request<{ text: string }>('session.compact').then(result => appendSystem(`Compacted conversation:\n\n${result.text}`)).catch(requestError)
     } else if (command === '/clear') {
@@ -927,36 +1053,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         appendSystem('Forked from the latest Friday response. Use /branches to navigate the fork map.')
         if (result.tree) showBranchTree(result.tree)
       }).catch(requestError)
-    } else if (command === '/backward') {
-      void gateway.request<SessionResult & { tree?: BranchTree }>('session.backward').then(result => {
-        applySession(result)
-        if (result.tree) showBranchTree(result.tree)
-      }).catch(requestError)
     } else if (command === '/branches') {
       openBranchView()
     } else if (command === '/plugins') {
-      void gateway.request<{ plugins: PluginInfo[] }>('plugin.list').then(result => {
-        if (!result.plugins.length) {
-          appendSystem('No plugins loaded. Put an ES module in `.friday/plugins/` (project) or `~/.friday/plugins/` (user).')
-          return
-        }
-        appendSystem([
-          '# Plugins',
-          ...result.plugins.map(plugin => {
-            const meta = [
-              plugin.version,
-              plugin.scope,
-              plugin.disabled ? 'disabled' : '',
-              plugin.required ? 'required' : '',
-              plugin.tools.length ? `tools: ${plugin.tools.join(', ')}` : ''
-            ].filter(Boolean).join(' · ')
-            const errors = plugin.errors.length ? `\n  - error: ${plugin.errors.join('; ')}` : ''
-            return `- **${plugin.name}**${meta ? ` (${meta})` : ''}${plugin.description ? ` - ${plugin.description}` : ''}${errors}`
-          }),
-          '',
-          'Disable any plugin with `disabled_plugins` in config.json or FRIDAY_DISABLED_PLUGINS.'
-        ].join('\n'))
-      }).catch(requestError)
+      openPluginMenu()
     } else {
       appendSystem(`Unknown command: ${command}. Try /help.`)
     }

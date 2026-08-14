@@ -105,7 +105,7 @@ export class FridaySession {
   private agent: Agent | undefined
   private abort: AbortController | undefined
   private turns = 0
-  private readonly tools: Tool[]
+  private tools: Tool[]
   private readonly archived: Message[] = []
   private checkpointSeed: CheckpointSeed | undefined
   private activeCheckpoint = ''
@@ -116,7 +116,7 @@ export class FridaySession {
   private pendingMetrics: TurnMetrics | undefined
   private lastEvents: AgentEvent[] = []
   private readonly readAllow = new Set<string>()
-  private readonly plugins: LoadedPlugin[]
+  private plugins: LoadedPlugin[]
 
   private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext, external: LoadedPlugin[]) {
     this.workspace = resolveWorkspace(workspace)
@@ -124,12 +124,25 @@ export class FridaySession {
     this.config = config
     this.thinking = defaultThinking(config.provider, config.model)
     this.context = context
-    // One registry holds everything outside the core loop: the built-in
-    // capability packs first, then external plugins. Assembly, prompt
-    // sections, and the /plugins report all read this single list.
+    this.plugins = []
+    this.tools = []
+    this.registerPlugins(external)
+    if (!context.messages.some(message => message.role === 'system')) {
+      context.addMessage({ role: 'system', content: this.instructions() })
+    }
+    context.onEvent = event => this.onEvent?.(event)
+    context.onObservation = event => observeContextUsage(context, event)
+  }
+
+  /**
+   * One registry holds everything outside the core loop: the built-in
+   * capability packs first, then external plugins. Assembly, prompt
+   * sections, and the /plugins report all read this single list.
+   */
+  private registerPlugins(external: LoadedPlugin[]): void {
     this.plugins = markDisabled([
       ...builtinPlugins(this.workspace, {
-        sessionId,
+        sessionId: this.sessionId,
         permissionMode: () => this.permission,
         sessionAllowed: () => this.sessionAllowed,
         beforeMutation: () => this.ensureCheckpoint(),
@@ -140,11 +153,14 @@ export class FridaySession {
       ...external
     ], disabledPlugins(this.workspace))
     this.tools = assembleTools(this.plugins, { workspace: this.workspace })
-    if (!context.messages.some(message => message.role === 'system')) {
-      context.addMessage({ role: 'system', content: this.instructions() })
-    }
-    context.onEvent = event => this.onEvent?.(event)
-    context.onObservation = event => observeContextUsage(context, event)
+  }
+
+  /** Re-read the disabled list and plugin directories, then rebuild the agent. */
+  async reloadPlugins(): Promise<void> {
+    if (this.abort) throw new Error('Stop the running request before changing plugins.')
+    this.registerPlugins(await loadPlugins(this.workspace))
+    this.refreshInstructions()
+    this.agent = undefined
   }
 
   static async create(workspace = process.cwd(), sessionId = newSessionId()): Promise<FridaySession> {

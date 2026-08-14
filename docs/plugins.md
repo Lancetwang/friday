@@ -21,17 +21,17 @@ not architecture.
 report this registry - name, scope (`builtin`/`project`/`user`), contributed
 tools, disabled state, and any errors.
 
-## Unplugging a capability
+## Switching a plugin on or off
 
-One switch covers built-ins and external plugins alike:
+- **TUI**: `/plugins` opens the picker; `Enter` flips the selected plugin.
+- **Desktop**: Settings → Plugins, one switch per plugin.
+- **Anywhere**: `disabled_plugins` in `~/.friday/config.json` or the
+  project's config.json, or `FRIDAY_DISABLED_PLUGINS=web,memory` in the
+  environment.
 
-```jsonc
-// ~/.friday/config.json or the project's config.json
-{ "disabled_plugins": ["web", "memory"] }
-```
-
-or `FRIDAY_DISABLED_PLUGINS=web,memory` in the environment. Disabling is
-real, not cosmetic: a disabled `memory` removes the Memory tool *and* stops
+All three drive the same switch (the UI toggle persists into
+`disabled_plugins` and applies immediately). Disabling is real, not
+cosmetic: a disabled `memory` removes the Memory tool *and* stops
 recall/capture in every turn; a disabled `web` or `skills` disappears from
 the agent, the prompt, and the Goal-mode verifier. The required `workspace`
 pack refuses and records why. `FRIDAY_DISABLE_PLUGINS=1` (singular) skips

@@ -42,10 +42,10 @@ TUI slash commands:
 /login
 /model
 /search
-/memory [help|status|list|search|add|update|remove|consolidate]
+/memory [add|update|status|search|consolidate ...]
 /plugins
 /context
-/trace on|off
+/trace [on|off]
 /compact
 /clear
 /goal <task>
@@ -53,22 +53,34 @@ TUI slash commands:
 /permission
 /fork
 /branches
-/backward
 /exit
 ```
 
-Typing `/` opens prefix completion. `/login`, `/model`, `/search`, `/resume`,
-and `/permission` use searchable pickers. `/clear` deletes the current saved
-conversation and starts fresh; `/fork` branches from the latest response;
-`/backward` returns to its parent.
+Typing `/` opens prefix completion. Every slash command operates something
+directly: `/login`, `/model`, `/search`, `/resume`, and `/permission` use
+searchable pickers; `/clear` deletes the current saved conversation and
+starts fresh; `/fork` branches from the latest response; `/trace` toggles
+the Trace Workbench (or force it with `on`/`off`).
+
+`/memory` opens the memory browser: every stored entry with its scope,
+searchable by content. `Enter` shows the full entry, `Ctrl+D` forgets it
+after confirmation. With arguments it stays a command - `/memory add user
+prefers pnpm`, `/memory status`, `/memory consolidate`.
+
+`/plugins` lists every plugin - the built-in capabilities (workspace, web,
+memory, skills) and external ones - with its on/off state, tools, and
+description. `Enter` switches the selected plugin on or off; the change
+persists in `disabled_plugins` and takes effect immediately. The required
+`workspace` pack stays on.
 
 `/branches` opens the fork map: the conversation tree drawn with guide lines,
 the current branch marked `◉`, each fork labeled with the message index it
 split from. `↑`/`↓` move linearly, `←` jumps to the parent branch, `→` dives
 into the first child, `Enter` opens the selected branch, `Ctrl+D` deletes it
 together with its sub-branches after confirmation (the root cannot be deleted
-here), and `Esc` closes the map. `/fork` and `/backward` open it automatically
-so you always see where you landed.
+here), and `Esc` closes the map. `/fork` opens it automatically so you always
+see where you landed; moving anywhere in the tree, including back to the
+parent, is arrow keys + `Enter`.
 
 Keyboard shortcuts while chatting: `Ctrl+O` toggles tool-call details,
 `Ctrl+T` toggles thinking content, `Esc Esc` stops the running response, and

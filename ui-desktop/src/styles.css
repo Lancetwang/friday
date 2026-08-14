@@ -4386,6 +4386,21 @@ input[type="checkbox"] {
   font-size: var(--text-caption);
 }
 
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plugin-list .model-provider {
+  align-items: center;
+}
+
+.plugin-error {
+  color: var(--danger, #e5534b);
+  font-size: var(--text-caption);
+}
+
 .settings-actions {
   display: flex;
   align-items: center;

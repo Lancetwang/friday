@@ -2,6 +2,12 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## Unreleased
+
+- Made every control surface operate directly. `/plugins` is now a picker that switches any plugin on or off (persisted to `disabled_plugins`, applied to the live session immediately) and the desktop gains a matching Settings → Plugins pane with one switch per plugin; the required workspace pack stays on. Bare `/memory` opens a searchable memory browser - `Enter` shows the full entry, `Ctrl+D` forgets it - while `/memory <args>` keeps the command form. Bare `/trace` toggles the Trace Workbench.
+- Removed `/backward` and the `session.backward` RPC: the fork map covers all branch movement with arrow keys, including back to the parent.
+- `memory.command` responses now carry the structured result alongside the formatted text, and the gateway gained `plugin.toggle`.
+
 ## v0.3.0 - Plugin architecture, stable TUI, observable usage (2026-08-14)
 
 - Made everything outside the core loop a plugin. Friday's built-in capabilities - the required `workspace` tools, `web`, `memory`, and `skills` - are now capability packs in the same registry and module shape external plugins use, assembled by one code path; the Skills prompt section moved out of the prompt composer into the skills pack. External plugins are local ES modules in `.friday/plugins/` (project) or `~/.friday/plugins/` (user) contributing tools, prompt sections (string or per-turn function), and transparent tool middleware. `disabled_plugins` in config.json or `FRIDAY_DISABLED_PLUGINS` unplugs any non-required capability for real - disabling `memory` stops recall/capture, and the Goal verifier honors the same list while assembling only from built-in packs' declared read-only tools (checked loudly at build time). Registered tool names cannot be shadowed, schema-changing wrappers are rejected, broken plugins are reported instead of fatal. Inspect with `/plugins`, `plugin.list`, or `session.info`; `FRIDAY_DISABLE_PLUGINS=1` skips external plugin code for hermetic runs.

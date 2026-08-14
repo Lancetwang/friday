@@ -473,7 +473,7 @@ test('session RPCs rename, fork, navigate, and delete a branch subtree', async (
     assert.deepEqual((await sessionChoices(workspace)).map(choice => choice.id), [root])
     output.length = 0
 
-    await gateway.handle({ id: 'back', method: 'session.backward' })
+    await gateway.handle({ id: 'back', method: 'session.resume', params: { id: root } })
     assert.equal((responseResult(output, 'back') as { info: { session_id: string } }).info.session_id, root)
     output.length = 0
     await gateway.handle({ id: 'resume-fork', method: 'session.resume', params: { id: fork } })
