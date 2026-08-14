@@ -2,7 +2,7 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
-## Unreleased
+## v0.3.0 - Plugin architecture, stable TUI, observable usage (2026-08-14)
 
 - Made everything outside the core loop a plugin. Friday's built-in capabilities - the required `workspace` tools, `web`, `memory`, and `skills` - are now capability packs in the same registry and module shape external plugins use, assembled by one code path; the Skills prompt section moved out of the prompt composer into the skills pack. External plugins are local ES modules in `.friday/plugins/` (project) or `~/.friday/plugins/` (user) contributing tools, prompt sections (string or per-turn function), and transparent tool middleware. `disabled_plugins` in config.json or `FRIDAY_DISABLED_PLUGINS` unplugs any non-required capability for real - disabling `memory` stops recall/capture, and the Goal verifier honors the same list while assembling only from built-in packs' declared read-only tools (checked loudly at build time). Registered tool names cannot be shadowed, schema-changing wrappers are rejected, broken plugins are reported instead of fatal. Inspect with `/plugins`, `plugin.list`, or `session.info`; `FRIDAY_DISABLE_PLUGINS=1` skips external plugin code for hermetic runs.
 - Collapsed the session's two turn runners into one lifecycle frame, which also fixes a real defect: after an approval was resolved, the continuation's tool events were discarded instead of recorded, so Goal-mode verification and the no-progress guard examined the previous turn's stale events rather than the work that just happened.
