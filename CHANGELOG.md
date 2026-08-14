@@ -2,7 +2,7 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
-## Unreleased
+## v0.4.0 - Direct controls (2026-08-15)
 
 - Made every control surface operate directly. `/plugins` is now a picker that switches any plugin on or off (persisted to `disabled_plugins`, applied to the live session immediately) and the desktop gains a matching Settings → Plugins pane with one switch per plugin; the required workspace pack stays on. Bare `/memory` opens a searchable memory browser - `Enter` shows the full entry, `Ctrl+D` forgets it - while `/memory <args>` keeps the command form. Bare `/trace` toggles the Trace Workbench.
 - Removed `/backward` and the `session.backward` RPC: the fork map covers all branch movement with arrow keys, including back to the parent.
