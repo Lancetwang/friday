@@ -30,17 +30,18 @@ loop or let UI state mutate a running agent directly.
 
 ## Plugins
 
-Everything the Harness adds reaches the agent through two seams: the tool
-list the loop receives and the system prompt the session composes. Plugins
-([docs](plugins.md)) are local ES modules that travel through those same
-seams - contributed tools, appended prompt sections, and transparent tool
-middleware - loaded from `.friday/plugins/` (project) and `~/.friday/plugins/`
-(user). The host enforces the contract: built-in tools cannot be replaced,
-wrappers cannot change a tool's name or schema, a broken plugin is reported
-rather than fatal, and the Goal-mode verifier never receives plugin code. The
-direction of travel is a thin execution core plus a host that assembles
-capability packs, with built-ins registered through the same interface
-plugins use.
+Everything outside the core loop is a plugin ([docs](plugins.md)). The
+built-in capabilities - the required `workspace` tools, `web`, `memory`, and
+`skills` - are plugins Friday ships with; external plugins are the same shape
+loaded from `.friday/plugins/` (project) and `~/.friday/plugins/` (user).
+One registry assembles them all through the only two seams that exist: the
+tool list the loop receives and the system prompt the session composes.
+`disabled_plugins` unplugs any non-required capability for real - a disabled
+`memory` stops recall and capture, not just its tool. The host enforces the
+contract: registered tool names cannot be shadowed, wrappers cannot change a
+tool's name or schema, a broken plugin is reported rather than fatal, and
+the Goal-mode verifier assembles only from built-in packs' declared
+read-only tools.
 
 ## Surfaces
 

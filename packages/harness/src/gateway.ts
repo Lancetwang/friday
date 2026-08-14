@@ -554,26 +554,39 @@ export class Gateway {
     this.deletingSessions.clear()
   }
 
-  private runSession<T>(session: FridaySession, label: string, work: () => Promise<T>): Promise<T> {
-    this.requireSessionIdle(session)
+  /**
+   * Run `work` as a tracked promise: `register` publishes the tracked handle
+   * before work starts (so concurrent guards can see it) and returns the
+   * cleanup that retires it. One primitive backs the session, global, and
+   * navigation lanes instead of three hand-rolled copies of the same gate.
+   */
+  private launch<T>(work: () => Promise<T>, register: (tracked: Promise<unknown>) => () => void): Promise<T> {
     let start = () => {}
     const gate = new Promise<void>(resolve => { start = resolve })
     const run = (async () => {
       await gate
       return work()
     })()
-    let tracked!: Promise<T>
-    tracked = run.finally(() => {
-      if (this.activeRuns.get(session.sessionId) === tracked) {
-        this.activeRuns.delete(session.sessionId)
-        this.runLabels.delete(session.sessionId)
-        this.remember(session)
-      }
-    })
-    this.activeRuns.set(session.sessionId, tracked)
-    this.runLabels.set(session.sessionId, label)
+    let cleanup: () => void = () => {}
+    const tracked = run.finally(() => cleanup())
+    cleanup = register(tracked)
     start()
     return tracked
+  }
+
+  private runSession<T>(session: FridaySession, label: string, work: () => Promise<T>): Promise<T> {
+    this.requireSessionIdle(session)
+    return this.launch(work, tracked => {
+      this.activeRuns.set(session.sessionId, tracked)
+      this.runLabels.set(session.sessionId, label)
+      return () => {
+        if (this.activeRuns.get(session.sessionId) === tracked) {
+          this.activeRuns.delete(session.sessionId)
+          this.runLabels.delete(session.sessionId)
+          this.remember(session)
+        }
+      }
+    })
   }
 
   private runVisibleSession<T>(session: FridaySession, label: string, work: () => Promise<T>): Promise<T> {
@@ -589,37 +602,23 @@ export class Gateway {
 
   private runGlobal<T>(work: () => Promise<T>, message?: string): Promise<T> {
     this.requireAllIdle(message)
-    let start = () => {}
-    const gate = new Promise<void>(resolve => { start = resolve })
-    const run = (async () => {
-      await gate
-      return work()
-    })()
-    let tracked!: Promise<T>
-    tracked = run.finally(() => {
-      if (this.globalRun === tracked) this.globalRun = undefined
+    return this.launch(work, tracked => {
+      this.globalRun = tracked
+      return () => {
+        if (this.globalRun === tracked) this.globalRun = undefined
+      }
     })
-    this.globalRun = tracked
-    start()
-    return tracked
   }
 
   private runNavigation<T>(work: () => Promise<T>): Promise<T> {
     this.requireNoGlobalRun()
     if (this.navigationRun) throw new Error('Another session navigation is in progress.')
-    let start = () => {}
-    const gate = new Promise<void>(resolve => { start = resolve })
-    const run = (async () => {
-      await gate
-      return work()
-    })()
-    let tracked!: Promise<T>
-    tracked = run.finally(() => {
-      if (this.navigationRun === tracked) this.navigationRun = undefined
+    return this.launch(work, tracked => {
+      this.navigationRun = tracked
+      return () => {
+        if (this.navigationRun === tracked) this.navigationRun = undefined
+      }
     })
-    this.navigationRun = tracked
-    start()
-    return tracked
   }
 
   private requireSessionIdle(session: FridaySession, message = 'This session already has a request in progress.'): void {

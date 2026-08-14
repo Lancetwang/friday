@@ -114,8 +114,10 @@ type BranchNode = {
 
 type PluginInfo = {
   description: string
+  disabled?: boolean
   errors: string[]
   name: string
+  required?: boolean
   scope: string
   source: string
   tools: string[]
@@ -163,9 +165,16 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   // frame small is what keeps the composer pinned and the screen from jumping.
   const [history, setHistory] = useState<UiMessage[]>([])
   const [staticKey, setStaticKey] = useState(0)
+  // The ref is the synchronous source of truth for the live turn; the state
+  // only mirrors it for rendering. Gateway events arrive between renders, so
+  // deriving the ref from the last committed render would let a fast
+  // completion read a stale turn and drop it from the scrollback.
   const [active, setActive] = useState<ActiveTurn | null>(null)
   const activeRef = useRef<ActiveTurn | null>(null)
-  activeRef.current = active
+  const mutateActive = (mutate: (turn: ActiveTurn | null) => ActiveTurn | null) => {
+    activeRef.current = mutate(activeRef.current)
+    setActive(activeRef.current)
+  }
   const [menu, setMenu] = useState<PickerMenu | null>(null)
   const [branches, setBranches] = useState<BranchView | null>(null)
   const [credential, setCredential] = useState<CredentialInput | null>(null)
@@ -194,7 +203,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         applyApproval(event.payload)
       } else if (event.type === 'message.delta') {
         setStreaming(text => text + event.payload.text)
-        setActive(turn => turn && closeOpenThinking(turn))
+        mutateActive(turn => turn && closeOpenThinking(turn))
       } else if (event.type === 'message.complete') {
         const extra: UiMessage[] = []
         if (event.payload.text) extra.push({ metrics: event.payload.metrics, role: 'assistant', text: event.payload.text })
@@ -214,7 +223,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'message.cancelled') {
         activeTurn.current = null
         lastEscape.current = 0
-        setActive(turn => turn && closeOpenThinking(turn))
+        mutateActive(turn => turn && closeOpenThinking(turn))
         finishTurn([])
         setBusy(false)
         setActivity('Response stopped.')
@@ -224,17 +233,17 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         if (['off', 'none'].includes(infoRef.current?.thinking_effort || '')) return
         const id = event.payload.id || ''
         if (id && event.payload.text) {
-          setActive(turn => upsertThinking(ensureTurn(turn), id, event.payload.text))
+          mutateActive(turn => upsertThinking(ensureTurn(turn), id, event.payload.text))
         }
       } else if (event.type === 'reasoning.complete') {
-        setActive(turn => turn && completeThinking(turn, event.payload.id, Boolean(event.payload.error)))
+        mutateActive(turn => turn && completeThinking(turn, event.payload.id, Boolean(event.payload.error)))
       } else if (event.type === 'tool.start') {
         // The stream so far is transient narration interrupted by this tool
         // round; clearing it keeps rounds from concatenating into one
         // unreadable stream that the final answer then replaces.
         setStreaming('')
         const startMs = Date.now()
-        setActive(turn => {
+        mutateActive(turn => {
           const current = ensureTurn(turn)
           return {
             ...current,
@@ -248,14 +257,14 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         })
         setActivity(`tool ${event.payload.name}`)
       } else if (event.type === 'tool.update') {
-        setActive(turn => turn && updateToolRun(turn, event.payload.tool_call_id, run => ({
+        mutateActive(turn => turn && updateToolRun(turn, event.payload.tool_call_id, run => ({
           content: event.payload.content ?? run.content
         })))
       } else if (event.type === 'tool.complete') {
         const endMs = Date.now()
         // Prefer the backend-measured execution time: it excludes the event
         // round trip and stays accurate however long the tool really ran.
-        setActive(turn => turn && updateToolRun(turn, event.payload.tool_call_id, run => ({
+        mutateActive(turn => turn && updateToolRun(turn, event.payload.tool_call_id, run => ({
           content: event.payload.content,
           endMs: typeof event.payload.elapsed_ms === 'number' ? run.startMs + event.payload.elapsed_ms : endMs,
           error: event.payload.error
@@ -275,10 +284,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setBusy(event.payload.running)
       } else if (event.type === 'verification.start') {
         setActivity('verifying')
-        setActive(turn => ({ ...ensureTurn(turn), verification: { running: true } }))
+        mutateActive(turn => ({ ...ensureTurn(turn), verification: { running: true } }))
       } else if (event.type === 'verification.complete') {
         setActivity('')
-        setActive(turn => ({ ...ensureTurn(turn), verification: event.payload }))
+        mutateActive(turn => ({ ...ensureTurn(turn), verification: event.payload }))
       } else if (event.type === 'progress.update') {
         setProgress(event.payload)
       } else if (event.type === 'context.compacted') {
@@ -527,7 +536,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     setStreaming('')
     const turnId = `turn-${Date.now()}`
     activeTurn.current = turnId
-    setActive({ text, thinking: [], tools: [], turnId })
+    mutateActive(() => ({ text, thinking: [], tools: [], turnId }))
   }
 
   /** Move the finished turn plus its results into the static scrollback. */
@@ -536,8 +545,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     const settled = turn ? [activeAsMessage(closeOpenThinking(turn))] : []
     const additions = [...settled, ...extra]
     if (additions.length) setHistory(items => [...items, ...additions])
-    setActive(null)
-    activeRef.current = null
+    mutateActive(() => null)
     setStreaming('')
   }
 
@@ -567,8 +575,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     if (stdout.isTTY) stdout.write('\u001B[2J\u001B[3J\u001B[H')
     setStaticKey(value => value + 1)
     setHistory(restoredMessages(result.history ?? []))
-    setActive(null)
-    activeRef.current = null
+    mutateActive(() => null)
     setStreaming('')
     setBusy(Boolean(result.info.running))
     applyApproval(result.info)
@@ -936,11 +943,18 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         appendSystem([
           '# Plugins',
           ...result.plugins.map(plugin => {
-            const meta = [plugin.version, plugin.scope, plugin.tools.length ? `tools: ${plugin.tools.join(', ')}` : '']
-              .filter(Boolean).join(' · ')
+            const meta = [
+              plugin.version,
+              plugin.scope,
+              plugin.disabled ? 'disabled' : '',
+              plugin.required ? 'required' : '',
+              plugin.tools.length ? `tools: ${plugin.tools.join(', ')}` : ''
+            ].filter(Boolean).join(' · ')
             const errors = plugin.errors.length ? `\n  - error: ${plugin.errors.join('; ')}` : ''
             return `- **${plugin.name}**${meta ? ` (${meta})` : ''}${plugin.description ? ` - ${plugin.description}` : ''}${errors}`
-          })
+          }),
+          '',
+          'Disable any plugin with `disabled_plugins` in config.json or FRIDAY_DISABLED_PLUGINS.'
         ].join('\n'))
       }).catch(requestError)
     } else {

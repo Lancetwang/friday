@@ -1,13 +1,44 @@
 # Plugins
 
-Friday's runtime core is deliberately small: a guarded model → tools → model
-loop. Everything the product adds - workspace tools, web access, memory,
-skills, plans - reaches the agent through two seams: the tool list the loop
-receives and the system prompt the session composes. Plugins are user code
-that travels through those same seams, so extending Friday does not mean
-patching its core.
+Friday's runtime core is a guarded model → tools → model loop and nothing
+else. **Everything outside that loop is a plugin**, including the
+capabilities Friday ships with: there is one registry, and the only two seams
+any capability can use - the tool list the loop receives and the system
+prompt the session composes - are the same for built-in and user code. The
+difference between "shipped with Friday" and "added by you" is packaging,
+not architecture.
 
-## What a plugin is
+## The built-in plugins
+
+| Plugin | Contributes | Notes |
+| --- | --- | --- |
+| `workspace` | Read, Write, Edit, Glob, Grep, Bash, UpdatePlan | Required; cannot be disabled |
+| `web` | WebSearch, WebFetch | |
+| `memory` | Memory tool, plus per-turn recall and capture | Disabling silences recall/capture too |
+| `skills` | Skill tool, plus the routing prompt section | Routing re-evaluates every turn |
+
+`/plugins` in the TUI, `plugin.list` on the gateway, and `session.info` all
+report this registry - name, scope (`builtin`/`project`/`user`), contributed
+tools, disabled state, and any errors.
+
+## Unplugging a capability
+
+One switch covers built-ins and external plugins alike:
+
+```jsonc
+// ~/.friday/config.json or the project's config.json
+{ "disabled_plugins": ["web", "memory"] }
+```
+
+or `FRIDAY_DISABLED_PLUGINS=web,memory` in the environment. Disabling is
+real, not cosmetic: a disabled `memory` removes the Memory tool *and* stops
+recall/capture in every turn; a disabled `web` or `skills` disappears from
+the agent, the prompt, and the Goal-mode verifier. The required `workspace`
+pack refuses and records why. `FRIDAY_DISABLE_PLUGINS=1` (singular) skips
+external plugin code entirely - the right default for hermetic evaluation
+runs.
+
+## Writing an external plugin
 
 One ES module whose default export describes the extension:
 
@@ -18,10 +49,12 @@ export default {
   version: '1.0.0',
   description: 'Looks tickets up in the local tracker.',
 
-  // Optional: appended to the system prompt as `## Plugin: ticket-lookup`.
+  // Optional. A string, or a function re-evaluated on every prompt rebuild
+  // (that is how the built-in skills plugin keeps its routing list fresh).
+  // Rendered as `## Plugin: ticket-lookup` after Friday's own rules.
   instructions: 'Use the Ticket tool whenever the user names a ticket id.',
 
-  // Optional: extra tools for the agent. Same Tool shape friday-agent-core uses.
+  // Optional: extra tools. Same Tool shape friday-agent-core uses.
   tools({ workspace }) {
     return [{
       name: 'Ticket',
@@ -33,13 +66,12 @@ export default {
         additionalProperties: false
       },
       async execute(args) {
-        // Runs with Friday's own privileges. Throwing reports a tool error.
         return lookupTicket(String(args.id))
       }
     }]
   },
 
-  // Optional: middleware over every tool, built-in and plugin alike.
+  // Optional: middleware over every assembled tool, built-in and plugin alike.
   wrapTool({ workspace }, tool) {
     return {
       ...tool,
@@ -56,38 +88,36 @@ export default {
 }
 ```
 
-## Where plugins live
-
 | Scope | Directory |
 | --- | --- |
 | Project | `<workspace>/.friday/plugins/*.mjs` |
 | User | `~/.friday/plugins/*.mjs` |
 
 Project plugins shadow user plugins with the same name. Files are re-imported
-when a new session starts, so editing a plugin takes effect with `/new` -
-no gateway restart needed. Set `FRIDAY_DISABLE_PLUGINS=1` to run without
-plugins, which evaluation environments should do unless the evaluation is
-about a plugin.
+when a new session starts, so editing a plugin takes effect with `/new` - no
+gateway restart needed.
 
 ## Rules the host enforces
 
-- **Built-ins cannot be replaced.** A plugin tool whose name collides with a
-  registered tool is skipped and the collision is recorded on the plugin's
-  error list. Silently swapping a tool the model already knows is how
-  injection-shaped bugs are born.
+- **Registered names win.** Built-ins assemble first, so a plugin tool whose
+  name collides with an existing tool is skipped and recorded. Silently
+  swapping a tool the model already knows is how injection-shaped bugs are
+  born.
 - **Wrappers must be transparent.** `wrapTool` must return a tool with the
   same name, description, and parameters object; anything else is discarded
   and recorded. Middleware may observe and veto, not impersonate.
 - **A broken plugin never breaks Friday.** Import errors, invalid exports,
-  and thrown factories are captured per plugin and shown in `/plugins` and
-  `plugin.list`; the session starts without the broken parts.
-- **The verifier stays clean.** Goal-mode verification runs with the built-in
-  read-only tool set; plugin tools and wrappers are never applied to it, so
-  independent verification cannot be steered by the code it is checking.
-- **Prompt position is fixed.** Plugin instructions render after Friday's
-  security, runtime, and user rule sections and before the environment
-  section. They can guide tool choice; they cannot outrank the security
-  boundary.
+  and thrown factories are captured per plugin; the session starts without
+  the broken parts.
+- **The verifier assembles from built-ins only.** Goal-mode verification uses
+  the read-only tools each built-in pack declares (checked loudly at build
+  time), never external plugin code - verification cannot be steered by the
+  code it is checking. The user's disabled list is honored there too.
+- **Prompt position is fixed.** Capability and plugin sections render after
+  Friday's security, runtime, and user rule sections and before the
+  environment. They can guide tool choice; they cannot outrank the security
+  boundary. External sections are prefixed `Plugin:` so the model can tell
+  whose voice it is reading.
 
 ## Trust model
 
@@ -96,17 +126,3 @@ like an editor extension. Installing one is an act of trust in its author.
 Friday does not sandbox plugin execution; it bounds what plugins can change
 about the *agent contract* (tools, prompt) rather than what their code can do
 on the machine you already let Friday work on.
-
-## Inspecting
-
-- TUI: `/plugins`
-- Gateway: `{"method": "plugin.list"}` → `{ plugins: [{ name, version, description, scope, source, tools, has_instructions, errors }] }`
-- `session.info` includes the same report under `plugins` for the live session.
-
-## Direction
-
-The plugin surface is intentionally the same one built-ins use. The intended
-end state is a thin execution core plus a host that assembles capabilities,
-with built-in tool packs (workspace, web, memory, skills) registered through
-the same interface plugins use - so the difference between "shipped with
-Friday" and "added by you" is packaging, not architecture.

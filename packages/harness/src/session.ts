@@ -179,74 +179,45 @@ export class FridaySession {
     const images = options.images ?? []
     if (images.length && !this.config.vision) throw new Error(`Model '${this.config.profileName}' does not support image input.`)
     const input = attachmentPrompt(options.input ?? text, attachments)
-    const before = this.context.snapshotUsage()
-    const messages = structuredClone(this.context.messages)
-    const archived = structuredClone(this.archived)
-    const readAllow = new Set(this.readAllow)
-    const progress = currentProgress(this.context)
-    const turnCount = this.turns
-    const started = performance.now()
-    this.checkpointSeed = { user: options.internal ? '' : display, messages, archived, progress, turns: turnCount, thinkingEffort: this.thinking }
-    this.abort = new AbortController()
-    try {
-      beginProgress(this.context, text, mode, options.continueProgress === true)
-      // Unplugging the memory capability silences recall and capture too,
-      // not just the Memory tool: disabled means Friday does not remember.
-      const remember = !options.internal && this.pluginEnabled('memory')
-      const recalled = remember ? await relevantMemory(this.workspace, text) : ''
-      const captured = remember ? await captureUserMemory(this.workspace, text, this.sessionId) : undefined
-      this.refreshInstructions()
-      if (recalled) this.context.addMessage({ role: 'system', content: recalled, friday_memory_recall: true })
-      if (captured) this.context.emit('memory.updated', 'memory', { capture: captured })
-      for (const attachment of attachments) this.readAllow.add(attachment.path)
-      this.context.addMessage({
-        role: 'user',
-        content: images.length
-          ? [{ type: 'text', text: input }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))]
-          : input,
-        ...(options.internal ? { friday_internal: true } : {}),
-        ...(input !== display || mode === 'goal' ? { friday_display_text: display } : {}),
-        ...(attachments.length ? { friday_attachments: attachments } : {}),
-        friday_timestamp: zonedTimestamp(),
-        ...(mode === 'goal' ? { friday_goal: true } : {})
-      })
-      const agent = this.ensureAgent()
-      if (!options.continueProgress) agent.resetLoopGuard()
-      const result = await agent.resume({ signal: this.abort.signal, ...(onDelta ? { onDelta } : {}) })
-      const metrics = this.measureTurn(before, started)
-      if (!options.internal) this.turns += 1
-      this.pending = result.status === 'paused' ? await pendingApproval(this.workspace, this.sessionId) : { pending: false }
-      this.pendingMetrics = result.status === 'paused' ? metrics : undefined
-      if (result.status === 'paused') finishProgress(this.context, 'waiting')
-      else {
-        this.removeRuntimeMessages()
-        if (!options.deferCompletion) finishProgress(this.context, 'done')
+    const user = options.internal ? '' : display
+    return this.runTurn({
+      user,
+      trace: mode,
+      deferDone: options.deferCompletion === true,
+      async prepare(session, snapshot) {
+        session.checkpointSeed = {
+          user,
+          messages: snapshot.messages,
+          archived: snapshot.archived,
+          progress: snapshot.progress,
+          turns: snapshot.turns,
+          thinkingEffort: session.thinking
+        }
+        beginProgress(session.context, text, mode, options.continueProgress === true)
+        // Unplugging the memory capability silences recall and capture too,
+        // not just the Memory tool: disabled means Friday does not remember.
+        const remember = !options.internal && session.pluginEnabled('memory')
+        const recalled = remember ? await relevantMemory(session.workspace, text) : ''
+        const captured = remember ? await captureUserMemory(session.workspace, text, session.sessionId) : undefined
+        session.refreshInstructions()
+        if (recalled) session.context.addMessage({ role: 'system', content: recalled, friday_memory_recall: true })
+        if (captured) session.context.emit('memory.updated', 'memory', { capture: captured })
+        for (const attachment of attachments) session.readAllow.add(attachment.path)
+        session.context.addMessage({
+          role: 'user',
+          content: images.length
+            ? [{ type: 'text', text: input }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))]
+            : input,
+          ...(options.internal ? { friday_internal: true } : {}),
+          ...(input !== display || mode === 'goal' ? { friday_display_text: display } : {}),
+          ...(attachments.length ? { friday_attachments: attachments } : {}),
+          friday_timestamp: zonedTimestamp(),
+          ...(mode === 'goal' ? { friday_goal: true } : {})
+        })
+        if (!options.continueProgress) session.ensureAgent().resetLoopGuard()
+        if (!options.internal) session.turns += 1
       }
-      const artifacts = this.activeCheckpoint
-        ? await checkpointArtifacts(this.workspace, (await finishCheckpoint(this.workspace, this.activeCheckpoint, result.status === 'paused')).changed_paths ?? [])
-        : []
-      this.attachArtifacts(artifacts)
-      this.attachTurnMetadata(metrics)
-      await this.save(options.internal ? '' : display, result.text, metrics)
-      await this.recordTrace(mode, options.internal ? '' : display, result.text, result.status, metrics)
-      return { text: result.text, metrics, status: result.status, ...(artifacts.length ? { artifacts } : {}) }
-    } catch (error) {
-      this.context.messages.splice(0, this.context.messages.length, ...messages)
-      this.archived.splice(0, this.archived.length, ...archived)
-      this.readAllow.clear()
-      for (const path of readAllow) this.readAllow.add(path)
-      Object.assign(this.context.usage, before)
-      this.turns = turnCount
-      restoreProgress(this.context, progress, true)
-      if (this.activeCheckpoint) await finishCheckpoint(this.workspace, this.activeCheckpoint, false).catch(() => {})
-      throw error
-    } finally {
-      this.abort = undefined
-      this.checkpointSeed = undefined
-      this.activeCheckpoint = ''
-      this.lastEvents = structuredClone(this.context.events)
-      this.context.events.length = 0
-    }
+    }, onDelta)
   }
 
   async goal(
@@ -401,30 +372,16 @@ export class FridaySession {
       result = await runShell(this.workspace, approval.command, approval.timeout_seconds, this.abort.signal, progress)
       progress(JSON.stringify(result))
     } catch (error) {
-      if (approval) {
-        const cancelled = { approved: false, cancelled: true, command: approval.command }
-        this.replacePendingTool(approval, cancelled)
-        this.pending = { pending: false }
-        this.pendingMetrics = undefined
-        await this.save('', '', emptyMetrics())
-        if (checkpointId) await finishCheckpoint(this.workspace, checkpointId, false).catch(() => {})
-      }
+      if (approval) await this.cancelApprovalDecision(approval, checkpointId)
       throw error
     } finally {
       this.abort = undefined
     }
-    const goal = this.activeGoal()
-    const attempt = this.nextVerificationAttempt()
     const outcome = { approved: true, approval, result }
     this.replacePendingTool(approval, outcome)
     this.pending = { pending: false }
     onResolved?.(true)
-    const turn = await this.continue(onDelta)
-    return {
-      approval: outcome,
-      continued: true,
-      turn: goal && turn.status === 'done' ? await this.verifyGoalLoop(goal, turn, attempt, onDelta) : turn
-    }
+    return this.continueAfterApproval(outcome, onDelta)
   }
 
   async reject(instruction = '', onDelta?: (text: string) => void, onResolved?: (continued: boolean) => void): Promise<ApprovalResult> {
@@ -455,20 +412,27 @@ export class FridaySession {
       }
       else this.context.addMessage({ role: 'user', content: guidance, friday_internal: true, friday_human_guidance: true })
     } catch (error) {
-      if (approval && !outcome) {
-        const cancelled = { approved: false, cancelled: true, command: approval.command }
-        this.replacePendingTool(approval, cancelled)
-        this.pending = { pending: false }
-        this.pendingMetrics = undefined
-        await this.save('', '', emptyMetrics())
-        if (checkpointId) await finishCheckpoint(this.workspace, checkpointId, false).catch(() => {})
-      }
+      if (approval && !outcome) await this.cancelApprovalDecision(approval, checkpointId)
       throw error
     } finally {
       this.abort = undefined
     }
     if (!outcome) throw new Error('Approval decision failed before producing a result.')
     if (!guidance) return { approval: outcome, continued: false }
+    return this.continueAfterApproval(outcome, onDelta)
+  }
+
+  /** Record a decision that failed before resolving, and release its checkpoint. */
+  private async cancelApprovalDecision(approval: Approval, checkpointId: string): Promise<void> {
+    this.replacePendingTool(approval, { approved: false, cancelled: true, command: approval.command })
+    this.pending = { pending: false }
+    this.pendingMetrics = undefined
+    await this.save('', '', emptyMetrics())
+    if (checkpointId) await finishCheckpoint(this.workspace, checkpointId, false).catch(() => {})
+  }
+
+  /** Resume the paused turn and, inside a goal, hand it back to verification. */
+  private async continueAfterApproval(outcome: Record<string, unknown>, onDelta?: (text: string) => void): Promise<ApprovalResult> {
     const goal = this.activeGoal()
     const attempt = this.nextVerificationAttempt()
     const turn = await this.continue(onDelta)
@@ -570,52 +534,88 @@ export class FridaySession {
 
   private async continue(onDelta?: (text: string) => void): Promise<TurnResult> {
     if (this.abort) throw new Error('This session already has a request in progress.')
-    this.abort = new AbortController()
+    const goalMode = currentProgress(this.context)?.mode === 'goal'
+    return this.runTurn({
+      user: '',
+      trace: goalMode ? 'goal-continuation' : 'continuation',
+      deferDone: goalMode,
+      saveOnError: true,
+      async prepare(session) {
+        session.activeCheckpoint = await session.beginCheckpoint('', true)
+        resumeProgress(session.context)
+        session.refreshInstructions()
+      }
+    }, onDelta)
+  }
+
+  /**
+   * The one turn frame. Every way a turn runs - a fresh user message or a
+   * continuation after an approval - shares this lifecycle: snapshot, run,
+   * measure, persist; roll everything back on failure; and always hand the
+   * turn's events to `lastEvents` so goal verification examines the work
+   * that actually just happened.
+   */
+  private async runTurn(
+    options: {
+      user: string
+      trace: string
+      deferDone: boolean
+      saveOnError?: boolean
+      prepare(session: FridaySession, snapshot: CheckpointSeed): Promise<void> | void
+    },
+    onDelta?: (text: string) => void
+  ): Promise<TurnResult> {
+    if (this.abort) throw new Error('This session already has a request in progress.')
     const before = this.context.snapshotUsage()
     const pendingMetrics = this.pendingMetrics
-    const messages = structuredClone(this.context.messages)
-    const archived = structuredClone(this.archived)
-    const progress = currentProgress(this.context)
-    const goalMode = currentProgress(this.context)?.mode === 'goal'
+    const snapshot: CheckpointSeed = {
+      user: options.user,
+      messages: structuredClone(this.context.messages),
+      archived: structuredClone(this.archived),
+      progress: currentProgress(this.context),
+      turns: this.turns,
+      thinkingEffort: this.thinking
+    }
+    const readAllow = new Set(this.readAllow)
     const started = performance.now()
-    let checkpointId = ''
+    this.abort = new AbortController()
     try {
-      checkpointId = await this.beginCheckpoint('', true)
-      this.activeCheckpoint = checkpointId
-      resumeProgress(this.context)
-      this.refreshInstructions()
+      await options.prepare(this, snapshot)
       const result = await this.ensureAgent().resume({ signal: this.abort.signal, ...(onDelta ? { onDelta } : {}) })
-      const currentMetrics = this.measureTurn(before, started)
-      const metrics = pendingMetrics ? addMetrics(pendingMetrics, currentMetrics) : currentMetrics
+      const current = this.measureTurn(before, started)
+      const metrics = pendingMetrics ? addMetrics(pendingMetrics, current) : current
       this.pending = result.status === 'paused' ? await pendingApproval(this.workspace, this.sessionId) : { pending: false }
       this.pendingMetrics = result.status === 'paused' ? metrics : undefined
       if (result.status === 'paused') finishProgress(this.context, 'waiting')
       else {
         this.removeRuntimeMessages()
-        if (!goalMode) finishProgress(this.context, 'done')
+        if (!options.deferDone) finishProgress(this.context, 'done')
       }
-      const artifacts = await checkpointArtifacts(
-        this.workspace,
-        (await finishCheckpoint(this.workspace, checkpointId, result.status === 'paused')).changed_paths ?? []
-      )
+      const artifacts = this.activeCheckpoint
+        ? await checkpointArtifacts(this.workspace, (await finishCheckpoint(this.workspace, this.activeCheckpoint, result.status === 'paused')).changed_paths ?? [])
+        : []
       this.attachArtifacts(artifacts)
       this.attachTurnMetadata(metrics)
-      await this.save('', result.text, metrics)
-      await this.recordTrace(goalMode ? 'goal-continuation' : 'continuation', '', result.text, result.status, metrics)
+      await this.save(options.user, result.text, metrics)
+      await this.recordTrace(options.trace, options.user, result.text, result.status, metrics)
       return { text: result.text, metrics, status: result.status, ...(artifacts.length ? { artifacts } : {}) }
     } catch (error) {
-      this.context.messages.splice(0, this.context.messages.length, ...messages)
-      this.archived.splice(0, this.archived.length, ...archived)
+      this.context.messages.splice(0, this.context.messages.length, ...snapshot.messages)
+      this.archived.splice(0, this.archived.length, ...snapshot.archived)
+      this.readAllow.clear()
+      for (const path of readAllow) this.readAllow.add(path)
       Object.assign(this.context.usage, before)
+      this.turns = snapshot.turns
       this.pendingMetrics = undefined
-      restoreProgress(this.context, progress, true)
-      if (checkpointId) await finishCheckpoint(this.workspace, checkpointId, false).catch(() => {})
-      await this.save('', '', emptyMetrics())
+      restoreProgress(this.context, snapshot.progress, true)
+      if (this.activeCheckpoint) await finishCheckpoint(this.workspace, this.activeCheckpoint, false).catch(() => {})
+      if (options.saveOnError) await this.save('', '', emptyMetrics())
       throw error
     } finally {
       this.abort = undefined
       this.checkpointSeed = undefined
       this.activeCheckpoint = ''
+      this.lastEvents = structuredClone(this.context.events)
       this.context.events.length = 0
     }
   }
