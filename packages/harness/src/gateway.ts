@@ -30,6 +30,7 @@ import {
   sessionTree
 } from './session.js'
 import { thinkingOptions } from './thinking.js'
+import { loadPlugins, pluginInfo } from './plugins.js'
 import { discoverSkills, skillDetail } from './skills.js'
 import type { PermissionMode } from './permissions.js'
 import { checkpointChoices, restoreCheckpoint } from './checkpoint.js'
@@ -127,6 +128,9 @@ export class Gateway {
           }
         }, 'Stop running requests before restoring a checkpoint.')
         this.ok(id, result)
+      }
+      else if (method === 'plugin.list') {
+        this.ok(id, { plugins: pluginInfo(await loadPlugins(this.workspace)) })
       }
       else if (method === 'skill.list') this.ok(id, { skills: discoverSkills(this.workspace) })
       else if (method === 'skill.get') this.ok(id, skillDetail(this.workspace, String(params.path || '')))

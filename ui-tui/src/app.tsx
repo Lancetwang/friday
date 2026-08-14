@@ -112,6 +112,16 @@ type BranchNode = {
   turns?: number
 }
 
+type PluginInfo = {
+  description: string
+  errors: string[]
+  name: string
+  scope: string
+  source: string
+  tools: string[]
+  version: string
+}
+
 type BranchTree = { nodes: BranchNode[]; root: string }
 
 type BranchRow = { depth: number; guide: string; node: BranchNode }
@@ -917,6 +927,22 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       }).catch(requestError)
     } else if (command === '/branches') {
       openBranchView()
+    } else if (command === '/plugins') {
+      void gateway.request<{ plugins: PluginInfo[] }>('plugin.list').then(result => {
+        if (!result.plugins.length) {
+          appendSystem('No plugins loaded. Put an ES module in `.friday/plugins/` (project) or `~/.friday/plugins/` (user).')
+          return
+        }
+        appendSystem([
+          '# Plugins',
+          ...result.plugins.map(plugin => {
+            const meta = [plugin.version, plugin.scope, plugin.tools.length ? `tools: ${plugin.tools.join(', ')}` : '']
+              .filter(Boolean).join(' · ')
+            const errors = plugin.errors.length ? `\n  - error: ${plugin.errors.join('; ')}` : ''
+            return `- **${plugin.name}**${meta ? ` (${meta})` : ''}${plugin.description ? ` - ${plugin.description}` : ''}${errors}`
+          })
+        ].join('\n'))
+      }).catch(requestError)
     } else {
       appendSystem(`Unknown command: ${command}. Try /help.`)
     }

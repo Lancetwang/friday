@@ -6,7 +6,11 @@ import { fridayHome, projectStateDir, type ModelConfig } from './config.js'
 import { promptAssets } from './prompt-assets.js'
 import { skillRouting } from './skills.js'
 
-export function buildInstructions(workspace: string, config: ModelConfig): string {
+export function buildInstructions(
+  workspace: string,
+  config: ModelConfig,
+  extraSections: Array<[string, string]> = []
+): string {
   const home = fridayHome()
   const state = projectStateDir(workspace)
   const parts: Array<[string, string]> = [
@@ -21,6 +25,9 @@ export function buildInstructions(workspace: string, config: ModelConfig): strin
     ['Project Instructions', projectInstructions(workspace)],
     ['Project Memory', userFile(state, ['MEMORY.md'])],
     ['Skills', skillRouting(workspace)],
+    // Plugin sections sit between the durable rules and the environment so
+    // they can guide tool choice without outranking security or user rules.
+    ...extraSections,
     ['Environment', environment(workspace, config)]
   ]
   return parts.filter(([, body]) => body.trim()).map(([title, body]) => `## ${title}\n${body.trim()}`).join('\n\n')

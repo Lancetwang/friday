@@ -13,6 +13,7 @@ Start here:
 - [Model Configuration](model-configuration.md)
 - [CLI Commands](cli.md)
 - [Tools](tools.md)
+- [Plugins](plugins.md)
 - [Memory](memory.md)
 - [Skills](skills.md)
 - [Verification](verification.md)

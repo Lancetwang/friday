@@ -11,6 +11,7 @@ export const COMMANDS = [
   { name: '/model', detail: 'Choose a configured model and thinking level' },
   { name: '/search', detail: 'Configure a Web Search provider API key' },
   { name: '/memory', detail: 'Inspect or manage persistent memory' },
+  { name: '/plugins', detail: 'List loaded Friday plugins' },
   { name: '/context', detail: 'Show current context usage' },
   { name: '/trace', detail: 'Usage: /trace on | /trace off' },
   { name: '/compact', detail: 'Compact the current conversation' },

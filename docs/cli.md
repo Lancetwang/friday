@@ -43,6 +43,7 @@ TUI slash commands:
 /model
 /search
 /memory [help|status|list|search|add|update|remove|consolidate]
+/plugins
 /context
 /trace on|off
 /compact
@@ -51,6 +52,7 @@ TUI slash commands:
 /resume
 /permission
 /fork
+/branches
 /backward
 /exit
 ```
@@ -59,3 +61,15 @@ Typing `/` opens prefix completion. `/login`, `/model`, `/search`, `/resume`,
 and `/permission` use searchable pickers. `/clear` deletes the current saved
 conversation and starts fresh; `/fork` branches from the latest response;
 `/backward` returns to its parent.
+
+`/branches` opens the fork map: the conversation tree drawn with guide lines,
+the current branch marked `◉`, each fork labeled with the message index it
+split from. `↑`/`↓` move linearly, `←` jumps to the parent branch, `→` dives
+into the first child, `Enter` opens the selected branch, `Ctrl+D` deletes it
+together with its sub-branches after confirmation (the root cannot be deleted
+here), and `Esc` closes the map. `/fork` and `/backward` open it automatically
+so you always see where you landed.
+
+Keyboard shortcuts while chatting: `Ctrl+O` toggles tool-call details,
+`Ctrl+T` toggles thinking content, `Esc Esc` stops the running response, and
+`Ctrl+C` clears the input or exits.

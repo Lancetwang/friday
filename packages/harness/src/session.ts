@@ -20,6 +20,7 @@ import {
   type PermissionMode
 } from './permissions.js'
 import { buildInstructions, promptTemplate } from './prompts.js'
+import { applyPlugins, loadPlugins, pluginInfo, pluginInstructionSections, type LoadedPlugin } from './plugins.js'
 import { buildTools, runShell } from './tools.js'
 import { writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
@@ -115,17 +116,19 @@ export class FridaySession {
   private pendingMetrics: TurnMetrics | undefined
   private lastEvents: AgentEvent[] = []
   private readonly readAllow = new Set<string>()
+  private readonly plugins: LoadedPlugin[]
 
-  private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext) {
+  private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext, plugins: LoadedPlugin[]) {
     this.workspace = resolveWorkspace(workspace)
     this.sessionId = sessionId
     this.config = config
+    this.plugins = plugins
     this.thinking = defaultThinking(config.provider, config.model)
     this.context = context
     if (!context.messages.some(message => message.role === 'system')) {
-      context.addMessage({ role: 'system', content: buildInstructions(this.workspace, config) })
+      context.addMessage({ role: 'system', content: this.instructions() })
     }
-    this.tools = buildTools(this.workspace, {
+    this.tools = applyPlugins(buildTools(this.workspace, {
       sessionId,
       permissionMode: () => this.permission,
       sessionAllowed: () => this.sessionAllowed,
@@ -133,7 +136,7 @@ export class FridaySession {
       updatePlan: value => updatePlan(this.context, value),
       readPaths: () => [...this.readAllow],
       reviewCommand: (command, risk, signal) => this.reviewShell(command, risk, signal)
-    })
+    }), plugins, { workspace: this.workspace })
     context.onEvent = event => this.onEvent?.(event)
     context.onObservation = event => observeContextUsage(context, event)
   }
@@ -144,7 +147,8 @@ export class FridaySession {
     const config = loadModelConfig(root)
     const context = new RunContext()
     const snapshot = await readSnapshot(root, sessionId)
-    const session = new FridaySession(root, sessionId, config, context)
+    const plugins = await loadPlugins(root)
+    const session = new FridaySession(root, sessionId, config, context, plugins)
     if (snapshot) {
       for (const message of conversationBody(snapshot.messages)) context.addMessage(message)
       session.archived.push(...snapshot.archived)
@@ -323,7 +327,7 @@ export class FridaySession {
     if (entry.session_id !== this.sessionId) throw new Error('Checkpoint belongs to another session.')
     this.archived.splice(0, this.archived.length, ...structuredClone(entry.before_archived ?? []))
     this.context.messages.splice(0, this.context.messages.length)
-    this.context.addMessage({ role: 'system', content: buildInstructions(this.workspace, this.config) })
+    this.context.addMessage({ role: 'system', content: this.instructions() })
     for (const message of conversationBody(entry.before_messages)) this.context.addMessage(structuredClone(message))
     this.turns = entry.before_turns ?? 0
     this.thinking = normalizeThinking(this.config.provider, this.config.model, entry.before_thinking_effort)
@@ -347,7 +351,7 @@ export class FridaySession {
     this.thinking = normalizeThinking(this.config.provider, this.config.model, this.thinking)
     this.agent = undefined
     const system = this.context.messages.find(message => message.role === 'system')
-    if (system) system.content = buildInstructions(this.workspace, this.config)
+    if (system) system.content = this.instructions()
     return this.config
   }
 
@@ -482,6 +486,7 @@ export class FridaySession {
       progress: this.progress(),
       running: !!this.abort,
       tools: this.tools.map(tool => tool.name),
+      plugins: pluginInfo(this.plugins),
       approval: this.approval()
     }
   }
@@ -825,9 +830,13 @@ export class FridaySession {
     message.content = JSON.stringify(value)
   }
 
+  private instructions(): string {
+    return buildInstructions(this.workspace, this.config, pluginInstructionSections(this.plugins))
+  }
+
   private refreshInstructions(): void {
     const system = this.context.messages.find(message => message.role === 'system')
-    if (system) system.content = buildInstructions(this.workspace, this.config)
+    if (system) system.content = this.instructions()
   }
 
   private removeRuntimeMessages(): void {

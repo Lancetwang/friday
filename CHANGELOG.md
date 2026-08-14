@@ -2,6 +2,14 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## Unreleased
+
+- Added a plugin system: local ES modules in `.friday/plugins/` (project) or `~/.friday/plugins/` (user) contribute tools, system prompt sections, and transparent tool middleware through the same seams built-ins use. Built-in names cannot be shadowed, schema-changing wrappers are rejected, broken plugins are reported instead of fatal, and the Goal-mode verifier never receives plugin code. Inspect with `/plugins`, `plugin.list`, or `session.info`; disable with `FRIDAY_DISABLE_PLUGINS=1`.
+- Turn metrics now include provider-reported cache tokens and end-of-turn context occupancy. Agent Core reads every known cache shape (Anthropic cache read/creation, OpenAI `prompt_tokens_details`, DeepSeek `prompt_cache_hit_tokens`) and the Anthropic adapter forwards cache fields it previously dropped, so the per-message usage line in both UIs shows real figures instead of `n/a`.
+- Rebuilt the TUI frame around a static scrollback: finished messages render once into the terminal's own history and only the live turn, status, and composer repaint. The input stays pinned to the bottom on Linux terminals instead of flickering when output passes the last row; long streams render as a bounded tail until complete.
+- Split TUI detail shortcuts: `Ctrl+O` now toggles only tool-call details and `Ctrl+T` toggles thinking content, removing the old shared-toggle conflict.
+- Added a TUI fork map (`/branches`, also opened by `/fork` and `/backward`): the conversation tree with guide lines, current/root markers, and fork-origin message indexes; `↑↓←→` navigate, `Enter` opens a branch, `Ctrl+D` deletes a branch and its children after confirmation. `session.tree` nodes now carry `turns` and `fork_message_index`.
+
 ## v0.2.1 - Final TypeScript repository cleanup (2026-08-14)
 
 - Retired the in-repository Python Harness, phone bridge, Python desktop sidecar, and migration-only release paths. Friday now has one TypeScript runtime; only the optional Harbor protocol adapter remains Python.

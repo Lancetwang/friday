@@ -28,6 +28,20 @@ belongs here only when a second real execution shape proves it necessary.
 The Harness imports only Core's public API. It does not duplicate the model/tool
 loop or let UI state mutate a running agent directly.
 
+## Plugins
+
+Everything the Harness adds reaches the agent through two seams: the tool
+list the loop receives and the system prompt the session composes. Plugins
+([docs](plugins.md)) are local ES modules that travel through those same
+seams - contributed tools, appended prompt sections, and transparent tool
+middleware - loaded from `.friday/plugins/` (project) and `~/.friday/plugins/`
+(user). The host enforces the contract: built-in tools cannot be replaced,
+wrappers cannot change a tool's name or schema, a broken plugin is reported
+rather than fatal, and the Goal-mode verifier never receives plugin code. The
+direction of travel is a thin execution core plus a host that assembles
+capability packs, with built-ins registered through the same interface
+plugins use.
+
 ## Surfaces
 
 ```mermaid
