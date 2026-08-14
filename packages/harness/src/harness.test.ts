@@ -71,8 +71,12 @@ test('the harness loads legacy config, chats, and writes a resumable snapshot', 
     assert.deepEqual(result, {
       text: 'hello from TypeScript',
       status: 'done',
-      metrics: { elapsed_ms: result.metrics.elapsed_ms, requests: 1, input_tokens: 4, output_tokens: 3 }
+      metrics: {
+        elapsed_ms: result.metrics.elapsed_ms, requests: 1, input_tokens: 4, output_tokens: 3,
+        cached_tokens: null, window_tokens: result.metrics.window_tokens, window: 100_000
+      }
     })
+    assert.equal(typeof result.metrics.window_tokens, 'number')
     const snapshot = JSON.parse(await readFile(join(projectStateDir(workspace), 'sessions', 'session-one.json'), 'utf8')) as Record<string, unknown>
     assert.equal(snapshot.turns, 1)
     const userTimes = snapshot.user_message_times as Array<Record<string, unknown>>

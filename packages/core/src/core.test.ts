@@ -26,7 +26,7 @@ test('streams through a model-tool-model turn', async () => {
       } else {
         sse(response, { choices: [{ delta: { content: 'The answer ' } }] })
         sse(response, { choices: [{ delta: { content: 'is 5.' } }] })
-        sse(response, { choices: [], usage: { prompt_tokens: 15, completion_tokens: 5 } })
+        sse(response, { choices: [], usage: { prompt_tokens: 15, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 6 } } })
       }
       response.end('data: [DONE]\n\n')
     })
@@ -63,7 +63,7 @@ test('streams through a model-tool-model turn', async () => {
     assert.deepEqual(chunks, ['The answer ', 'is 5.'])
     assert.deepEqual(agent.context.messages.map(message => message.role), ['system', 'user', 'assistant', 'tool', 'assistant'])
     assert.equal(agent.context.messages[3]?.content, '5')
-    assert.deepEqual(agent.context.usage, { requests: 2, inputTokens: 25, outputTokens: 7 })
+    assert.deepEqual(agent.context.usage, { requests: 2, inputTokens: 25, outputTokens: 7, cachedTokens: 6 })
     assert.deepEqual(agent.context.events.filter(event => event.category === 'tool').map(event => event.type), ['tool.call', 'tool.result'])
     const secondMessages = (requests[1]?.messages as JsonObject[])
     assert.equal(secondMessages.at(-1)?.role, 'tool')

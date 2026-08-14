@@ -86,11 +86,15 @@ async function readAnthropicStream(body: ReadableStream<Uint8Array>, request: Mo
   let content = ''
   let inputTokens: number | undefined
   let outputTokens: number | undefined
+  // Cache counts only ever arrive on message_start; keep them verbatim so the
+  // usage this returns stays a faithful copy of what Anthropic reported.
+  let cacheUsage: JsonObject = {}
   const blocks = new Map<number, JsonObject>()
   for await (const event of readSseJson(body)) {
     const type = String(event.type ?? '')
     if (type === 'message_start' && isObject(event.message) && isObject(event.message.usage)) {
       inputTokens = integer(event.message.usage.input_tokens)
+      cacheUsage = cacheFields(event.message.usage)
     } else if (type === 'content_block_start' && typeof event.index === 'number' && isObject(event.content_block)) {
       blocks.set(event.index, { ...event.content_block })
     } else if (type === 'content_block_delta' && typeof event.index === 'number' && isObject(event.delta)) {
@@ -133,8 +137,17 @@ async function readAnthropicStream(body: ReadableStream<Uint8Array>, request: Mo
     ...(reasoning.length ? { reasoning_content: reasoning } : {}),
     ...(calls.length ? { tool_calls: calls } : {}),
     ...(inputTokens !== undefined || outputTokens !== undefined
-      ? { usage: { input_tokens: inputTokens ?? 0, output_tokens: outputTokens ?? 0 } }
+      ? { usage: { input_tokens: inputTokens ?? 0, output_tokens: outputTokens ?? 0, ...cacheUsage } }
       : {})
+  }
+}
+
+function cacheFields(usage: JsonObject): JsonObject {
+  const read = integer(usage.cache_read_input_tokens)
+  const written = integer(usage.cache_creation_input_tokens)
+  return {
+    ...(read === undefined ? {} : { cache_read_input_tokens: read }),
+    ...(written === undefined ? {} : { cache_creation_input_tokens: written })
   }
 }
 

@@ -18,6 +18,7 @@ export const COMMANDS = [
   { name: '/resume', detail: 'Switch to or delete a saved conversation' },
   { name: '/permission', detail: 'Choose approval behavior' },
   { name: '/fork', detail: 'Fork from the latest Friday response' },
+  { name: '/branches', detail: 'Navigate the fork map with ↑↓←→, Enter, Ctrl+D' },
   { name: '/backward', detail: 'Return to the parent conversation branch' },
   { name: '/goal', detail: 'Run a strongly verified goal' },
   { name: '/exit', detail: 'Close Friday' },

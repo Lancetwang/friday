@@ -20,6 +20,7 @@ export type VerificationResult = {
   requests: number
   input_tokens: number | null
   output_tokens: number | null
+  cached_tokens: number | null
   elapsed_ms: number
 }
 
@@ -57,6 +58,7 @@ export async function verifyGoal(options: {
       requests: context.usage.requests,
       input_tokens: context.usage.inputTokens,
       output_tokens: context.usage.outputTokens,
+      cached_tokens: context.usage.cachedTokens,
       elapsed_ms: Math.round(performance.now() - started)
     }
   } catch (error) {
@@ -68,12 +70,13 @@ export async function verifyGoal(options: {
       requests: context.usage.requests,
       input_tokens: context.usage.inputTokens,
       output_tokens: context.usage.outputTokens,
+      cached_tokens: context.usage.cachedTokens,
       elapsed_ms: Math.round(performance.now() - started)
     }
   }
 }
 
-export function parseVerification(raw: string): Omit<VerificationResult, 'required' | 'requests' | 'input_tokens' | 'output_tokens' | 'elapsed_ms'> {
+export function parseVerification(raw: string): Omit<VerificationResult, 'required' | 'requests' | 'input_tokens' | 'output_tokens' | 'cached_tokens' | 'elapsed_ms'> {
   const match = raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)
   try {
     const value: unknown = JSON.parse(match)

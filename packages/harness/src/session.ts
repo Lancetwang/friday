@@ -3,11 +3,11 @@ import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
-  Agent, RunContext, type AgentEvent, type Message, type Tool
+  Agent, RunContext, type AgentEvent, type Message, type Tool, type Usage
 } from 'friday-agent-core'
 
 import { loadModelConfig, projectStateDir, resolveWorkspace, type ModelConfig } from './config.js'
-import { compactIfNeeded, contextReport, observeContextUsage } from './context.js'
+import { compactIfNeeded, contextReport, observeContextUsage, tokenMeasurement } from './context.js'
 import { beginCheckpoint, deleteSessionCheckpoints, finishCheckpoint, type Checkpoint } from './checkpoint.js'
 import { checkpointArtifacts, type ArtifactInfo } from './artifacts.js'
 import {
@@ -43,8 +43,16 @@ import { localTimestamp, zonedTimestamp } from './time.js'
 export type TurnMetrics = {
   elapsed_ms: number
   requests: number
+  /** Summed over the turn's requests: what it cost, not how full the window is. */
   input_tokens: number | null
   output_tokens: number | null
+  /** Part of `input_tokens` the providers served from cache. Null when unreported. */
+  cached_tokens: number | null
+  /** How full the context is once the turn ends, and the model's window. */
+  window_tokens?: number | null
+  window?: number | null
+  /** True when `window_tokens` is Friday's own estimate rather than provider-anchored. */
+  estimated_tokens?: boolean
 }
 
 export type TurnResult = {
@@ -192,13 +200,7 @@ export class FridaySession {
       const agent = this.ensureAgent()
       if (!options.continueProgress) agent.resetLoopGuard()
       const result = await agent.resume({ signal: this.abort.signal, ...(onDelta ? { onDelta } : {}) })
-      const usage = this.context.usageSince(before)
-      const metrics = {
-        elapsed_ms: Math.round(performance.now() - started),
-        requests: usage.requests,
-        input_tokens: usage.inputTokens,
-        output_tokens: usage.outputTokens
-      }
+      const metrics = this.measureTurn(before, started)
       if (!options.internal) this.turns += 1
       this.pending = result.status === 'paused' ? await pendingApproval(this.workspace, this.sessionId) : { pending: false }
       this.pendingMetrics = result.status === 'paused' ? metrics : undefined
@@ -518,6 +520,29 @@ export class FridaySession {
     })
   }
 
+  /**
+   * One place builds turn metrics so the two turn runners cannot drift. Token
+   * sums are what the turn spent; the window figures are the occupancy left
+   * behind, which is a different quantity and must not be added across turns.
+   */
+  private measureTurn(before: Usage, started: number): TurnMetrics {
+    const usage = this.context.usageSince(before)
+    const measurement = tokenMeasurement(this.context, this.tools)
+    const windowTokens = Number(measurement.tokens)
+    return {
+      elapsed_ms: Math.round(performance.now() - started),
+      requests: usage.requests,
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      cached_tokens: usage.cachedTokens,
+      // No `estimated_tokens` here: the spend figures above are provider
+      // counts, and both UIs already render the window occupancy as `~`.
+      ...(Number.isFinite(windowTokens)
+        ? { window_tokens: windowTokens, window: this.config.contextWindow }
+        : {})
+    }
+  }
+
   private ensureAgent(): Agent {
     if (this.agent) return this.agent
     if (!this.config.apiKey) throw new Error(`Model '${this.config.profileName}' has no API key. Configure it in Friday Settings.`)
@@ -546,13 +571,7 @@ export class FridaySession {
       resumeProgress(this.context)
       this.refreshInstructions()
       const result = await this.ensureAgent().resume({ signal: this.abort.signal, ...(onDelta ? { onDelta } : {}) })
-      const usage = this.context.usageSince(before)
-      const currentMetrics = {
-        elapsed_ms: Math.round(performance.now() - started),
-        requests: usage.requests,
-        input_tokens: usage.inputTokens,
-        output_tokens: usage.outputTokens
-      }
+      const currentMetrics = this.measureTurn(before, started)
       const metrics = pendingMetrics ? addMetrics(pendingMetrics, currentMetrics) : currentMetrics
       this.pending = result.status === 'paused' ? await pendingApproval(this.workspace, this.sessionId) : { pending: false }
       this.pendingMetrics = result.status === 'paused' ? metrics : undefined
@@ -691,7 +710,8 @@ export class FridaySession {
         elapsed_ms: verification.elapsed_ms,
         requests: verification.requests,
         input_tokens: verification.input_tokens,
-        output_tokens: verification.output_tokens
+        output_tokens: verification.output_tokens,
+        cached_tokens: verification.cached_tokens
       })
       return verification
     } finally {
@@ -1113,7 +1133,12 @@ export async function sessionTree(workspace: string, sessionId: string): Promise
         id: String(record.session_id ?? ''),
         parent: String(record.fork_parent ?? ''),
         title: String(record.title || record.user || 'Conversation').slice(0, 80),
-        time: String(record.updated ?? '')
+        time: String(record.updated ?? ''),
+        turns: Number.isSafeInteger(record.turns) ? record.turns as number : 0,
+        // Where in the parent the branch split off, so UIs can label the origin.
+        ...(Number.isSafeInteger(record.fork_message_index)
+          ? { fork_message_index: record.fork_message_index as number }
+          : {})
       }))
   }
 }
@@ -1413,7 +1438,7 @@ function now(): string {
 }
 
 function emptyMetrics(): TurnMetrics {
-  return { elapsed_ms: 0, requests: 0, input_tokens: 0, output_tokens: 0 }
+  return { elapsed_ms: 0, requests: 0, input_tokens: 0, output_tokens: 0, cached_tokens: null }
 }
 
 function turnMetrics(value: unknown): TurnMetrics | undefined {
@@ -1424,7 +1449,11 @@ function turnMetrics(value: unknown): TurnMetrics | undefined {
     elapsed_ms: Math.max(0, Math.round(metrics.elapsed_ms as number)),
     requests: Math.max(0, Math.round(metrics.requests as number)),
     input_tokens: finite(metrics.input_tokens) ? Math.max(0, Math.round(metrics.input_tokens as number)) : null,
-    output_tokens: finite(metrics.output_tokens) ? Math.max(0, Math.round(metrics.output_tokens as number)) : null
+    output_tokens: finite(metrics.output_tokens) ? Math.max(0, Math.round(metrics.output_tokens as number)) : null,
+    cached_tokens: finite(metrics.cached_tokens) ? Math.max(0, Math.round(metrics.cached_tokens as number)) : null,
+    ...(finite(metrics.window_tokens) ? { window_tokens: Math.max(0, Math.round(metrics.window_tokens as number)) } : {}),
+    ...(finite(metrics.window) ? { window: Math.max(0, Math.round(metrics.window as number)) } : {}),
+    ...(typeof metrics.estimated_tokens === 'boolean' ? { estimated_tokens: metrics.estimated_tokens } : {})
   }
 }
 
@@ -1432,20 +1461,51 @@ function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
+/**
+ * Spend adds up across a turn's phases; occupancy does not. The window figures
+ * describe a single moment, so the newer side wins rather than being summed.
+ */
 function addMetrics(
   left: TurnMetrics,
-  right: { elapsed_ms: number; requests: number; input_tokens: number | null; output_tokens: number | null }
+  right: {
+    elapsed_ms: number
+    requests: number
+    input_tokens: number | null
+    output_tokens: number | null
+    cached_tokens?: number | null
+    window_tokens?: number | null
+    window?: number | null
+    estimated_tokens?: boolean
+  }
 ): TurnMetrics {
+  const occupancy = right.window_tokens == null
+    ? {
+      ...(left.window_tokens == null ? {} : { window_tokens: left.window_tokens, window: left.window }),
+      ...(left.estimated_tokens === undefined ? {} : { estimated_tokens: left.estimated_tokens })
+    }
+    : {
+      window_tokens: right.window_tokens,
+      window: right.window ?? left.window ?? null,
+      ...(right.estimated_tokens === undefined ? {} : { estimated_tokens: right.estimated_tokens })
+    }
   return {
     elapsed_ms: left.elapsed_ms + right.elapsed_ms,
     requests: left.requests + right.requests,
     input_tokens: addTokens(left.input_tokens, right.input_tokens),
-    output_tokens: addTokens(left.output_tokens, right.output_tokens)
+    output_tokens: addTokens(left.output_tokens, right.output_tokens),
+    cached_tokens: addCached(left.cached_tokens, right.cached_tokens ?? null),
+    ...occupancy
   }
 }
 
 function addTokens(left: number | null, right: number | null): number | null {
   return left === null || right === null ? null : left + right
+}
+
+/** Unreported on one side must not erase a real figure from the other. */
+function addCached(left: number | null, right: number | null): number | null {
+  if (left === null && right === null) return null
+  return (left ?? 0) + (right ?? 0)
 }
 
 function goalAttemptPrompt(goal: string): string {

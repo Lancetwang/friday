@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Box, Text, useApp, useInput } from 'ink'
+import { Box, Static, Text, useApp, useInput, useStdout } from 'ink'
 import TextInput from 'ink-text-input'
 
 import type { GatewayClient } from './gatewayClient.js'
@@ -9,7 +9,6 @@ import {
   CommandPalette,
   PickerView,
   commandChoices,
-  filteredOptions,
   moveSelection,
   selectedOption,
   updateQuery,
@@ -41,6 +40,9 @@ const HELP_TEXT = `# Friday commands
 ${COMMANDS.map(command => `- \`${command.name}\` - ${command.detail}`).join('\n')}
 
 Type any command prefix after \`/\`, then use ↑/↓ and Enter.`
+
+/** How many restored messages are replayed into the scrollback on resume. */
+const MAX_RESTORED_MESSAGES = 60
 
 type ModelProfile = {
   api_key_configured: boolean
@@ -101,18 +103,61 @@ type CredentialInput =
   | { kind: 'model'; parent: PickerMenu; provider: ModelProvider; value: string }
   | { kind: 'search'; parent: PickerMenu; provider: SearchProvider; value: string }
 
+type BranchNode = {
+  fork_message_index?: number
+  id: string
+  parent: string
+  time: string
+  title: string
+  turns?: number
+}
+
+type BranchTree = { nodes: BranchNode[]; root: string }
+
+type BranchRow = { depth: number; guide: string; node: BranchNode }
+
+type BranchView = {
+  confirmDelete: boolean
+  index: number
+  rows: BranchRow[]
+  tree: BranchTree
+}
+
+/**
+ * The turn Friday is working on right now. Everything that still changes -
+ * thinking, tool runs, verification - lives here; finished turns move into the
+ * static scrollback and are never re-rendered.
+ */
+type ActiveTurn = {
+  text: string
+  thinking: ThinkingBlock[]
+  tools: ToolRun[]
+  turnId: string | null
+  verification?: VerificationStatus
+}
+
 export function App({ gateway }: { gateway: GatewayClient }) {
   const app = useApp()
+  const { stdout } = useStdout()
   const activeTurn = useRef<string | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [toolsExpanded, setToolsExpanded] = useState(false)
+  const [thinkingExpanded, setThinkingExpanded] = useState(false)
   const [info, setInfo] = useState<SessionInfo | null>(null)
   const infoRef = useRef<SessionInfo | null>(null)
   infoRef.current = info
   const [progress, setProgress] = useState<ProgressState | null>(null)
-  const [messages, setMessages] = useState<UiMessage[]>([])
+  // `history` renders once into terminal scrollback via <Static>; `active` is
+  // the only message content the dynamic bottom frame repaints. Keeping that
+  // frame small is what keeps the composer pinned and the screen from jumping.
+  const [history, setHistory] = useState<UiMessage[]>([])
+  const [staticKey, setStaticKey] = useState(0)
+  const [active, setActive] = useState<ActiveTurn | null>(null)
+  const activeRef = useRef<ActiveTurn | null>(null)
+  activeRef.current = active
   const [menu, setMenu] = useState<PickerMenu | null>(null)
+  const [branches, setBranches] = useState<BranchView | null>(null)
   const [credential, setCredential] = useState<CredentialInput | null>(null)
   const [commandIndex, setCommandIndex] = useState(0)
   const [approvalPicker, setApprovalPicker] = useState<ApprovalPicker | null>(null)
@@ -139,19 +184,16 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         applyApproval(event.payload)
       } else if (event.type === 'message.delta') {
         setStreaming(text => text + event.payload.text)
-        setMessages(items => closeOpenThinking(items, activeTurn.current))
+        setActive(turn => turn && closeOpenThinking(turn))
       } else if (event.type === 'message.complete') {
-        if (event.payload.text) {
-          setMessages(items => [...items, { metrics: event.payload.metrics, role: 'assistant', text: event.payload.text }])
-        }
+        const extra: UiMessage[] = []
+        if (event.payload.text) extra.push({ metrics: event.payload.metrics, role: 'assistant', text: event.payload.text })
         const cutShort = stopReasonLine(event.payload.status)
-        if (cutShort) {
-          setMessages(items => [...items, { role: 'system', text: cutShort }])
-        }
+        if (cutShort) extra.push({ role: 'system', text: cutShort })
+        finishTurn(extra)
         activeTurn.current = null
         lastEscape.current = 0
         setProgress(event.payload.progress ?? null)
-        setStreaming('')
         setBusy(false)
         setActivity('')
       } else if (event.type === 'message.suspended') {
@@ -160,11 +202,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setBusy(false)
         setActivity('Waiting for approval.')
       } else if (event.type === 'message.cancelled') {
-        const turnId = activeTurn.current
         activeTurn.current = null
         lastEscape.current = 0
-        setMessages(items => closeOpenThinking(items, turnId))
-        setStreaming('')
+        setActive(turn => turn && closeOpenThinking(turn))
+        finishTurn([])
         setBusy(false)
         setActivity('Response stopped.')
       } else if (event.type === 'reasoning.delta') {
@@ -173,27 +214,38 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         if (['off', 'none'].includes(infoRef.current?.thinking_effort || '')) return
         const id = event.payload.id || ''
         if (id && event.payload.text) {
-          setMessages(items => upsertThinking(items, activeTurn.current, id, event.payload.text))
+          setActive(turn => upsertThinking(ensureTurn(turn), id, event.payload.text))
         }
       } else if (event.type === 'reasoning.complete') {
-        setMessages(items => completeThinking(items, activeTurn.current, event.payload.id, Boolean(event.payload.error)))
+        setActive(turn => turn && completeThinking(turn, event.payload.id, Boolean(event.payload.error)))
       } else if (event.type === 'tool.start') {
         // The stream so far is transient narration interrupted by this tool
         // round; clearing it keeps rounds from concatenating into one
         // unreadable stream that the final answer then replaces.
         setStreaming('')
         const startMs = Date.now()
-        setMessages(items => addToolRun(items, activeTurn.current, { arguments: event.payload.arguments, id: event.payload.tool_call_id || `${startMs}-${items.length}`, name: event.payload.name, startMs }))
+        setActive(turn => {
+          const current = ensureTurn(turn)
+          return {
+            ...current,
+            tools: [...current.tools, {
+              arguments: event.payload.arguments,
+              id: event.payload.tool_call_id || `${startMs}-${current.tools.length}`,
+              name: event.payload.name,
+              startMs
+            }]
+          }
+        })
         setActivity(`tool ${event.payload.name}`)
       } else if (event.type === 'tool.update') {
-        setMessages(items => updateToolRun(items, activeTurn.current, event.payload.tool_call_id, run => ({
+        setActive(turn => turn && updateToolRun(turn, event.payload.tool_call_id, run => ({
           content: event.payload.content ?? run.content
         })))
       } else if (event.type === 'tool.complete') {
         const endMs = Date.now()
         // Prefer the backend-measured execution time: it excludes the event
         // round trip and stays accurate however long the tool really ran.
-        setMessages(items => updateToolRun(items, activeTurn.current, event.payload.tool_call_id, run => ({
+        setActive(turn => turn && updateToolRun(turn, event.payload.tool_call_id, run => ({
           content: event.payload.content,
           endMs: typeof event.payload.elapsed_ms === 'number' ? run.startMs + event.payload.elapsed_ms : endMs,
           error: event.payload.error
@@ -213,15 +265,15 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         setBusy(event.payload.running)
       } else if (event.type === 'verification.start') {
         setActivity('verifying')
-        setMessages(items => updateVerification(items, activeTurn.current, { running: true }))
+        setActive(turn => ({ ...ensureTurn(turn), verification: { running: true } }))
       } else if (event.type === 'verification.complete') {
         setActivity('')
-        setMessages(items => updateVerification(items, activeTurn.current, event.payload))
+        setActive(turn => ({ ...ensureTurn(turn), verification: event.payload }))
       } else if (event.type === 'progress.update') {
         setProgress(event.payload)
       } else if (event.type === 'context.compacted') {
         const line = compactionLine(event.payload)
-        setMessages(items => [...items, { role: 'system', text: line }])
+        setHistory(items => [...items, { role: 'system', text: line }])
         setActivity(shortText(line, 80))
       } else if (event.type === 'gateway.stderr') {
         setActivity(event.payload.line)
@@ -235,18 +287,19 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     return () => {
       gateway.off('event', onEvent)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app, gateway])
 
   useEffect(() => {
-    const active = messages.some(message =>
-      message.tools?.some(run => !run.endMs) || message.thinking?.some(block => block.ended == null)
+    const running = active && (
+      active.tools.some(run => !run.endMs) || active.thinking.some(block => block.ended == null)
     )
-    if (!active) {
+    if (!running) {
       return
     }
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
-  }, [messages])
+  }, [active])
 
   useInput((char, key) => {
     if (approvalPicker) {
@@ -259,6 +312,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (key.escape) {
         setApprovalPicker(null)
       }
+      return
+    }
+    if (branches) {
+      handleBranchInput(branches, char, key)
       return
     }
     if (credential) {
@@ -306,7 +363,12 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     }
     if (key.ctrl && (char.toLowerCase() === 'o' || char === '\u000f')) {
       setToolsExpanded(value => !value)
-      setTimeout(() => setInput(value => value.endsWith('o') ? value.slice(0, -1) : value), 0)
+      stripLeakedChar('o')
+      return
+    }
+    if (key.ctrl && (char.toLowerCase() === 't' || char === '\u0014')) {
+      setThinkingExpanded(value => !value)
+      stripLeakedChar('t')
       return
     }
     if (key.escape && busy) {
@@ -362,20 +424,12 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     const goal = goalText(text)
     if (goal != null) {
       if (!goal) {
-        setMessages(items => [...items, { role: 'system', text: 'Usage: /goal describe the goal' }])
+        appendSystem('Usage: /goal describe the goal')
         return
       }
-      setBusy(true)
-      lastEscape.current = 0
-      setStreaming('')
-      const turnId = `turn-${Date.now()}`
-      activeTurn.current = turnId
-      setMessages(items => [...items, { role: 'user', text: `/goal ${goal}`, turnId }])
+      beginTurn(`/goal ${goal}`)
       void gateway.request('goal.run', { text: goal }).catch(error => {
-        activeTurn.current = null
-        setBusy(false)
-        setStreaming('')
-        setMessages(items => [...items, { role: 'system', text: error.message }])
+        failTurn(error)
       })
       return
     }
@@ -383,67 +437,108 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       return
     }
 
+    beginTurn(text)
+    void gateway.request('chat.send', { text }).catch(error => {
+      failTurn(error)
+    })
+  }
+
+  return (
+    <>
+      <Static key={staticKey} items={history}>
+        {(message, index) => (
+          <Box key={index} marginBottom={1} paddingX={1}>
+            <MessageLine message={message} now={now} thinkingExpanded={thinkingExpanded} toolsExpanded={toolsExpanded} />
+          </Box>
+        )}
+      </Static>
+      <Box flexDirection="column" paddingX={1}>
+        {active ? (
+          <Box marginBottom={streaming ? 1 : 0}>
+            <MessageLine
+              message={activeAsMessage(active)}
+              now={now}
+              tail
+              thinkingExpanded={thinkingExpanded}
+              toolsExpanded={toolsExpanded}
+            />
+          </Box>
+        ) : null}
+        {streaming ? <StreamTail text={streaming} /> : null}
+        {menu ? (
+          <PickerView
+            menu={menu}
+            onQuery={query => setMenu(current => current && updateQuery(current, query))}
+            onSubmit={() => void chooseMenu(menu)}
+            theme={theme}
+          />
+        ) : null}
+        {branches ? <BranchesView active={info?.session_id || ''} view={branches} /> : null}
+        {credential ? (
+          <CredentialInputView
+            credential={credential}
+            onChange={value => setCredential(current => current && { ...current, value })}
+            onSubmit={() => void saveCredential(credential)}
+          />
+        ) : null}
+        {approvalPicker ? (
+          <ApprovalPickerView
+            onInstructionChange={instruction => setApprovalPicker(picker => picker && { ...picker, instruction })}
+            picker={approvalPicker}
+          />
+        ) : null}
+        <Header activity={activity} busy={busy} info={info} progress={progress} />
+        {!menu && !branches && !credential && !approvalPicker ? (
+          <>
+            <Composer
+              busy={busy}
+              input={input}
+              onChange={value => {
+                setInput(value)
+                setCommandIndex(0)
+              }}
+              onSubmit={submit}
+            />
+            {!busy ? <CommandPalette choices={suggestions} index={commandIndex} theme={theme} /> : null}
+          </>
+        ) : null}
+      </Box>
+    </>
+  )
+
+  /** Some terminals deliver Ctrl+letter as the bare letter too; drop the leak. */
+  function stripLeakedChar(letter: string) {
+    setTimeout(() => setInput(value => value.toLowerCase().endsWith(letter) ? value.slice(0, -1) : value), 0)
+  }
+
+  function beginTurn(text: string) {
     setBusy(true)
     lastEscape.current = 0
     setStreaming('')
     const turnId = `turn-${Date.now()}`
     activeTurn.current = turnId
-    setMessages(items => [...items, { role: 'user', text, turnId }])
-    void gateway.request('chat.send', { text }).catch(error => {
-      activeTurn.current = null
-      setBusy(false)
-      setStreaming('')
-      setMessages(items => [...items, { role: 'system', text: error.message }])
-    })
+    setActive({ text, thinking: [], tools: [], turnId })
   }
 
-  return (
-    <Box flexDirection="column" paddingX={1}>
-      <Header activity={activity} busy={busy} info={info} progress={progress} />
-      <Box flexDirection="column" gap={1} marginTop={1}>
-        {messages.slice(-10).map((message, index) => <MessageLine toolsExpanded={toolsExpanded} key={index} message={message} now={now} />)}
-        {streaming ? <MessageLine message={{ role: 'assistant', text: streaming }} /> : null}
-      </Box>
-      {menu ? (
-        <PickerView
-          menu={menu}
-          onQuery={query => setMenu(current => current && updateQuery(current, query))}
-          onSubmit={() => void chooseMenu(menu)}
-          theme={theme}
-        />
-      ) : null}
-      {credential ? (
-        <CredentialInputView
-          credential={credential}
-          onChange={value => setCredential(current => current && { ...current, value })}
-          onSubmit={() => void saveCredential(credential)}
-        />
-      ) : null}
-      {approvalPicker ? (
-        <ApprovalPickerView
-          onInstructionChange={instruction => setApprovalPicker(picker => picker && { ...picker, instruction })}
-          picker={approvalPicker}
-        />
-      ) : null}
-      {!menu && !credential && !approvalPicker ? (
-        <>
-          <Composer
-            busy={busy}
-            input={input}
-            onChange={value => {
-              setInput(value)
-              setCommandIndex(0)
-            }}
-            onSubmit={submit}
-          />
-          {!busy ? <CommandPalette choices={suggestions} index={commandIndex} theme={theme} /> : null}
-        </>
-      ) : null}
-    </Box>
-  )
+  /** Move the finished turn plus its results into the static scrollback. */
+  function finishTurn(extra: UiMessage[]) {
+    const turn = activeRef.current
+    const settled = turn ? [activeAsMessage(closeOpenThinking(turn))] : []
+    const additions = [...settled, ...extra]
+    if (additions.length) setHistory(items => [...items, ...additions])
+    setActive(null)
+    activeRef.current = null
+    setStreaming('')
+  }
+
+  function failTurn(error: unknown) {
+    activeTurn.current = null
+    setBusy(false)
+    finishTurn([{ role: 'system', text: error instanceof Error ? error.message : String(error) }])
+  }
 
   function appendSystem(text: string) {
-    setMessages(items => [...items, { role: 'system', text }])
+    setHistory(items => [...items, { role: 'system', text }])
   }
 
   function requestError(error: unknown) {
@@ -457,7 +552,13 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     infoRef.current = result.info
     setInfo(result.info)
     setProgress(result.progress ?? result.info.progress ?? null)
-    setMessages(historyToMessages(result.history ?? []))
+    // The old scrollback belongs to another conversation: clear the terminal
+    // and remount <Static> so the restored transcript is rendered once, fresh.
+    if (stdout.isTTY) stdout.write('\u001B[2J\u001B[3J\u001B[H')
+    setStaticKey(value => value + 1)
+    setHistory(restoredMessages(result.history ?? []))
+    setActive(null)
+    activeRef.current = null
     setStreaming('')
     setBusy(Boolean(result.info.running))
     applyApproval(result.info)
@@ -565,6 +666,102 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       query: '',
       title: 'Choose permission mode',
     })
+  }
+
+  function openBranchView() {
+    setActivity('Loading branches...')
+    void gateway.request<BranchTree>('session.tree').then(tree => {
+      setActivity('')
+      if (!tree.root || tree.nodes.length < 2) {
+        appendSystem('This conversation has no branches yet. Use /fork to create one.')
+        return
+      }
+      showBranchTree(tree)
+    }).catch(requestError)
+  }
+
+  function showBranchTree(tree: BranchTree) {
+    const rows = branchRows(tree)
+    if (rows.length < 2) {
+      appendSystem('This conversation has no branches yet. Use /fork to create one.')
+      return
+    }
+    const current = infoRef.current?.session_id || ''
+    setBranches({
+      confirmDelete: false,
+      index: Math.max(0, rows.findIndex(row => row.node.id === current)),
+      rows,
+      tree
+    })
+  }
+
+  function handleBranchInput(view: BranchView, char: string, key: Parameters<Parameters<typeof useInput>[0]>[1]) {
+    const selected = view.rows[view.index]?.node
+    if (view.confirmDelete) {
+      if (key.return || char.toLowerCase() === 'y') {
+        setBranches(current => current && { ...current, confirmDelete: false })
+        if (selected) deleteBranch(selected)
+      } else if (key.escape || char.toLowerCase() === 'n') {
+        setBranches(current => current && { ...current, confirmDelete: false })
+      }
+      return
+    }
+    if (key.escape) {
+      setBranches(null)
+    } else if (key.upArrow) {
+      setBranches(current => current && { ...current, index: Math.max(0, current.index - 1) })
+    } else if (key.downArrow) {
+      setBranches(current => current && { ...current, index: Math.min(current.rows.length - 1, current.index + 1) })
+    } else if (key.leftArrow) {
+      // Left walks to the parent branch, mirroring /backward.
+      setBranches(current => {
+        if (!current) return current
+        const node = current.rows[current.index]?.node
+        const parentIndex = node ? current.rows.findIndex(row => row.node.id === node.parent) : -1
+        return parentIndex >= 0 ? { ...current, index: parentIndex } : current
+      })
+    } else if (key.rightArrow) {
+      // Right dives into the first child fork.
+      setBranches(current => {
+        if (!current) return current
+        const node = current.rows[current.index]?.node
+        const childIndex = node ? current.rows.findIndex(row => row.node.parent === node.id) : -1
+        return childIndex >= 0 ? { ...current, index: childIndex } : current
+      })
+    } else if (key.return) {
+      if (!selected) return
+      if (selected.id === infoRef.current?.session_id) {
+        setBranches(null)
+        return
+      }
+      setBranches(null)
+      setActivity('Switching branch...')
+      void gateway.request<SessionResult>('session.resume', { id: selected.id }).then(result => {
+        setActivity('')
+        applySession(result)
+        appendSystem(`Switched to branch: ${selected.title || selected.id}`)
+      }).catch(requestError)
+    } else if (key.ctrl && char.toLowerCase() === 'd') {
+      if (!selected || selected.id === view.tree.root) {
+        setActivity('The root conversation cannot be deleted from the branch map.')
+        return
+      }
+      setBranches(current => current && { ...current, confirmDelete: true })
+    }
+  }
+
+  function deleteBranch(node: BranchNode) {
+    setActivity('Deleting branch...')
+    void gateway.request<SessionResult & { deleted: string[] }>('session.delete', { id: node.id }).then(result => {
+      setActivity('')
+      const currentId = infoRef.current?.session_id || ''
+      if (result.deleted.includes(currentId)) applySession(result)
+      appendSystem(`Deleted branch: ${node.title || node.id}${result.deleted.length > 1 ? ` (+${result.deleted.length - 1} sub-branches)` : ''}`)
+      void gateway.request<BranchTree>('session.tree').then(tree => {
+        if (tree.root && tree.nodes.length > 1) showBranchTree(tree)
+        else setBranches(null)
+      }).catch(() => setBranches(null))
+    }).catch(requestError)
   }
 
   async function chooseMenu(current: PickerMenu) {
@@ -708,12 +905,18 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     } else if (command === '/permission') {
       openPermissionMenu()
     } else if (command === '/fork') {
-      void gateway.request<SessionResult>('session.fork').then(result => {
+      void gateway.request<SessionResult & { tree?: BranchTree }>('session.fork').then(result => {
         applySession(result)
-        appendSystem('Forked from the latest Friday response.')
+        appendSystem('Forked from the latest Friday response. Use /branches to navigate the fork map.')
+        if (result.tree) showBranchTree(result.tree)
       }).catch(requestError)
     } else if (command === '/backward') {
-      void gateway.request<SessionResult>('session.backward').then(applySession).catch(requestError)
+      void gateway.request<SessionResult & { tree?: BranchTree }>('session.backward').then(result => {
+        applySession(result)
+        if (result.tree) showBranchTree(result.tree)
+      }).catch(requestError)
+    } else if (command === '/branches') {
+      openBranchView()
     } else {
       appendSystem(`Unknown command: ${command}. Try /help.`)
     }
@@ -725,7 +928,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       return
     }
     setBusy(false)
-    setMessages(items => [...items, { role: 'system', text: rejected ? 'Command rejected.' : 'Command approved.' }])
+    finishTurn([{ role: 'system', text: rejected ? 'Command rejected.' : 'Command approved.' }])
   }
 
   function submitApproval(picker: ApprovalPicker) {
@@ -738,18 +941,15 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     const method = decision === 'reject' ? 'approval.reject' : decision === 'instruct' ? 'approval.instruct' : 'approval.approve'
     const params = decision === 'session' ? { session: true } : decision === 'instruct' ? { text: instruction } : undefined
     if (decision === 'instruct') {
-      const turnId = `turn-${Date.now()}`
-      activeTurn.current = turnId
-      setMessages(items => [...items, { role: 'user', text: instruction, turnId }])
+      finishTurn([])
+      beginTurn(instruction)
     }
     setApprovalPicker(null)
     setBusy(true)
     void gateway.request(method, params).then(result =>
       handleApprovalResult(result, rejected)
     ).catch(error => {
-      activeTurn.current = null
-      setBusy(false)
-      setMessages(items => [...items, { role: 'system', text: error.message }])
+      failTurn(error)
     })
   }
 }
@@ -759,7 +959,7 @@ function cleanInput(value: string) {
 }
 
 function canNavigateWhileBusy(value: string) {
-  return /^\/(?:new|resume)$/i.test(value)
+  return /^\/(?:new|resume|branches)$/i.test(value)
 }
 
 function sessionId(event: GatewayEvent) {
@@ -832,36 +1032,53 @@ type ToolRun = {
   startMs: number
 }
 
-function historyToMessages(history: HistoryItem[]) {
+/** Lazily create the live-turn container for events that arrive without one. */
+function ensureTurn(turn: ActiveTurn | null): ActiveTurn {
+  return turn ?? { text: '', thinking: [], tools: [], turnId: null }
+}
+
+function activeAsMessage(turn: ActiveTurn): UiMessage {
+  return {
+    role: 'user',
+    text: turn.text,
+    thinking: turn.thinking,
+    tools: turn.tools,
+    ...(turn.verification ? { verification: turn.verification } : {})
+  }
+}
+
+function restoredMessages(history: HistoryItem[]) {
   const messages: UiMessage[] = []
-  let turnId = ''
+  let current: UiMessage | undefined
   for (const [index, item] of history.entries()) {
     if (item.kind === 'user') {
-      turnId = `history-${item.message_index ?? index}`
-      messages.push({ role: 'user', text: item.text, turnId })
+      current = { role: 'user', text: item.text }
+      messages.push(current)
     } else if (item.kind === 'tool') {
-      const owner = turnIndex(messages, turnId || null)
-      if (owner === -1) continue
+      if (!current) continue
       const timestamp = Date.now()
-      const message = messages[owner]!
-      messages[owner] = {
-        ...message,
-        tools: [
-          ...(message.tools ?? []),
-          {
-            arguments: item.arguments,
-            content: item.text,
-            endMs: item.status === 'running' ? undefined : timestamp,
-            error: item.status === 'failed',
-            id: item.tool_call_id || `history-tool-${index}`,
-            name: item.name || 'Tool',
-            startMs: timestamp,
-          },
-        ],
-      }
+      current.tools = [
+        ...(current.tools ?? []),
+        {
+          arguments: item.arguments,
+          content: item.text,
+          endMs: item.status === 'running' ? undefined : timestamp,
+          error: item.status === 'failed',
+          id: item.tool_call_id || `history-tool-${index}`,
+          name: item.name || 'Tool',
+          startMs: timestamp,
+        },
+      ]
     } else {
       messages.push({ metrics: item.metrics, role: 'assistant', text: item.text })
     }
+  }
+  if (messages.length > MAX_RESTORED_MESSAGES) {
+    const hidden = messages.length - MAX_RESTORED_MESSAGES
+    return [
+      { role: 'system', text: `… ${hidden} earlier message${hidden > 1 ? 's' : ''} not shown. The full conversation is preserved.` } as UiMessage,
+      ...messages.slice(-MAX_RESTORED_MESSAGES)
+    ]
   }
   return messages
 }
@@ -904,103 +1121,71 @@ function permissionLabel(mode: SessionInfo['permission_mode']) {
   return mode === 'bypass' ? 'Full access' : mode === 'auto' ? 'Friday decides' : 'Request approval'
 }
 
-function addToolRun(messages: UiMessage[], turnId: string | null, run: ToolRun) {
-  const index = turnIndex(messages, turnId)
-  if (index === -1) {
-    return messages
-  }
-  const next = [...messages]
-  const message = next[index]!
-  next[index] = { ...message, tools: [...(message.tools ?? []), run] }
-  return next
-}
-
-function upsertThinking(messages: UiMessage[], turnId: string | null, id: string, text: string) {
-  const index = turnIndex(messages, turnId)
-  if (index === -1) {
-    return messages
-  }
-  const next = [...messages]
-  const message = next[index]!
-  const blocks = [...(message.thinking ?? [])]
+function upsertThinking(turn: ActiveTurn, id: string, text: string): ActiveTurn {
+  const blocks = [...turn.thinking]
   const blockIndex = blocks.findIndex(block => block.id === id)
   if (blockIndex === -1) {
     blocks.push({ id, started: Date.now(), text })
   } else {
     blocks[blockIndex] = { ...blocks[blockIndex]!, text: blocks[blockIndex]!.text + text }
   }
-  next[index] = { ...message, thinking: blocks }
-  return next
+  return { ...turn, thinking: blocks }
 }
 
-function completeThinking(messages: UiMessage[], turnId: string | null, id: string, error: boolean) {
-  const index = turnIndex(messages, turnId)
-  if (index === -1) {
-    return messages
-  }
-  const next = [...messages]
-  const message = next[index]!
-  next[index] = {
-    ...message,
-    thinking: (message.thinking ?? []).map(block =>
+function completeThinking(turn: ActiveTurn, id: string, error: boolean): ActiveTurn {
+  return {
+    ...turn,
+    thinking: turn.thinking.map(block =>
       block.id === id && block.ended == null ? { ...block, ended: Date.now(), error: error || undefined } : block)
   }
-  return next
 }
 
-function closeOpenThinking(messages: UiMessage[], turnId: string | null) {
-  const index = turnIndex(messages, turnId)
-  if (index === -1) {
-    return messages
+function closeOpenThinking(turn: ActiveTurn): ActiveTurn {
+  if (!turn.thinking.some(block => block.ended == null)) {
+    return turn
   }
-  const message = messages[index]!
-  if (!message.thinking?.some(block => block.ended == null)) {
-    return messages
+  return {
+    ...turn,
+    thinking: turn.thinking.map(block => block.ended == null ? { ...block, ended: Date.now() } : block)
   }
-  const next = [...messages]
-  next[index] = {
-    ...message,
-    thinking: message.thinking!.map(block => block.ended == null ? { ...block, ended: Date.now() } : block)
-  }
-  return next
 }
 
-function updateToolRun(messages: UiMessage[], turnId: string | null, id: string, patch: Partial<ToolRun> | ((run: ToolRun) => Partial<ToolRun>)) {
-  const index = turnIndex(messages, turnId)
-  if (index === -1) {
-    return messages
-  }
-  const next = [...messages]
-  const message = next[index]!
-  const tools = [...(message.tools ?? [])]
+function updateToolRun(turn: ActiveTurn, id: string, patch: Partial<ToolRun> | ((run: ToolRun) => Partial<ToolRun>)): ActiveTurn {
+  const tools = [...turn.tools]
   const toolIndex = tools.findIndex(run => run.id === id)
   if (toolIndex === -1) {
-    return messages
+    return turn
   }
   const run = tools[toolIndex]!
   tools[toolIndex] = { ...run, ...(typeof patch === 'function' ? patch(run) : patch) }
-  next[index] = { ...message, tools }
-  return next
+  return { ...turn, tools }
 }
 
-function updateVerification(messages: UiMessage[], turnId: string | null, verification: VerificationStatus) {
-  const index = turnIndex(messages, turnId)
-  if (index === -1) {
-    return messages
+/** Depth-first rows with box-drawing guides for the branch map. */
+function branchRows(tree: BranchTree): BranchRow[] {
+  const children = new Map<string, BranchNode[]>()
+  const byId = new Map(tree.nodes.map(node => [node.id, node]))
+  for (const node of tree.nodes) {
+    if (!node.parent || !byId.has(node.parent) || node.id === tree.root) continue
+    children.set(node.parent, [...children.get(node.parent) ?? [], node])
   }
-  const next = [...messages]
-  next[index] = { ...next[index]!, verification }
-  return next
-}
-
-function turnIndex(messages: UiMessage[], turnId: string | null) {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index]!
-    if (turnId ? message.turnId === turnId : message.role === 'user') {
-      return index
-    }
+  for (const list of children.values()) {
+    list.sort((left, right) => left.time.localeCompare(right.time))
   }
-  return -1
+  const rows: BranchRow[] = []
+  const visit = (node: BranchNode, depth: number, prefix: string, last: boolean) => {
+    const guide = depth === 0 ? '' : `${prefix}${last ? '└─ ' : '├─ '}`
+    rows.push({ depth, guide, node })
+    const kids = children.get(node.id) ?? []
+    const nextPrefix = depth === 0 ? '' : `${prefix}${last ? '   ' : '│  '}`
+    kids.forEach((child, index) => visit(child, depth + 1, nextPrefix, index === kids.length - 1))
+  }
+  const root = byId.get(tree.root)
+  if (root) visit(root, 0, '', true)
+  for (const node of tree.nodes) {
+    if (!rows.some(row => row.node.id === node.id)) rows.push({ depth: 0, guide: '', node })
+  }
+  return rows
 }
 
 function Header({ activity, busy, info, progress }: { activity: string; busy: boolean; info: SessionInfo | null; progress: ProgressState | null }) {
@@ -1015,11 +1200,11 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
       : 'request approval'
   const thinking = info?.thinking_supported ? ` · thinking ${info.thinking_effort}` : ''
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" marginTop={1}>
       <Box>
         <Text color={theme.accent}>●</Text>
         <Text bold> Friday</Text>
-        <Text color={theme.dim}>  agent · /help commands · Ctrl+O details · Esc Esc stop</Text>
+        <Text color={theme.dim}>  /help commands · Ctrl+O tools · Ctrl+T thinking · Esc Esc stop</Text>
       </Box>
       <Text color={theme.dim} wrap="truncate-end">{cwd}</Text>
       {progress?.objective ? <ProgressLine progress={progress} /> : null}
@@ -1041,15 +1226,28 @@ function ProgressLine({ progress }: { progress: ProgressState }) {
   return <Text color={color} wrap="truncate-end">task {progress.status ?? 'working'} · {shortText(progress.objective ?? '', 90)}{count}{next}</Text>
 }
 
-function MessageLine({ toolsExpanded = false, message, now = Date.now() }: { toolsExpanded?: boolean; message: UiMessage; now?: number; streaming?: boolean }) {
+function MessageLine({
+  message,
+  now = Date.now(),
+  tail = false,
+  thinkingExpanded = false,
+  toolsExpanded = false
+}: {
+  message: UiMessage
+  now?: number
+  /** Live rendering: bound expanded panels so the dynamic frame stays short. */
+  tail?: boolean
+  thinkingExpanded?: boolean
+  toolsExpanded?: boolean
+}) {
   if (message.role === 'user') {
     return (
       <Box>
-        <Text color={theme.accent}>❯ </Text>
+        <Text color={theme.accent}>{message.text ? '❯ ' : '· '}</Text>
         <Box flexDirection="column">
-          <Text bold wrap="wrap">{message.text}</Text>
-          <ThinkingPanel blocks={message.thinking ?? []} expanded={toolsExpanded} now={now} />
-          <ToolPanel toolsExpanded={toolsExpanded} now={now} runs={message.tools ?? []} />
+          {message.text ? <Text bold wrap="wrap">{message.text}</Text> : null}
+          <ThinkingPanel blocks={message.thinking ?? []} expanded={thinkingExpanded} now={now} tail={tail} />
+          <ToolPanel now={now} runs={message.tools ?? []} toolsExpanded={toolsExpanded} />
           {message.verification ? <VerificationLine verification={message.verification} /> : null}
         </Box>
       </Box>
@@ -1069,6 +1267,27 @@ function MessageLine({ toolsExpanded = false, message, now = Date.now() }: { too
   return <Markdown text={message.text} theme={{ ...theme, text: theme.dim }} />
 }
 
+/**
+ * While the answer streams, only its last lines render in the dynamic frame:
+ * the full text lands in the scrollback once the turn completes. Keeping the
+ * frame shorter than the terminal is what prevents flicker on every delta.
+ */
+function StreamTail({ text }: { text: string }) {
+  const rows = process.stdout.rows ?? 24
+  const limit = Math.max(6, rows - 14)
+  const lines = text.split('\n')
+  const truncated = lines.length > limit
+  return (
+    <Box>
+      <Text color={theme.accent}>● </Text>
+      <Box flexDirection="column">
+        {truncated ? <Text color={theme.dim}>… streaming · earlier lines appear above when the reply completes</Text> : null}
+        <Markdown text={lines.slice(-limit).join('\n')} theme={theme} />
+      </Box>
+    </Box>
+  )
+}
+
 function VerificationLine({ verification }: { verification: VerificationStatus }) {
   if (verification.running) {
     return <Text color={theme.warn}>● verifying…</Text>
@@ -1079,13 +1298,13 @@ function VerificationLine({ verification }: { verification: VerificationStatus }
   return <Text color={color}>{passing ? '✓' : color === theme.warn ? '!' : '✗'} verification: {status}</Text>
 }
 
-function ThinkingPanel({ blocks, expanded, now }: { blocks: ThinkingBlock[]; expanded: boolean; now: number }) {
+function ThinkingPanel({ blocks, expanded, now, tail = false }: { blocks: ThinkingBlock[]; expanded: boolean; now: number; tail?: boolean }) {
   if (!blocks.length) {
     return null
   }
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={theme.dim}>thinking (Ctrl+O)</Text>
+      <Text color={theme.dim}>thinking (Ctrl+T)</Text>
       {blocks.map(block => {
         const done = block.ended != null
         const color = block.error ? theme.error : done ? theme.dim : theme.warn
@@ -1099,7 +1318,7 @@ function ThinkingPanel({ blocks, expanded, now }: { blocks: ThinkingBlock[]; exp
             </Text>
             {expanded && block.text ? (
               <Box paddingLeft={2}>
-                <Text color={theme.dim}>{block.text}</Text>
+                <Text color={theme.dim}>{tail ? tailLines(block.text, 8) : block.text}</Text>
               </Box>
             ) : null}
           </Box>
@@ -1107,6 +1326,11 @@ function ThinkingPanel({ blocks, expanded, now }: { blocks: ThinkingBlock[]; exp
       })}
     </Box>
   )
+}
+
+function tailLines(text: string, limit: number) {
+  const lines = text.split('\n')
+  return lines.length > limit ? `…\n${lines.slice(-limit).join('\n')}` : text
 }
 
 function formatThinkingSeconds(seconds: number) {
@@ -1142,6 +1366,47 @@ function ToolPanel({ toolsExpanded, now, runs }: { toolsExpanded: boolean; now: 
           </Box>
         )
       })}
+    </Box>
+  )
+}
+
+function BranchesView({ active, view }: { active: string; view: BranchView }) {
+  const rows = process.stdout.rows ?? 24
+  const limit = Math.max(5, rows - 12)
+  const start = Math.max(0, Math.min(view.index - Math.floor(limit / 2), view.rows.length - limit))
+  const visible = view.rows.slice(start, start + limit)
+  const selected = view.rows[view.index]?.node
+  return (
+    <Box borderColor={theme.accent} borderStyle="round" flexDirection="column" marginTop={1} paddingX={1}>
+      <Text>
+        <Text bold color={theme.accent}>Conversation branches</Text>
+        <Text color={theme.dim}>  ↑↓←→ move · enter open · Ctrl+D delete · esc close</Text>
+      </Text>
+      {start > 0 ? <Text color={theme.dim}>… {start} more above</Text> : null}
+      {visible.map(row => {
+        const node = row.node
+        const selectedRow = node.id === selected?.id
+        const markers = [
+          node.id === view.tree.root ? 'root' : '',
+          node.id === active ? 'current' : '',
+          node.fork_message_index !== undefined ? `from #${node.fork_message_index}` : '',
+          node.turns ? `${node.turns}t` : ''
+        ].filter(Boolean).join(' · ')
+        return (
+          <Text color={selectedRow ? theme.accent : node.id === active ? theme.ok : undefined} key={node.id} wrap="truncate-end">
+            {selectedRow ? '❯ ' : '  '}
+            <Text color={theme.dim}>{row.guide}</Text>
+            {node.id === active ? '◉ ' : '○ '}
+            {shortText(node.title || node.id, 46)}
+            {markers ? <Text color={theme.dim}>  {markers}</Text> : null}
+            <Text color={theme.dim}>  {node.time}</Text>
+          </Text>
+        )
+      })}
+      {start + visible.length < view.rows.length ? <Text color={theme.dim}>… {view.rows.length - start - visible.length} more below</Text> : null}
+      {view.confirmDelete && selected ? (
+        <Text color={theme.error}>Delete “{shortText(selected.title || selected.id, 40)}” and its sub-branches? Enter/y confirm · Esc/n cancel</Text>
+      ) : null}
     </Box>
   )
 }
