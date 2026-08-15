@@ -353,6 +353,18 @@ fn main() {
             gateway_send,
             gateway_stop
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Friday desktop");
+        .build(tauri::generate_context!())
+        .expect("error while running Friday desktop")
+        .run(|app, event| {
+            // The gateway sidecars (one Bun process per open project) do not
+            // die with the window on their own; without this hook every quit
+            // leaked them. Exit is the one path every shutdown funnels through.
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Ok(mut children) = app.state::<GatewayState>().children.lock() {
+                    for (_, child) in children.drain() {
+                        let _ = child.kill();
+                    }
+                }
+            }
+        });
 }

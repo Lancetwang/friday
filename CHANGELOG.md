@@ -2,6 +2,23 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.6.0 (2026-08-15)
+
+### Added
+- Trace inspector renders JSON as collapsible syntax-colored trees: tool arguments, tool output, progress, metrics, and every event payload. Bash results split stdout/stderr into their own blocks.
+- Turn events appear as a chronological timeline in the inspector - timestamp with milliseconds, event type, expandable payload - instead of a raw string dump.
+- User and assistant messages render as Markdown with a preview/source toggle on every content block.
+- The Trace Analyst has model and thinking-effort selectors backed by a new `/api/models` endpoint, offering the same choices as chat and defaulting to the active profile.
+
+### Changed
+- Trace page typography: serif for prose and answers, monospace reserved for data, timestamps, and code.
+- Analyst answers stream as rendered Markdown instead of plain text.
+- GitHub release notes are taken from this changelog instead of auto-generated commit lists.
+
+### Fixed
+- Quitting the desktop app no longer leaks gateway sidecar processes (one Bun process per open project stayed alive after every quit; two projects meant two orphans). The app now kills all sidecars on exit.
+- The Trace Analyst frequently returned truncated or empty answers: its output budget was capped at 4,096 tokens, which reasoning models consumed as thinking before writing any visible text. It now uses the selected profile's own output budget, the same as chat.
+
 ## v0.5.0 - Named things, legible traces (2026-08-15)
 
 - Conversations name themselves after the first user message: one small model call (lowest thinking, ~60 tokens) produces a short title in the user's language, falling back to the message prefix without a key. A manual rename always outranks the generated name, and a `session.titled` event refreshes UI lists as soon as the name lands.
