@@ -264,8 +264,6 @@ const en: Record<string, string> = {
   'settings.memory.hint': 'Persistent memory files',
   'settings.plugins': 'Plugins',
   'settings.plugins.hint': 'Switch capabilities on or off',
-  'settings.docs': 'Docs',
-  'settings.docs.hint': 'Getting started',
 
   // General
   'general.title': 'General',
@@ -333,18 +331,6 @@ const en: Record<string, string> = {
   'plugins.disabled': '{name} is off.',
   'plugins.external': 'External plugins are ES modules in .friday/plugins (project) or ~/.friday/plugins (user).',
   'plugins.error': 'Problem: {error}',
-
-  // Docs
-  'docs.title': 'Docs',
-  'docs.desc': 'After installing, follow these steps to start using Friday.',
-  'docs.step1.title': 'Set up a model provider',
-  'docs.step1.body': 'Friday needs a model API key to chat. Open Models, expand any provider (such as DeepSeek), paste the key, and save — that provider is enabled automatically.',
-  'docs.step2.title': 'Set up web search (optional)',
-  'docs.step2.body': 'Web search needs a Tavily or AnySearch key. Fill one in under Web Search; Friday tries Tavily first and falls back to AnySearch.',
-  'docs.step3.title': 'Let Friday remember you (optional)',
-  'docs.step3.body': 'Set your name and Friday response language under General. Future conversations will carry these preferences.',
-  'docs.go': 'Go to {target} ›',
-
   // Project drop
   'projectDrop.title': 'Open as a Friday project',
   'projectDrop.hint': 'Drop the folder anywhere in this window',
@@ -585,8 +571,6 @@ const zh: Record<string, string> = {
   'settings.memory.hint': '持久记忆文件',
   'settings.plugins': '插件',
   'settings.plugins.hint': '开启或关闭能力',
-  'settings.docs': '文档',
-  'settings.docs.hint': '快速上手',
 
   // General
   'general.title': '通用',
@@ -652,18 +636,6 @@ const zh: Record<string, string> = {
   'plugins.disabled': '{name} 已关闭。',
   'plugins.external': '外部插件是放在 .friday/plugins（项目）或 ~/.friday/plugins（用户）下的 ES 模块。',
   'plugins.error': '问题：{error}',
-
-  // Docs
-  'docs.title': '文档',
-  'docs.desc': '安装完成后，按下面几步即可开始使用 Friday。',
-  'docs.step1.title': '配置模型服务',
-  'docs.step1.body': 'Friday 需要模型 API key 才能对话。打开模型页，展开任意供应商（如 DeepSeek），粘贴 key 并保存，该供应商即自动启用。',
-  'docs.step2.title': '配置搜索服务（可选）',
-  'docs.step2.body': '联网搜索需要 Tavily 或 AnySearch 的 key，在联网搜索页填入即可。Friday 会优先使用 Tavily，不可用时回退到 AnySearch。',
-  'docs.step3.title': '让 Friday 记住你（可选）',
-  'docs.step3.body': '在通用页中设置称呼和 Friday 交互语言，之后的对话会自动带上这些偏好。',
-  'docs.go': '前往{target} ›',
-
   // Project drop
   'projectDrop.title': '作为 Friday 项目打开',
   'projectDrop.hint': '将目录拖放到窗口中的任意位置',

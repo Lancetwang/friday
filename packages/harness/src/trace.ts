@@ -552,19 +552,20 @@ function md(src){
   flush();return out.join('')}
 /* ---------- json tree ---------- */
 function jsonPreview(v,max){const t=one(JSON.stringify(v));return t.length>max?t.slice(0,max)+'…':t}
-function jsonNode(key,v,depth){
+function jsonNode(key,v,depth,path){
   const label=key===null?'':'<span class="jk">'+esc(key)+'</span>: ';
+  const anchor=' data-p="'+esc(path)+'"';
   if(v===null||typeof v==='boolean')return '<div class="jrow">'+label+'<span class="jlit">'+String(v)+'</span></div>';
   if(typeof v==='number')return '<div class="jrow">'+label+'<span class="jnum">'+String(v)+'</span></div>';
   if(typeof v==='string'){
     if(v.length<=100&&!v.includes('\\n'))return '<div class="jrow">'+label+'<span class="jstr">"'+esc(v)+'"</span></div>';
-    return '<details'+(depth<1?' open':'')+'><summary>'+label+'<span class="jstr">"'+esc(one(v).slice(0,72))+'…"</span> <span class="jhint">('+num(v.length)+' chars)</span></summary><div class="jrow"><span class="jstr">'+esc(v)+'</span></div></details>'}
+    return '<details'+anchor+(depth<1?' open':'')+'><summary>'+label+'<span class="jstr">"'+esc(one(v).slice(0,72))+'…"</span> <span class="jhint">('+num(v.length)+' chars)</span></summary><div class="jrow"><span class="jstr">'+esc(v)+'</span></div></details>'}
   const isArr=Array.isArray(v),entries=isArr?v.map((x,idx)=>[String(idx),x]):Object.entries(v||{});
   if(!entries.length)return '<div class="jrow">'+label+'<span class="jhint">'+(isArr?'[]':'{}')+'</span></div>';
   const open=depth<2?' open':'';
-  return '<details'+open+'><summary>'+label+'<span class="jhint">'+(isArr?'['+entries.length+']':'{'+entries.length+'}')+' '+esc(jsonPreview(v,64))+'</span></summary>'
-    +entries.map(e=>jsonNode(e[0],e[1],depth+1)).join('')+'</details>'}
-function jsonTree(v){return '<div class="jt">'+jsonNode(null,v,0)+'</div>'}
+  return '<details'+anchor+open+'><summary>'+label+'<span class="jhint">'+(isArr?'['+entries.length+']':'{'+entries.length+'}')+' '+esc(jsonPreview(v,64))+'</span></summary>'
+    +entries.map(e=>jsonNode(e[0],e[1],depth+1,path+'.'+e[0])).join('')+'</details>'}
+function jsonTree(v,base){return '<div class="jt">'+jsonNode(null,v,0,base||'$')+'</div>'}
 function parsed(v){if(typeof v!=='string')return v;const t=v.trim();if(!t)return v;
   if(!(t.startsWith('{')||t.startsWith('[')))return v;
   try{return JSON.parse(t)}catch(e){return v}}
@@ -610,8 +611,8 @@ let viewModes={};
 function contentSection(id,title,text){
   const mode=viewModes[id]||'preview';
   return '<h3 class="sec">'+esc(title)
-    +'<span class="seg"><button data-view="'+id+':preview" class="'+(mode==='preview'?'on':'')+'">preview</button>'
-    +'<button data-view="'+id+':source" class="'+(mode==='source'?'on':'')+'">source</button></span></h3>'
+    +'<span class="seg"><button type="button" data-vid="'+esc(id)+'" data-vmode="preview" class="'+(mode==='preview'?'on':'')+'">preview</button>'
+    +'<button type="button" data-vid="'+esc(id)+'" data-vmode="source" class="'+(mode==='source'?'on':'')+'">source</button></span></h3>'
     +(mode==='preview'?'<div class="prose">'+md(text)+'</div>':'<pre class="block">'+esc(text)+'</pre>')}
 function dataSection(title,value){
   const v=parsed(value);
@@ -620,17 +621,37 @@ function dataSection(title,value){
   if(typeof v==='object'&&!Array.isArray(v)&&(typeof v.stdout==='string'||typeof v.stderr==='string')){
     const rest={};for(const k of Object.keys(v))if(k!=='stdout'&&k!=='stderr')rest[k]=v[k];
     let html='';
-    if(Object.keys(rest).length)html+='<h3 class="sec">'+esc(title)+'</h3>'+jsonTree(rest);
+    if(Object.keys(rest).length)html+='<h3 class="sec">'+esc(title)+'</h3>'+jsonTree(rest,title);
     if(v.stdout)html+='<h3 class="sec">stdout</h3><pre class="block">'+esc(v.stdout)+'</pre>';
     if(v.stderr)html+='<h3 class="sec">stderr</h3><pre class="block">'+esc(v.stderr)+'</pre>';
-    return html||'<h3 class="sec">'+esc(title)+'</h3>'+jsonTree(v)}
-  return '<h3 class="sec">'+esc(title)+'</h3>'+jsonTree(v)}
+    return html||'<h3 class="sec">'+esc(title)+'</h3>'+jsonTree(v,title)}
+  return '<h3 class="sec">'+esc(title)+'</h3>'+jsonTree(v,title)}
 function eventsSection(events){
   if(!events||!events.length)return'';
   return '<h3 class="sec">events ('+events.length+')</h3><div class="evlist">'
-    +events.map(ev=>'<details class="ev"><summary><span class="et">'+esc(hmsMs(ev.timestamp))+'</span><span class="ek">'+esc(ev.type)
-      +'</span><span class="ep">'+esc(jsonPreview(ev.data??{},80))+'</span></summary>'+jsonTree(ev.data??{})+'</details>').join('')+'</div>'}
-function renderDetail(row){const el=document.querySelector('#detail');if(!row){el.innerHTML='<div class="empty">click a row</div>';return}
+    +events.map((ev,index)=>'<details class="ev" data-p="ev:'+index+'"><summary><span class="et">'+esc(hmsMs(ev.timestamp))+'</span><span class="ek">'+esc(ev.type)
+      +'</span><span class="ep">'+esc(jsonPreview(ev.data??{},80))+'</span></summary>'+jsonTree(ev.data??{},'ev:'+index)+'</details>').join('')+'</div>'}
+/* The inspector holds live DOM state - which nodes the user expanded, which
+   view is active. Re-rendering it on the refresh tick threw that state away
+   every three seconds, so: render only when the selected row's data actually
+   changed (or on an explicit user action), and reapply recorded open/closed
+   choices whenever a render does happen. */
+const openState=new Map();
+let detailFingerprint='';
+function fingerprintRow(row){if(!row)return'none';
+  return [row.key,row.meta,row.err?1:0,row.sum,row.resultTime||'',
+    row.other?row.other.length:0,row.content?row.content.length:0,
+    row.result===undefined?-1:String(row.result).length].join('|')}
+function applyOpenState(el){for(const d of el.querySelectorAll('details[data-p]')){
+  const k=selectedKey+'|'+d.dataset.p;if(openState.has(k))d.open=openState.get(k)}}
+document.querySelector('#detail').addEventListener('toggle',ev=>{
+  const t=ev.target;if(!t||!t.dataset||!t.dataset.p)return;
+  openState.set(selectedKey+'|'+t.dataset.p,t.open)},true);
+function renderDetail(row,force){const el=document.querySelector('#detail');
+  const fp=fingerprintRow(row);
+  if(!force&&fp===detailFingerprint)return;
+  detailFingerprint=fp;
+  if(!row){el.innerHTML='<div class="empty">click a row</div>';return}
   const t=row.trace,m=row.metrics||{};
   let html='<div class="role-tag '+row.role+'">'+row.role.toUpperCase()+'</div>'
     +kv([['time',hmsMs(row.time)+(row.resultTime?' → '+hmsMs(row.resultTime):'')],
@@ -650,8 +671,9 @@ function renderDetail(row){const el=document.querySelector('#detail');if(!row){e
     if(t.progress&&Object.keys(t.progress).length)html+=dataSection('progress',t.progress);
     html+=eventsSection(row.other)}
   el.innerHTML=html;
-  for(const b of el.querySelectorAll('[data-view]'))b.onclick=()=>{const parts=b.dataset.view.split(':');
-    viewModes[parts[0]]=parts[1];renderDetail(row)}}
+  applyOpenState(el);
+  for(const b of el.querySelectorAll('[data-vid]'))b.onclick=()=>{
+    viewModes[b.dataset.vid]=b.dataset.vmode;renderDetail(row,true)}}
 /* ---------- log ---------- */
 function renderRows(session){const key=session.id+':'+session.turns.length+':'+String(session.turns.map(t=>t.id).join(','));
   const el=document.querySelector('#rows');
@@ -664,7 +686,7 @@ function renderRows(session){const key=session.id+':'+session.turns.length+':'+S
     if(!selectedKey)el.scrollTop=el.scrollHeight}
   const current=rows.find(r=>r.key===selectedKey);renderDetail(current||null)}
 function select(key){selectedKey=key;for(const b of document.querySelectorAll('#rows .row'))b.classList.toggle('on',b.dataset.key===key);
-  showTab('i');renderDetail(rows.find(r=>r.key===key)||null)}
+  showTab('i');renderDetail(rows.find(r=>r.key===key)||null,true)}
 function renderSessions(){const el=document.querySelector('#sessions');el.className='';
   el.innerHTML=sessions.length?'':'<div class="empty">no traces yet</div>';
   for(const s of sessions){const b=document.createElement('button');b.className='sess'+(s.id===sessionId?' on':'');

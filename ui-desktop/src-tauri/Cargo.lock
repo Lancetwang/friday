@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "friday-desktop"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "tauri",
  "tauri-build",

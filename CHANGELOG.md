@@ -2,6 +2,15 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.6.1 (2026-08-15)
+
+### Fixed
+- Trace inspector interactivity: the preview/source toggle was inert (its handler mis-parsed the button's target), and expanding or collapsing any JSON node was undone within seconds because the refresh tick re-rendered the whole inspector. The inspector now re-renders only when the selected row's data actually changes, remembers every expand/collapse choice per node, and the toggle works.
+- Two remaining ways to leak child processes: a client kill (SIGTERM/SIGINT) now cancels running sessions first, so detached shell tools are terminated instead of orphaned; and once stdin closes or shutdown starts, the gateway force-exits after a bounded grace period, so a stuck request or runtime stdin quirk can no longer keep a headless process alive.
+
+### Removed
+- The Docs page in desktop Settings; the remaining sections are self-explanatory and the real documentation lives in the repository.
+
 ## v0.6.0 (2026-08-15)
 
 ### Added

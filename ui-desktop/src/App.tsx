@@ -3057,15 +3057,14 @@ function MoonIcon() {
   )
 }
 
-type SettingsSection = 'docs' | 'general' | 'models' | 'web' | 'memory' | 'plugins'
+type SettingsSection = 'general' | 'models' | 'web' | 'memory' | 'plugins'
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ hintKey: string; id: SettingsSection; labelKey: string }> = [
   { hintKey: 'settings.general.hint', id: 'general', labelKey: 'settings.general' },
   { hintKey: 'settings.models.hint', id: 'models', labelKey: 'settings.models' },
   { hintKey: 'settings.web.hint', id: 'web', labelKey: 'settings.web' },
   { hintKey: 'settings.memory.hint', id: 'memory', labelKey: 'settings.memory' },
-  { hintKey: 'settings.plugins.hint', id: 'plugins', labelKey: 'settings.plugins' },
-  { hintKey: 'settings.docs.hint', id: 'docs', labelKey: 'settings.docs' }
+  { hintKey: 'settings.plugins.hint', id: 'plugins', labelKey: 'settings.plugins' }
 ]
 
 type PluginInfo = {
@@ -3645,31 +3644,6 @@ function SettingsPage({
                 <p>{t('plugins.desc')}</p>
               </header>
               <PluginsSettings onList={onListPlugins} onToggle={onTogglePlugin} />
-            </div>
-          )}
-          {section === 'docs' && (
-            <div className="settings-section-wrap">
-              <header className="settings-head">
-                <h2>{t('docs.title')}</h2>
-                <p>{t('docs.desc')}</p>
-              </header>
-              <ol className="docs-steps">
-                <li>
-                  <strong>{t('docs.step1.title')}</strong>
-                  <p>{t('docs.step1.body')}</p>
-                  <button className="docs-link" onClick={() => setSection('models')} type="button">{t('docs.go', { target: t('settings.models') })}</button>
-                </li>
-                <li>
-                  <strong>{t('docs.step2.title')}</strong>
-                  <p>{t('docs.step2.body')}</p>
-                  <button className="docs-link" onClick={() => setSection('web')} type="button">{t('docs.go', { target: t('settings.web') })}</button>
-                </li>
-                <li>
-                  <strong>{t('docs.step3.title')}</strong>
-                  <p>{t('docs.step3.body')}</p>
-                  <button className="docs-link" onClick={() => setSection('general')} type="button">{t('docs.go', { target: t('settings.general') })}</button>
-                </li>
-              </ol>
             </div>
           )}
       </section>

@@ -875,6 +875,23 @@ function modelCatalog(workspace: string): ModelCatalog & { profiles: Array<Model
 export async function runGateway(): Promise<void> {
   const gateway = new Gateway()
   await gateway.start()
+  // Leaving no orphans is this block's one job. A client kill (SIGTERM from
+  // the TUI, SIGINT from a terminal) must cancel running sessions so their
+  // detached tool process trees are killed rather than inherited by init;
+  // and once shutdown starts, a bounded timer guarantees the process ends
+  // even if a stuck request or a runtime stdin quirk would keep the event
+  // loop alive (the compiled Bun sidecar exhibited exactly that).
+  let closing = false
+  const shutdown = (code: number): void => {
+    if (closing) return
+    closing = true
+    setTimeout(() => process.exit(code), 3_000).unref()
+    void gateway.close()
+      .catch(() => {})
+      .finally(() => process.exit(code))
+  }
+  process.once('SIGTERM', () => shutdown(0))
+  process.once('SIGINT', () => shutdown(0))
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity })
   try {
     for await (const line of input) {
@@ -888,7 +905,7 @@ export async function runGateway(): Promise<void> {
       }
     }
   } finally {
-    await gateway.close()
+    shutdown(0)
   }
 }
 
