@@ -2,6 +2,17 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.7.0 (2026-08-15)
+
+### Added
+- In-place compaction (insert-and-compact): when the window has room, the summary request appends one instruction to the live conversation - same tool schemas, `tool_choice: none` - so the provider serves the entire prefix from its prompt cache and the summarizer reads the full original conversation instead of a bounded re-rendering. Falls back to the bounded transcript, then to the offline summary; the compaction record and notice now name the strategy used.
+- Anthropic prompt caching: the adapter sets explicit `cache_control` breakpoints (system prompt plus a rolling breakpoint on each request's final message), so every step of a tool loop and every following turn reads the previous prefix at cache price. Cache read/creation figures already flow into per-turn metrics.
+- Shell output is bounded at birth: results up to 16,000 characters enter the conversation complete; larger ones enter as true head + tail with a pointer, while the full stream (up to 2 MB) is written to a session spill directory the agent can `Read` back on demand. This replaces the old rolling buffer that silently discarded everything before the last 50k characters with no way back. Approval-mode commands get the same treatment; deleting a conversation removes its spill files.
+
+### Changed
+- The conversation is now strictly append-only between compactions. Memory recall rides inside the user message instead of being inserted as a separate system message and removed a turn later, and the compaction stage that rewrote old tool results in place is gone - both mutations used to invalidate the provider's prompt cache mid-prefix.
+- In the bounded-transcript compaction path, user messages keep up to 8,000 characters (other messages 2,000): user intent is ground truth and no longer competes with tool noise at the same cap.
+
 ## v0.6.1 (2026-08-15)
 
 ### Fixed

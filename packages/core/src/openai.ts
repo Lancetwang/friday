@@ -25,7 +25,7 @@ export class OpenAIModel implements ChatModel {
         messages: openaiMessages(request.messages),
         stream: true,
         stream_options: { include_usage: true },
-        ...(request.tools?.length ? { tools: request.tools, tool_choice: 'auto' } : {}),
+        ...(request.tools?.length ? { tools: request.tools, tool_choice: request.toolChoice ?? 'auto' } : {}),
         ...(this.options.maxOutputTokens
           ? { [this.options.maxTokensField ?? 'max_tokens']: this.options.maxOutputTokens }
           : {}),

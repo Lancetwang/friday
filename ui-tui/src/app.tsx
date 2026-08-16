@@ -1679,9 +1679,6 @@ function compactionLine(payload: ContextCompaction) {
   if (payload.ok === false) {
     return `Context compaction failed (${payload.reason || 'unknown'}). This conversation may hit the model's limit.`
   }
-  if (payload.kind === 'tool_results') {
-    return `Context trimmed: shortened ${payload.tool_results ?? 0} tool results. Full output is still on disk.`
-  }
   const saved = payload.before_tokens && payload.after_tokens
     ? ` (~${shortTokens(payload.before_tokens)} to ~${shortTokens(payload.after_tokens)} tokens)`
     : ''

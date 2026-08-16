@@ -35,6 +35,7 @@ export interface ContextCompaction {
   notice?: string
   ok?: boolean
   reason?: string
+  strategy?: string
   tool_results?: number
   window?: number
 }

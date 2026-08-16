@@ -25,7 +25,7 @@ export class ResponsesModel implements ChatModel {
         input,
         stream: true,
         ...(instructions ? { instructions } : {}),
-        ...(request.tools?.length ? { tools: request.tools.map(responsesTool), tool_choice: 'auto' } : {}),
+        ...(request.tools?.length ? { tools: request.tools.map(responsesTool), tool_choice: request.toolChoice ?? 'auto' } : {}),
         ...(this.options.maxOutputTokens ? { max_output_tokens: this.options.maxOutputTokens } : {}),
         ...this.options.body
       }),

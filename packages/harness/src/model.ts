@@ -12,7 +12,9 @@ export function modelFor(config: ModelConfig, thinking: string, outputLimit = co
     body: thinkingBody(config.provider, config.model, thinking)
   }
   if (config.provider === 'anthropic' || (config.provider === 'opencode-go' && /^(minimax-|qwen3\.)/.test(config.model))) {
-    return new AnthropicModel(common)
+    // Explicit prompt-cache breakpoints only against the real Anthropic API;
+    // Anthropic-compatible proxies may reject the cache_control field.
+    return new AnthropicModel({ ...common, cacheControl: config.provider === 'anthropic' })
   }
   if (config.provider === 'opencode-go' && config.model.startsWith('gpt-5.6')) return new ResponsesModel(common)
   return new OpenAIModel({

@@ -254,6 +254,57 @@ test('Anthropic Messages preserves signed thinking and tool turns', async () => 
   }
 })
 
+test('Anthropic cache breakpoints and tool_choice none reach the wire', async () => {
+  let payload: JsonObject | undefined
+  const server = createServer((request, response) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', chunk => { body += chunk })
+    request.on('end', () => {
+      payload = JSON.parse(body) as JsonObject
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      sse(response, { type: 'message_start', message: { usage: { input_tokens: 40, cache_read_input_tokens: 30, cache_creation_input_tokens: 8 } } })
+      sse(response, { type: 'content_block_start', index: 0, content_block: { type: 'text' } })
+      sse(response, { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'summary' } })
+      sse(response, { type: 'message_delta', usage: { output_tokens: 3 } })
+      sse(response, { type: 'message_stop' })
+      response.end()
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  try {
+    const model = new AnthropicModel({
+      apiKey: 'k', model: 'claude-test', baseUrl: `http://127.0.0.1:${address.port}`, cacheControl: true
+    })
+    const result = await model.complete({
+      messages: [
+        { role: 'system', content: 'Rules.' },
+        { role: 'user', content: 'Question.' }
+      ],
+      tools: [{ type: 'function', function: { name: 'Read', description: 'Read.', parameters: { type: 'object' } } }],
+      toolChoice: 'none'
+    })
+    // System prompt carries a breakpoint block instead of a bare string.
+    const system = payload?.system as JsonObject[]
+    assert.deepEqual(system[0]?.cache_control, { type: 'ephemeral' })
+    // The final message's last content block carries the rolling breakpoint.
+    const messages = payload?.messages as JsonObject[]
+    const content = messages.at(-1)?.content as JsonObject[]
+    assert.deepEqual(content.at(-1)?.cache_control, { type: 'ephemeral' })
+    // Tools stay in the request (cache prefix identity) but calls are barred.
+    assert.equal((payload?.tools as JsonObject[]).length, 1)
+    assert.deepEqual(payload?.tool_choice, { type: 'none' })
+    // Cache figures reported by the provider survive into usage.
+    assert.deepEqual(result.usage, {
+      input_tokens: 40, output_tokens: 3, cache_read_input_tokens: 30, cache_creation_input_tokens: 8
+    })
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  }
+})
+
 test('OpenAI Responses replays typed items and normalizes completed output', async () => {
   let payload: JsonObject | undefined
   let requestPath = ''

@@ -5,9 +5,10 @@ import { promptTemplate } from './prompts.js'
 
 const COMPACT_AT = 0.85
 const COMPACT_TARGET = 0.55
-const TOOL_GAIN = 0.25
 const SUMMARY_MAX_CHARS = 120_000
 const MESSAGE_MAX_CHARS = 2_000
+const USER_MESSAGE_MAX_CHARS = 8_000
+const INSERT_PROMPT_TOKENS = 2_000
 const RECENT_TURNS = [10, 6, 3, 2, 1]
 const ANCHOR = 'friday.context_anchor'
 const PENDING_ANCHOR = 'friday.pending_context_anchor'
@@ -20,6 +21,8 @@ export type ContextCompaction = {
   kind: 'conversation' | 'tool_results'
   ok: boolean
   fallback: boolean
+  /** How the summary was produced: full-fidelity in-place read, bounded transcript, or offline. */
+  strategy: 'insert' | 'transcript' | 'offline' | 'none'
   reason: string
   before_tokens: number
   after_tokens: number
@@ -100,25 +103,11 @@ export async function compactIfNeeded(options: {
   const before = Number(tokenMeasurement(options.context, options.tools).tokens)
   const window = options.config.contextWindow
   if (!options.force && before / window < COMPACT_AT) return {}
-
-  const candidates = compactableToolResults(options.context.messages)
-  const saved = candidates.reduce((total, item) => total + item.before - item.after, 0)
-  if (!options.force && saved / 4 / Math.max(before, 1) >= TOOL_GAIN) {
-    for (const candidate of candidates) {
-      candidate.message.content = candidate.content
-      candidate.message.friday_compacted = true
-    }
-    const after = Number(tokenMeasurement(options.context, options.tools).tokens)
-    const record = recordFor('tool_results', before, after, window, 0, candidates.length, false, '')
-    options.context.emit('context.compacted', 'context', record)
-    return { record }
-  }
-
   try {
-    return await compactConversation(options, before, window, candidates)
+    return await compactConversation(options, before, window)
   } catch (error) {
     const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-    const record = recordFor('conversation', before, before, window, 0, 0, false, reason, false)
+    const record = recordFor('conversation', before, before, window, 0, 'none', reason, false)
     options.context.emit('context.compacted', 'context', record)
     return { record }
   }
@@ -127,34 +116,63 @@ export async function compactIfNeeded(options: {
 async function compactConversation(
   options: Parameters<typeof compactIfNeeded>[0],
   before: number,
-  window: number,
-  toolCandidates: ReturnType<typeof compactableToolResults>
+  window: number
 ): Promise<{ record: ContextCompaction; summary: string }> {
-  for (const candidate of toolCandidates) {
-    candidate.message.content = candidate.content
-    candidate.message.friday_compacted = true
-  }
   const body = conversationBody(options.context.messages)
-  const transcriptText = transcript(body, SUMMARY_MAX_CHARS)
   let summary = ''
+  let strategy: ContextCompaction['strategy'] = 'insert'
   let fallback = false
   let reason = ''
-  try {
-    const response = await options.model.complete({
-      messages: [
-        { role: 'system', content: promptTemplate('COMPACT_SYSTEM.md').trim() },
-        { role: 'user', content: `${promptTemplate('COMPACT.md').trim()}\n\n# Conversation\n\n${transcriptText}` }
-      ],
-      ...(options.signal ? { signal: options.signal } : {})
-    })
-    options.context.recordUsage(response.usage)
-    summary = cleanSummary(response.content)
-    if (!usableSummary(summary)) throw new Error('the model did not return session state')
-  } catch (error) {
-    if (options.signal?.aborted) throw error
-    fallback = true
-    reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-    summary = fallbackSummary(body, reason)
+  // Strategy 1 - insert-and-compact: append one instruction to the LIVE
+  // conversation, tools and all, so the provider serves the whole prefix
+  // from its prompt cache and the summarizer reads the full original, not
+  // a bounded re-rendering. tool_choice 'none' keeps it text-only.
+  const insertFits = before + INSERT_PROMPT_TOKENS + options.config.maxOutputTokens <= window
+  if (insertFits) {
+    try {
+      const response = await options.model.complete({
+        messages: [
+          ...options.context.messages,
+          { role: 'user', content: promptTemplate('COMPACT_INSERT.md').trim() }
+        ],
+        tools: options.tools.map(toolSchema),
+        toolChoice: 'none',
+        ...(options.signal ? { signal: options.signal } : {})
+      })
+      options.context.recordUsage(response.usage)
+      summary = cleanSummary(response.content)
+      if (!usableSummary(summary)) throw new Error('the model did not return session state')
+    } catch (error) {
+      if (options.signal?.aborted) throw error
+      summary = ''
+      reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    }
+  }
+  // Strategy 2 - bounded transcript: a fresh two-message request that fits
+  // any window; the fallback when insert has no headroom or failed.
+  if (!summary) {
+    strategy = 'transcript'
+    const transcriptText = transcript(body, SUMMARY_MAX_CHARS)
+    try {
+      const response = await options.model.complete({
+        messages: [
+          { role: 'system', content: promptTemplate('COMPACT_SYSTEM.md').trim() },
+          { role: 'user', content: `${promptTemplate('COMPACT.md').trim()}\n\n# Conversation\n\n${transcriptText}` }
+        ],
+        ...(options.signal ? { signal: options.signal } : {})
+      })
+      options.context.recordUsage(response.usage)
+      summary = cleanSummary(response.content)
+      if (!usableSummary(summary)) throw new Error('the model did not return session state')
+    } catch (error) {
+      if (options.signal?.aborted) throw error
+      // Strategy 3 - offline: never let compaction block the loop.
+      strategy = 'offline'
+      fallback = true
+      reason = [reason, error instanceof Error ? `${error.name}: ${error.message}` : String(error)]
+        .filter(Boolean).join('; ')
+      summary = fallbackSummary(body, reason)
+    }
   }
   const { summary: withoutMemory, memories } = splitMemory(summary)
   summary = withoutMemory
@@ -176,7 +194,7 @@ async function compactConversation(
   options.context.messages.splice(prefixLength, body.length, ...replacement)
   delete options.context.metadata[ANCHOR]
   const after = Number(tokenMeasurement(options.context, options.tools).tokens)
-  const record = recordFor('conversation', before, after, window, kept, toolCandidates.length, fallback, reason, true, memories)
+  const record = recordFor('conversation', before, after, window, kept, strategy, reason, true, memories, fallback)
   options.context.emit('context.compacted', 'context', record)
   return { record, summary }
 }
@@ -210,33 +228,12 @@ function fitReplay(body: Message[], budget: number): { recent: Message[]; kept: 
   return { recent, kept }
 }
 
-function compactableToolResults(messages: readonly Message[]): Array<{ message: Message; content: string; before: number; after: number }> {
-  return messages.flatMap(message => {
-    if (message.role !== 'tool' || message.friday_compacted || typeof message.content !== 'string') return []
-    const compacted = simplifyToolResult(message.content)
-    const before = JSON.stringify(message.content).length
-    const after = JSON.stringify(compacted).length
-    return after < before ? [{ message, content: compacted, before, after }] : []
-  })
-}
-
-function simplifyToolResult(content: string): string {
-  let value: unknown
-  try { value = JSON.parse(content) } catch { return content }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return JSON.stringify(value)
-  const rows = ['[tool result simplified; all fields preserved]']
-  for (const [key, item] of Object.entries(value)) {
-    rows.push(typeof item === 'string'
-      ? `${JSON.stringify(key)}: string(${item.length})\n${item}`
-      : `${JSON.stringify(key)}: ${JSON.stringify(item)}`)
-  }
-  return rows.join('\n')
-}
-
 function transcript(messages: readonly Message[], maximum: number): string {
   const rows = messages.flatMap(message => {
     if (message.friday_compaction_artifact) return []
-    const text = messageText(message.content).slice(0, MESSAGE_MAX_CHARS)
+    // User messages are the ground truth of intent; they get a far larger
+    // slice of the transcript budget than tool noise.
+    const text = messageText(message.content).slice(0, message.role === 'user' ? USER_MESSAGE_MAX_CHARS : MESSAGE_MAX_CHARS)
     if (!text && message.role !== 'assistant') return []
     const calls = Array.isArray(message.tool_calls)
       ? `\nTool calls: ${message.tool_calls.map(call => call.function?.name).filter(Boolean).join(', ')}`
@@ -301,15 +298,15 @@ function splitMemory(value: string): { summary: string; memories: string[] } {
 
 function recordFor(
   kind: ContextCompaction['kind'], before: number, after: number, window: number,
-  kept: number, tools: number, fallback: boolean, reason: string, ok = true, memories: string[] = []
+  kept: number, strategy: ContextCompaction['strategy'], reason: string, ok = true,
+  memories: string[] = [], fallback = false
 ): ContextCompaction {
-  const notice = kind === 'tool_results'
-    ? `tool results compacted: ${tools}`
-    : ok ? `conversation compacted: ${before} -> ${after} tokens${fallback ? ' (offline summary)' : ''}`
-      : `conversation compaction skipped: ${reason || 'unavailable'}`
+  const notice = ok
+    ? `conversation compacted (${strategy}): ${before} -> ${after} tokens${fallback ? ' (offline summary)' : ''}`
+    : `conversation compaction skipped: ${reason || 'unavailable'}`
   return {
-    kind, ok, fallback, reason, before_tokens: before, after_tokens: after,
-    window, kept_turns: kept, tool_results: tools, memories, notice
+    kind, ok, fallback, strategy, reason, before_tokens: before, after_tokens: after,
+    window, kept_turns: kept, tool_results: 0, memories, notice
   }
 }
 

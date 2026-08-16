@@ -21,7 +21,7 @@ import {
 } from './permissions.js'
 import { buildInstructions, promptTemplate } from './prompts.js'
 import { assembleTools, loadPlugins, markDisabled, pluginInfo, pluginSections, type LoadedPlugin } from './plugins.js'
-import { builtinPlugins, runShell } from './tools.js'
+import { builtinPlugins, runShell, toolSpillDir } from './tools.js'
 import { writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
 import { consolidateMemory as applyMemoryConsolidation, captureUserMemory, relevantMemory } from './memory.js'
@@ -148,7 +148,7 @@ export class FridaySession {
         sessionAllowed: () => this.sessionAllowed,
         beforeMutation: () => this.ensureCheckpoint(),
         updatePlan: value => updatePlan(this.context, value),
-        readPaths: () => [...this.readAllow],
+        readPaths: () => [toolSpillDir(this.workspace, this.sessionId), ...this.readAllow],
         reviewCommand: (command, risk, signal) => this.reviewShell(command, risk, signal)
       }),
       ...external
@@ -259,16 +259,19 @@ export class FridaySession {
         const recalled = remember ? await relevantMemory(session.workspace, text) : ''
         const captured = remember ? await captureUserMemory(session.workspace, text, session.sessionId) : undefined
         session.refreshInstructions()
-        if (recalled) session.context.addMessage({ role: 'system', content: recalled, friday_memory_recall: true })
         if (captured) session.context.emit('memory.updated', 'memory', { capture: captured })
         for (const attachment of attachments) session.readAllow.add(attachment.path)
+        // Recall rides inside the user message rather than as a separate
+        // system message that the next turn removes: the conversation stays
+        // append-only, so the provider's prompt cache never re-ingests it.
+        const wired = recalled ? `${recalled}\n\n${input}` : input
         session.context.addMessage({
           role: 'user',
           content: images.length
-            ? [{ type: 'text', text: input }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))]
-            : input,
+            ? [{ type: 'text', text: wired }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))]
+            : wired,
           ...(options.internal ? { friday_internal: true } : {}),
-          ...(input !== display || mode === 'goal' ? { friday_display_text: display } : {}),
+          ...(wired !== display || mode === 'goal' ? { friday_display_text: display } : {}),
           ...(attachments.length ? { friday_attachments: attachments } : {}),
           friday_timestamp: zonedTimestamp(),
           ...(mode === 'goal' ? { friday_goal: true } : {})
@@ -428,7 +431,8 @@ export class FridaySession {
       const progress = (content: string) => this.context.emit('tool.progress', 'tool', {
         tool_call_id: approval!.tool_call_id || '', name: 'Bash', content
       })
-      result = await runShell(this.workspace, approval.command, approval.timeout_seconds, this.abort.signal, progress)
+      const spillPath = join(toolSpillDir(this.workspace, this.sessionId), `${approval.tool_call_id || approval.id}.log`)
+      result = await runShell(this.workspace, approval.command, approval.timeout_seconds, this.abort.signal, progress, spillPath)
       progress(JSON.stringify(result))
     } catch (error) {
       if (approval) await this.cancelApprovalDecision(approval, checkpointId)
@@ -1202,6 +1206,7 @@ export async function deleteSessionTree(workspace: string, sessionId: string, al
   for (const id of [...deleted].reverse()) {
     await rm(sessionPath(workspace, id), { force: true })
     await rm(join(projectStateDir(workspace), 'approvals', `${id}.json`), { force: true })
+    await rm(join(projectStateDir(workspace), 'sessions', `${id}-tools`), { recursive: true, force: true })
   }
   await deleteSessionCheckpoints(workspace, deleted)
   await deleteSessionTraces(workspace, deleted)

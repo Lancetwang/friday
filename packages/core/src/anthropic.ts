@@ -6,6 +6,13 @@ export type AnthropicModelOptions = {
   model: string
   baseUrl?: string
   maxOutputTokens?: number
+  /**
+   * Mark the prompt for Anthropic's explicit prompt cache: one breakpoint
+   * after the system prompt and one on the final message, so each request
+   * reads the previous request's prefix at cache price. Enable only for
+   * real Anthropic endpoints; compatible proxies may reject the field.
+   */
+  cacheControl?: boolean
   body?: JsonObject
 }
 
@@ -17,6 +24,8 @@ export class AnthropicModel implements ChatModel {
 
   async complete(request: ModelRequest): Promise<AssistantMessage> {
     const { system, messages } = anthropicMessages(request.messages)
+    const cached = this.options.cacheControl === true
+    if (cached) markCacheBreakpoint(messages)
     const response = await fetch(`${normalizeBaseUrl(this.options.baseUrl)}/v1/messages`, {
       method: 'POST',
       headers: {
@@ -29,8 +38,12 @@ export class AnthropicModel implements ChatModel {
         messages,
         max_tokens: this.options.maxOutputTokens ?? 4_096,
         stream: true,
-        ...(system ? { system } : {}),
-        ...(request.tools?.length ? { tools: request.tools.map(anthropicTool), tool_choice: { type: 'auto' } } : {}),
+        ...(system
+          ? { system: cached ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system }
+          : {}),
+        ...(request.tools?.length
+          ? { tools: request.tools.map(anthropicTool), tool_choice: { type: request.toolChoice === 'none' ? 'none' : 'auto' } }
+          : {}),
         ...this.options.body
       }),
       ...(request.signal ? { signal: request.signal } : {})
@@ -149,6 +162,22 @@ function cacheFields(usage: JsonObject): JsonObject {
     ...(read === undefined ? {} : { cache_read_input_tokens: read }),
     ...(written === undefined ? {} : { cache_creation_input_tokens: written })
   }
+}
+
+/**
+ * A rolling breakpoint on the last content block of the final message: the
+ * next request extends this prefix, so its reads land on this cache entry.
+ */
+function markCacheBreakpoint(messages: JsonObject[]): void {
+  const last = messages.at(-1)
+  if (!last) return
+  if (typeof last.content === 'string') {
+    last.content = [{ type: 'text', text: last.content || ' ', cache_control: { type: 'ephemeral' } }]
+    return
+  }
+  if (!Array.isArray(last.content)) return
+  const block = last.content.at(-1)
+  if (isObject(block)) block.cache_control = { type: 'ephemeral' }
 }
 
 function anthropicTool(tool: ToolSchema): JsonObject {

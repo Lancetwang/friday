@@ -490,9 +490,6 @@ function compactionText(payload: ContextCompaction) {
   if (payload.ok === false) {
     return t('context.compactFailed', { reason: payload.reason || '—' })
   }
-  if (payload.kind === 'tool_results') {
-    return t('context.trimmed', { count: payload.tool_results ?? 0 })
-  }
   const measured = Boolean(payload.before_tokens && payload.after_tokens && payload.kept_turns)
   const main = measured
     ? t('context.compacted', {

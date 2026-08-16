@@ -8,7 +8,7 @@ import { ToolExecutor, type ToolCall } from 'friday-agent-core'
 
 import { claimApproval, pendingApproval, preflightShell } from './permissions.js'
 import { discoverSkills, skillBody, skillDetail } from './skills.js'
-import { buildTools, runShell } from './tools.js'
+import { buildTools, runShell, SHELL_CONTEXT_LIMIT, toolSpillDir } from './tools.js'
 
 test('workspace tools write, page, edit, glob, and grep without escaping the root', async () => {
   const root = await mkdtemp(join(tmpdir(), 'friday-tools-'))
@@ -190,6 +190,47 @@ test('skills prefer project scope and can read only resources inside the selecte
     if (previousHome === undefined) delete process.env.FRIDAY_HOME
     else process.env.FRIDAY_HOME = previousHome
     await rm(temporary, { recursive: true, force: true })
+  }
+})
+
+test('oversized shell output is bounded at birth with a readable spill file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'friday-spill-'))
+  const home = join(root, 'home')
+  const workspace = join(root, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  try {
+    const executor = new ToolExecutor(buildTools(workspace, { sessionId: 'spill-session' }))
+    // ~24k chars of output: over the 16k context limit, so the context view
+    // must be head + pointer + tail while the spill file holds everything.
+    const big = result(await execute(executor, 'Bash', { command: `node -p "'ab'.repeat(12000)"` }))
+    const stdout = String(big.stdout)
+    assert.equal(big.exit_code, 0)
+    assert.equal(stdout.length < SHELL_CONTEXT_LIMIT, true)
+    assert.equal(stdout.startsWith('abab'), true)
+    assert.equal(stdout.trimEnd().endsWith('abab'), true)
+    assert.match(stdout, /chars omitted; full stream saved to /)
+    const spillDir = toolSpillDir(workspace, 'spill-session')
+    const pointer = /full stream saved to (\S+);/.exec(stdout)
+    assert(pointer)
+    assert.equal(pointer[1]!.startsWith(spillDir), true)
+    const full = await readFile(pointer[1]!, 'utf8')
+    assert.equal(full.trim().length, 24_000)
+    // The agent can Read the spill back: the directory is whitelisted.
+    const tools = buildTools(workspace, { sessionId: 'spill-session', readPaths: () => [spillDir] })
+    const reader = new ToolExecutor(tools)
+    const page = result(await reader.execute(toolCall('Read', { path: pointer[1]! })))
+    assert.equal(String(page.content).includes('abab'), true)
+    // A small result stays complete and leaves no spill behind.
+    const small = result(await execute(executor, 'Bash', { command: `node -p "'xy'.repeat(100)"` }))
+    assert.equal(String(small.stdout).trim(), 'xy'.repeat(100))
+    assert.equal(String(small.stdout).includes('omitted'), false)
+  } finally {
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await rm(root, { recursive: true, force: true })
   }
 })
 

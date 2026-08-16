@@ -23,6 +23,12 @@ export type AssistantMessage = Message & {
 export type ModelRequest = {
   messages: readonly Message[]
   tools?: readonly ToolSchema[]
+  /**
+   * 'none' sends the same tool schemas (keeping the cached prompt prefix
+   * byte-identical with normal turns) while forbidding tool calls - used by
+   * requests that must answer in text, like in-place context compaction.
+   */
+  toolChoice?: 'auto' | 'none'
   signal?: AbortSignal
   onDelta?: (text: string) => void
   onReasoningDelta?: (text: string) => void

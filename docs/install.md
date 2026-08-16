@@ -49,7 +49,7 @@ If a prerelease is not yet available from npm, download its `friday-agent`
 tarball from the same GitHub Release and install the already-tested package:
 
 ```bash
-npm install --global ./friday-agent-0.6.1.tgz
+npm install --global ./friday-agent-0.7.0.tgz
 friday --version
 ```
 
@@ -69,11 +69,11 @@ package, not Friday's internal Harness:
 npm install friday-agent-core
 ```
 
-The same GitHub Release also contains `friday-agent-core-0.6.1.tgz` as a
+The same GitHub Release also contains `friday-agent-core-0.7.0.tgz` as a
 fallback before registry publication:
 
 ```bash
-npm install ./friday-agent-core-0.6.1.tgz
+npm install ./friday-agent-core-0.7.0.tgz
 ```
 
 ## Develop from source

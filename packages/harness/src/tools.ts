@@ -1,12 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createReadStream, existsSync, realpathSync } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { opendir, readFile, readdir, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 
-import type { JsonObject, Tool } from 'friday-agent-core'
+import { getCurrentToolCall, type JsonObject, type Tool } from 'friday-agent-core'
 
-import { disabledPlugins } from './config.js'
+import { disabledPlugins, projectStateDir } from './config.js'
 import { defaultPermissionMode, preflightShell, preflightVerifierShell, type PermissionMode } from './permissions.js'
 import { assembleTools, builtinPlugin, markDisabled, type LoadedPlugin } from './plugins.js'
 import { writeTextAtomic } from './storage.js'
@@ -194,7 +195,8 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
       },
       execute(args, signal, onProgress) {
         if (typeof args.command !== 'string') throw new Error('command must be a string')
-        return runShell(root, args.command, capped(args.timeout_seconds, 60, 600), signal, onProgress)
+        const spillPath = join(toolSpillDir(root, options.sessionId || 'default'), `${getCurrentToolCall()?.id || randomUUID()}.log`)
+        return runShell(root, args.command, capped(args.timeout_seconds, 60, 600), signal, onProgress, spillPath)
       }
     },
     {
@@ -257,12 +259,31 @@ export function buildVerifierTools(workspace: string): Tool[] {
   return tools.map(tool => tool.name === 'Bash' ? { ...tool, preflight: call => preflightVerifierShell(call, workspace) } : tool)
 }
 
+/**
+ * Shell output enters the conversation bounded at birth, because the message
+ * array is append-only between compactions: what goes in is never rewritten.
+ * Within SHELL_CONTEXT_LIMIT the result is complete. Beyond it the context
+ * gets the true head and tail with a pointer, and the full stream (up to
+ * SPILL_CAP_BYTES) is written to a spill file the agent can Read on demand -
+ * an upgrade over the old rolling buffer, which silently discarded the head
+ * of anything past 50k characters with no way back.
+ */
+export const SHELL_CONTEXT_LIMIT = 16_000
+const SHELL_HEAD_CHARS = 8_000
+const SHELL_TAIL_CHARS = 4_000
+const SPILL_CAP_BYTES = 2_000_000
+
+export function toolSpillDir(workspace: string, sessionId: string): string {
+  return join(projectStateDir(resolve(workspace)), 'sessions', `${sessionId}-tools`)
+}
+
 export async function runShell(
   workspace: string,
   source: string,
   timeoutSeconds = 60,
   signal?: AbortSignal,
-  onProgress?: (content: string) => void
+  onProgress?: (content: string) => void,
+  spillPath?: string
 ): Promise<JsonObject> {
   signal?.throwIfAborted()
   const command = process.platform === 'win32'
@@ -277,12 +298,12 @@ export async function runShell(
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   })
-  let stdout = ''
-  let stderr = ''
+  const streams = { stdout: streamState(), stderr: streamState() }
   let liveTail = ''
   let lastProgress = 0
   let timedOut = false
   let stopping = false
+  const spill = spillPath ? spillWriter(spillPath) : undefined
   const report = (content: string, final = false) => {
     liveTail = (liveTail + content).slice(-8_000)
     const now = performance.now()
@@ -291,16 +312,17 @@ export async function runShell(
       lastProgress = now
     }
   }
+  const consume = (state: StreamState, chunk: string) => {
+    state.total += chunk.length
+    if (state.head.length < SHELL_HEAD_CHARS) state.head += chunk.slice(0, SHELL_HEAD_CHARS - state.head.length)
+    state.tail = (state.tail + chunk).slice(-MAX_OUTPUT_CHARS)
+    spill?.write(chunk)
+    report(chunk)
+  }
   child.stdout!.setEncoding('utf8')
   child.stderr!.setEncoding('utf8')
-  child.stdout!.on('data', (chunk: string) => {
-    stdout = (stdout + chunk).slice(-MAX_OUTPUT_CHARS)
-    report(chunk)
-  })
-  child.stderr!.on('data', (chunk: string) => {
-    stderr = (stderr + chunk).slice(-MAX_OUTPUT_CHARS)
-    report(chunk)
-  })
+  child.stdout!.on('data', (chunk: string) => consume(streams.stdout, chunk))
+  child.stderr!.on('data', (chunk: string) => consume(streams.stderr, chunk))
   const stop = () => {
     if (stopping) return
     stopping = true
@@ -319,12 +341,78 @@ export async function runShell(
   clearTimeout(timer)
   signal?.removeEventListener('abort', abort)
   report('', true)
+  const spilled = await (spill?.finish() ?? Promise.resolve(false))
   signal?.throwIfAborted()
+  const stdout = boundedStream(streams.stdout, spilled ? spillPath : undefined)
+  const stderrText = boundedStream(streams.stderr, spilled ? spillPath : undefined)
   return {
     stdout,
-    stderr: outcome.error ? (stderr || outcome.error.message).slice(-MAX_OUTPUT_CHARS) : stderr,
+    stderr: outcome.error ? (stderrText || outcome.error.message).slice(-MAX_OUTPUT_CHARS) : stderrText,
     exit_code: timedOut ? null : outcome.code ?? 1,
     ...(timedOut ? { timed_out: true } : {})
+  }
+}
+
+type StreamState = { head: string; tail: string; total: number }
+
+function streamState(): StreamState {
+  return { head: '', tail: '', total: 0 }
+}
+
+function boundedStream(state: StreamState, spillPath?: string): string {
+  if (state.total <= SHELL_CONTEXT_LIMIT) return state.tail
+  const omitted = state.total - SHELL_HEAD_CHARS - SHELL_TAIL_CHARS
+  const pointer = spillPath
+    ? `full stream saved to ${spillPath}; Read it (paged) if the middle matters`
+    : 'full stream was not captured'
+  return `${state.head}\n…[${omitted.toLocaleString()} of ${state.total.toLocaleString()} chars omitted; ${pointer}]\n${state.tail.slice(-SHELL_TAIL_CHARS)}`
+}
+
+/**
+ * Buffers until the combined stream crosses the context limit, then flushes
+ * everything to disk and keeps appending up to the cap. Small results never
+ * touch the filesystem.
+ */
+function spillWriter(path: string): { write(chunk: string): void; finish(): Promise<boolean> } {
+  let buffered: string[] | undefined = []
+  let bufferedBytes = 0
+  let written = 0
+  let stream: ReturnType<typeof createWriteStream> | undefined
+  let failed = false
+  const open = () => {
+    try {
+      mkdirSync(dirname(path), { recursive: true })
+      stream = createWriteStream(path, { encoding: 'utf8' })
+      stream.on('error', () => { failed = true })
+    } catch {
+      failed = true
+    }
+  }
+  return {
+    write(chunk: string): void {
+      if (failed || written >= SPILL_CAP_BYTES) return
+      if (buffered) {
+        buffered.push(chunk)
+        bufferedBytes += chunk.length
+        if (bufferedBytes <= SHELL_CONTEXT_LIMIT) return
+        open()
+        if (failed) return
+        for (const piece of buffered) {
+          stream!.write(piece)
+          written += piece.length
+        }
+        buffered = undefined
+        return
+      }
+      const room = SPILL_CAP_BYTES - written
+      stream?.write(chunk.slice(0, room))
+      written += Math.min(chunk.length, room)
+    },
+    async finish(): Promise<boolean> {
+      if (!stream) return false
+      await new Promise<void>(done => stream!.end(() => done()))
+      return !failed
+    }
   }
 }
 
