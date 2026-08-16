@@ -1,6 +1,6 @@
 [package]
 name = "friday-desktop"
-version = "0.8.0"
+version = "0.8.1"
 description = "Friday desktop client"
 authors = ["Friday contributors"]
 edition = "2021"

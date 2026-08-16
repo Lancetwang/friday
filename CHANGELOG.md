@@ -2,7 +2,7 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
-## Unreleased
+## v0.8.1 (2026-08-16)
 
 ### Fixed
 - Steering during a plain streaming answer no longer errors the running turn. A steer that arrives after the turn's last model step is delivered as a follow-up turn; that dispatch used to fire while the finishing turn was still registered, tripping the idle guard and surfacing "already has a request in progress" against the original message (the desktop hit this on any single-step turn; the TUI only avoided it because tool loops delivered steers in-step). The follow-up now waits for the turn to fully settle, and approval continuations dispatch stranded steers too.

@@ -19,7 +19,7 @@ package without changing the adapter:
 ```bash
 harbor run ... \
   --agent integrations.harbor.friday:FridayAgent \
-  --ae FRIDAY_NPM_SPEC=friday-agent@0.8.0
+  --ae FRIDAY_NPM_SPEC=friday-agent@0.8.1
 ```
 
 Friday writes Harbor's `/logs/agent/trajectory.json` directly in ATIF-v1.7.
