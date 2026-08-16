@@ -82,6 +82,12 @@ here), and `Esc` closes the map. `/fork` opens it automatically so you always
 see where you landed; moving anywhere in the tree, including back to the
 parent, is arrow keys + `Enter`.
 
+While Friday is working, typing stays live: `Enter` steers the running turn
+(the message is delivered before the model's next step), and `/queue <text>`
+holds a message to run automatically after the turn finishes. `Esc Esc`
+interrupts; the partial turn - completed tool calls included - is kept, not
+rolled back.
+
 Keyboard shortcuts while chatting: `Ctrl+O` toggles tool-call details,
 `Ctrl+T` toggles thinking content, `Esc Esc` stops the running response, and
 `Ctrl+C` clears the input or exits.

@@ -10,6 +10,7 @@ export type GatewayEvent =
   | { type: 'message.cancelled'; payload: SessionScoped }
   | { type: 'session.updated'; payload: { running?: boolean } & SessionScoped }
   | { type: 'session.titled'; payload: { title?: string } & SessionScoped }
+  | { type: 'message.steered'; payload: { text: string } & SessionScoped }
   | { type: 'reasoning.delta'; payload: { id: string; text: string } & SessionScoped }
   | { type: 'reasoning.complete'; payload: { elapsed_ms?: number; error?: boolean; id: string } & SessionScoped }
   | { type: 'tool.start'; payload: { tool_call_id: string; name: string; arguments?: unknown } & SessionScoped }

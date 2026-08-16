@@ -724,6 +724,8 @@ function App() {
   // instead of a fresh session.
   const reapedSessions = useRef(new Map<string, string>())
   const viewsRef = useRef<Record<string, ProjectView>>({})
+  // Messages typed while a turn runs, waiting to start after it finishes.
+  const queuedTexts = useRef(new Map<string, string[]>())
 
   const view = views[activeProject] || emptyView(activeProject)
   const { activeSession, attachments, busy, cancelling, checkpoints, draft, forkTree, goalMode, guidance, info, items, models, pendingApproval, sessions, skills, status } = view
@@ -1162,6 +1164,16 @@ function App() {
       } else if (type === 'session.titled') {
         void refreshSessions(workspace).catch(() => undefined)
         void refreshTree(workspace).catch(() => undefined)
+      } else if (type === 'message.steered') {
+        updateView(workspace, current => ({
+          ...current,
+          items: [...current.items, {
+            createdAt: new Date().toISOString(),
+            id: nextId('steer'),
+            kind: 'user',
+            text: `\u21b3 ${String(payload.text || '')}`
+          }]
+        }))
       } else if (type === 'tool.start') {
         flushStream(`${eventKey}\u0000assistant`)
         const assistantId = activeAssistants.current.get(eventKey)
@@ -1383,10 +1395,68 @@ function App() {
     }
   }, [activeProject, items])
 
+  const queueDraft = () => {
+    const text = draft.trim()
+    if (!text) return
+    const key = pathKey(activeProject)
+    const queue = queuedTexts.current.get(key) ?? []
+    queue.push(text)
+    queuedTexts.current.set(key, queue)
+    updateView(activeProject, current => ({
+      ...current,
+      draft: '',
+      items: [...current.items, { id: nextId('queued'), kind: 'system', text: t('composer.queuedNotice', { text: text.slice(0, 80) }) }]
+    }))
+  }
+
+  useEffect(() => {
+    const key = pathKey(activeProject)
+    const queue = queuedTexts.current.get(key)
+    if (!queue?.length) return
+    const view = viewsRef.current[key]
+    if (!view || view.busy || view.pendingApproval || view.status !== 'ready') return
+    const text = queue.shift()!
+    // Mark the mirror immediately so a double-fired effect cannot double-send.
+    viewsRef.current[key] = { ...view, busy: true }
+    const userItemId = nextId('user')
+    updateView(activeProject, current => ({
+      ...current,
+      busy: true,
+      cancelling: false,
+      items: [...current.items, { createdAt: new Date().toISOString(), id: userItemId, kind: 'user', text }]
+    }))
+    void sendGateway(activeProject, 'chat.send', { text }).catch(error => {
+      updateView(activeProject, current => ({
+        ...current,
+        busy: false,
+        items: [...current.items, { id: nextId('send'), kind: 'system', text: String(error) }]
+      }))
+    })
+  })
+
   const submit = async (event?: FormEvent) => {
     event?.preventDefault()
+    if (busy) {
+      // A message sent mid-turn steers the running work; it is delivered
+      // before the next model step. Attachments cannot ride a steer, so a
+      // draft with attachments waits in the queue instead.
+      const text = draft.trim()
+      if (!text || pendingApproval || status !== 'ready') return
+      if (attachments.length) {
+        queueDraft()
+        return
+      }
+      updateView(activeProject, current => ({ ...current, draft: '' }))
+      const key = pathKey(activeProject)
+      void sendGateway(activeProject, 'chat.steer', { text }).catch(() => {
+        const queue = queuedTexts.current.get(key) ?? []
+        queue.push(text)
+        queuedTexts.current.set(key, queue)
+      })
+      return
+    }
     const text = draft.trim() || (attachments.length ? t('composer.inspectAttachments') : '')
-    if (!text || busy || pendingApproval || status !== 'ready') return
+    if (!text || pendingApproval || status !== 'ready') return
     const submittedSession = activeSession
     const submittedGoal = goalMode
     const imageAttachments = attachments.filter((item): item is ImageAttachment => item.kind === 'image')
@@ -2060,6 +2130,10 @@ function App() {
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
+      if (busy && (event.metaKey || event.ctrlKey)) {
+        queueDraft()
+        return
+      }
       void submit()
     }
   }
@@ -2492,7 +2566,7 @@ function App() {
                 }))
               })
             }}
-            placeholder={pendingApproval ? t('composer.approvalBlocked') : status === 'ready' ? t('composer.placeholder') : t('composer.starting')}
+            placeholder={pendingApproval ? t('composer.approvalBlocked') : busy ? t('composer.steerHint') : status === 'ready' ? t('composer.placeholder') : t('composer.starting')}
             ref={composerRef}
             rows={1}
             value={draft}

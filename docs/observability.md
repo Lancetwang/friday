@@ -60,3 +60,11 @@ The local raw trace object store may include source code, prompt payloads,
 command output, and personal data, so keep the observability directory private.
 The Workbench and Trace Analyst receive redacted behavior projections and do
 not expose the private control prefix.
+
+## Lossless payload traces
+
+`FRIDAY_TRACE_PAYLOADS=1` additionally persists every model request and
+response payload with the turn's trace. Secrets are redacted as always, but
+nothing is clipped, so the exact prompt the model saw at any step can be
+reconstructed in the Workbench. Off by default because payloads multiply
+trace size.

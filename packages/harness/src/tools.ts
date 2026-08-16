@@ -96,8 +96,8 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
         start_line: integer('1-based first line.', 1, Number.MAX_SAFE_INTEGER),
         line_count: integer(`Lines to return, capped at ${MAX_OUTPUT_LINES}.`, 1, MAX_OUTPUT_LINES)
       }, ['path']),
-      async execute(args) {
-        return readPage(paths.readable(args.path), positive(args.start_line, 1), capped(args.line_count, MAX_OUTPUT_LINES, MAX_OUTPUT_LINES))
+      async execute(args, signal) {
+        return readPage(paths.readable(args.path), positive(args.start_line, 1), capped(args.line_count, MAX_OUTPUT_LINES, MAX_OUTPUT_LINES), signal)
       }
     },
     {
@@ -144,12 +144,12 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
         pattern: string("Glob such as '**/*.ts'."),
         max_results: integer(`Maximum results, capped at ${MAX_RESULTS}.`)
       }, ['pattern']),
-      async execute(args) {
+      async execute(args, signal) {
         if (typeof args.pattern !== 'string' || !args.pattern) throw new Error('pattern must be a non-empty string')
         const limit = capped(args.max_results, 200, MAX_RESULTS)
         const pattern = globPattern(args.pattern)
         const matches: string[] = []
-        for await (const item of walk(root, args.pattern)) {
+        for await (const item of walk(root, args.pattern, root, signal)) {
           if (pattern.test(item.relative)) matches.push(item.relative)
           if (matches.length >= limit) break
         }
@@ -164,7 +164,7 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
         max_results: integer(`Maximum matches, capped at ${MAX_RESULTS}.`),
         max_chars: integer('Maximum characters from each matching line.', 1, 2_000)
       }, ['pattern']),
-      async execute(args) {
+      async execute(args, signal) {
         if (typeof args.pattern !== 'string') throw new Error('pattern must be a string')
         const expression = new RegExp(args.pattern)
         const requested = typeof args.path_glob === 'string' && args.path_glob ? args.path_glob : '**/*'
@@ -172,9 +172,9 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
         const limit = capped(args.max_results, 100, MAX_RESULTS)
         const lineLimit = capped(args.max_chars, 240, 2_000)
         const matches: Array<{ path: string; line: number; text: string }> = []
-        for await (const item of walk(root, requested)) {
+        for await (const item of walk(root, requested, root, signal)) {
           if (item.directory || !filePattern.test(item.relative)) continue
-          await grepFile(item.path, item.relative, expression, lineLimit, matches, limit)
+          await grepFile(item.path, item.relative, expression, lineLimit, matches, limit, signal)
           if (matches.length >= limit) break
         }
         return { pattern: args.pattern, count: matches.length, matches }
@@ -474,7 +474,7 @@ function workspacePaths(root: string, readPaths?: () => readonly string[]) {
   }
 }
 
-async function readPage(path: string, startLine: number, lineCount: number): Promise<JsonObject> {
+async function readPage(path: string, startLine: number, lineCount: number, signal?: AbortSignal): Promise<JsonObject> {
   if ((await stat(path)).isDirectory()) return directoryPage(path, startLine, lineCount)
   const lines: string[] = []
   let number = 0
@@ -483,6 +483,7 @@ async function readPage(path: string, startLine: number, lineCount: number): Pro
   const input = createReadStream(path, { encoding: 'utf8' })
   const reader = createInterface({ input, crlfDelay: Infinity })
   for await (const line of reader) {
+    signal?.throwIfAborted()
     number += 1
     if (number < startLine) continue
     if (lines.length >= lineCount || chars + line.length + 1 > MAX_OUTPUT_CHARS) {
@@ -522,9 +523,17 @@ async function directoryPage(path: string, startLine: number, lineCount: number)
   }
 }
 
-async function* walk(root: string, requestedPattern: string, directory = root): AsyncGenerator<{ path: string; relative: string; directory: boolean }> {
+async function* walk(
+  root: string,
+  requestedPattern: string,
+  directory = root,
+  signal?: AbortSignal
+): AsyncGenerator<{ path: string; relative: string; directory: boolean }> {
+  // Cancellation has to bite inside long scans: a stop press must not wait
+  // for a large tree to finish walking on its own.
   const entries = await opendir(directory)
   for await (const entry of entries) {
+    signal?.throwIfAborted()
     const path = resolve(directory, entry.name)
     let target: string
     try {
@@ -538,7 +547,7 @@ async function* walk(root: string, requestedPattern: string, directory = root): 
     const isDirectory = entry.isDirectory()
     if (isDirectory && ignoredDirectory(entry.name, requestedPattern)) continue
     yield { path, relative: normalized, directory: isDirectory }
-    if (isDirectory) yield* walk(root, requestedPattern, path)
+    if (isDirectory) yield* walk(root, requestedPattern, path, signal)
   }
 }
 
@@ -555,19 +564,25 @@ async function grepFile(
   expression: RegExp,
   lineLimit: number,
   matches: Array<{ path: string; line: number; text: string }>,
-  limit: number
+  limit: number,
+  signal?: AbortSignal
 ): Promise<void> {
+  signal?.throwIfAborted()
   const input = createReadStream(path, { encoding: 'utf8' })
   input.on('error', () => {})
   const reader = createInterface({ input, crlfDelay: Infinity })
   let lineNumber = 0
   try {
     for await (const line of reader) {
+      if (signal?.aborted) break
       lineNumber += 1
       if (expression.test(line)) matches.push({ path: relativePath, line: lineNumber, text: line.slice(0, lineLimit) })
       if (matches.length >= limit) break
     }
-  } catch {}
+  } catch {} finally {
+    input.close()
+  }
+  signal?.throwIfAborted()
 }
 
 function globPattern(source: string): RegExp {

@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
-  Agent, RunContext, type AgentEvent, type Message, type Tool, type Usage
+  Agent, RunContext, type AgentEvent, type Message, type Tool, type ToolCall, type Usage
 } from 'friday-agent-core'
 
 import { disabledPlugins, loadModelConfig, projectStateDir, resolveWorkspace, type ModelConfig } from './config.js'
@@ -113,6 +113,9 @@ export class FridaySession {
   private thinking: string
   private title = ''
   private sessionAllowed = false
+  private readonly steers: string[] = []
+  private readonly payloadEvents: AgentEvent[] = []
+  private cancelRequested = false
   private pending: Record<string, unknown> = { pending: false }
   private pendingMetrics: TurnMetrics | undefined
   private lastEvents: AgentEvent[] = []
@@ -132,7 +135,15 @@ export class FridaySession {
       context.addMessage({ role: 'system', content: this.instructions() })
     }
     context.onEvent = event => this.onEvent?.(event)
-    context.onObservation = event => observeContextUsage(context, event)
+    context.onObservation = event => {
+      observeContextUsage(context, event)
+      // FRIDAY_TRACE_PAYLOADS=1 persists the exact request/response payloads
+      // with the turn's trace (redacted, but never clipped), so any step's
+      // precise prompt can be reconstructed later. Off by default: size.
+      if (process.env.FRIDAY_TRACE_PAYLOADS === '1' && event.type.endsWith('.payload')) {
+        this.payloadEvents.push(event)
+      }
+    }
   }
 
   /**
@@ -230,6 +241,7 @@ export class FridaySession {
   async chat(text: string, onDelta?: (text: string) => void, options: SessionRunOptions = {}): Promise<TurnResult> {
     if (this.abort) throw new Error('This session already has a request in progress.')
     if (this.pending.pending === true) throw new Error('Resolve the pending approval before sending another message.')
+    if (!options.internal) this.cancelRequested = false
     this.removeRuntimeMessages()
     this.context.messages.splice(0, this.context.messages.length, ...this.context.messages.filter(message => !message.friday_memory_recall))
     const mode = options.mode ?? 'normal'
@@ -299,9 +311,57 @@ export class FridaySession {
   }
 
   cancel(): boolean {
+    // Between goal phases there is a brief window with no live controller;
+    // remembering the intent makes the next phase boundary honor it instead
+    // of silently ignoring the stop.
+    this.cancelRequested = true
     if (!this.abort) return false
     this.abort.abort()
     return true
+  }
+
+  /**
+   * Inject a user message into the RUNNING turn: it is delivered right before
+   * the next model step, so the model corrects course without restarting.
+   * Delivery at the step boundary is what keeps the message array valid - a
+   * user message must never land between an assistant tool call and its
+   * results.
+   */
+  steer(text: string): void {
+    const value = text.trim()
+    if (!value) throw new Error('Steering message cannot be empty.')
+    if (!this.abort) throw new Error('No running request to steer.')
+    this.steers.push(value)
+  }
+
+  /** Steers accepted after the last model step; the caller runs them as a follow-up turn. */
+  takeUndeliveredSteers(): string[] {
+    const pending = [...this.steers]
+    this.steers.length = 0
+    return pending
+  }
+
+  private drainSteers(): void {
+    if (!this.steers.length) return
+    while (this.steers.length) {
+      const text = this.steers.shift()!
+      this.context.addMessage({
+        role: 'user',
+        content: text,
+        friday_timestamp: zonedTimestamp(),
+        friday_steered: true
+      })
+    }
+    // A new instruction changes what counts as progress.
+    this.agent?.resetLoopGuard()
+  }
+
+  private throwIfCancelRequested(): void {
+    if (!this.cancelRequested) return
+    this.cancelRequested = false
+    const error = new Error('The request was cancelled.')
+    error.name = 'AbortError'
+    throw error
   }
 
   get running(): boolean {
@@ -592,7 +652,10 @@ export class FridaySession {
     this.agent = new Agent({
       model: modelFor(this.config, this.thinking),
       tools: this.tools,
-      beforeStep: (_context, _step, signal) => this.compactBeforeStep(signal)
+      beforeStep: (_context, _step, signal) => {
+        this.drainSteers()
+        return this.compactBeforeStep(signal)
+      }
     }, this.context)
     return this.agent
   }
@@ -611,6 +674,30 @@ export class FridaySession {
         session.refreshInstructions()
       }
     }, onDelta)
+  }
+
+  private async salvageCancelledTurn(
+    user: string,
+    trace: string,
+    before: Usage,
+    started: number,
+    pendingMetrics: TurnMetrics | undefined
+  ): Promise<void> {
+    try {
+      repairDanglingToolCalls(this.context.messages)
+      this.removeRuntimeMessages()
+      const current = this.measureTurn(before, started)
+      const metrics = pendingMetrics ? addMetrics(pendingMetrics, current) : current
+      this.pending = { pending: false }
+      this.pendingMetrics = undefined
+      finishProgress(this.context, 'blocked')
+      if (this.activeCheckpoint) await finishCheckpoint(this.workspace, this.activeCheckpoint, false).catch(() => {})
+      this.attachTurnMetadata(metrics)
+      await this.save(user, '', metrics)
+      await this.recordTrace(trace, user, '', 'cancelled', metrics)
+    } catch {
+      // Salvage is best-effort; it must never mask the cancellation itself.
+    }
   }
 
   /**
@@ -665,6 +752,15 @@ export class FridaySession {
       await this.recordTrace(options.trace, options.user, result.text, result.status, metrics)
       return { text: result.text, metrics, status: result.status, ...(artifacts.length ? { artifacts } : {}) }
     } catch (error) {
+      this.steers.length = 0
+      if (isCancellation(error)) {
+        // An interrupt is not a failure: keep the user message and every
+        // completed tool exchange, repair the tail so the message array
+        // stays API-valid, and account for what was actually spent. Only
+        // real errors roll the turn back as if it never happened.
+        await this.salvageCancelledTurn(options.user, options.trace, before, started, pendingMetrics)
+        throw error
+      }
       this.context.messages.splice(0, this.context.messages.length, ...snapshot.messages)
       this.archived.splice(0, this.archived.length, ...snapshot.archived)
       this.readAllow.clear()
@@ -682,6 +778,7 @@ export class FridaySession {
       this.activeCheckpoint = ''
       this.lastEvents = structuredClone(this.context.events)
       this.context.events.length = 0
+      this.payloadEvents.length = 0
     }
   }
 
@@ -700,6 +797,7 @@ export class FridaySession {
     const verifications: AttemptVerification[] = []
     try {
       while (attempt <= 6) {
+        this.throwIfCancelRequested()
         let verification = await this.runVerification(goal, attempt)
         metrics = addMetrics(metrics, verification)
         verifications.push(verification)
@@ -765,6 +863,7 @@ export class FridaySession {
   }
 
   private async runVerification(goal: string, attempt: number): Promise<AttemptVerification> {
+    this.throwIfCancelRequested()
     this.context.emit('verification.start', 'verification', { attempt })
     this.abort = new AbortController()
     try {
@@ -873,6 +972,7 @@ export class FridaySession {
 
   private async recordTrace(mode: string, user: string, assistant: string, status: string, metrics: TurnMetrics): Promise<void> {
     try {
+      const payloads = this.payloadEvents.splice(0, this.payloadEvents.length)
       await writeTrace({
         workspace: this.workspace,
         sessionId: this.sessionId,
@@ -882,7 +982,9 @@ export class FridaySession {
         status,
         metrics,
         progress: this.progress(),
-        events: this.context.events
+        events: payloads.length
+          ? [...this.context.events, ...payloads].sort((left, right) => left.seq - right.seq)
+          : this.context.events
       })
     } catch (error) {
       process.stderr.write(`Friday could not write a TypeScript trace: ${error instanceof Error ? error.message : String(error)}\n`)
@@ -1502,6 +1604,29 @@ function messageImages(value: unknown): string[] {
 function parseJson(value: unknown): unknown {
   if (typeof value !== 'string') return value ?? {}
   try { return JSON.parse(value) as unknown } catch { return value }
+}
+
+/**
+ * After an interrupt the tail of the array can be an assistant message whose
+ * tool calls never got results - an API-invalid shape every provider rejects.
+ * Close each unanswered call with an explicit cancellation result so the kept
+ * partial turn is a valid, honest conversation.
+ */
+function repairDanglingToolCalls(messages: Message[]): void {
+  const lastAssistant = messages.findLastIndex(message =>
+    message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0)
+  if (lastAssistant < 0) return
+  const answered = new Set(messages.slice(lastAssistant + 1)
+    .filter(message => message.role === 'tool')
+    .map(message => String(message.tool_call_id ?? '')))
+  for (const call of messages[lastAssistant]!.tool_calls as ToolCall[]) {
+    if (answered.has(call.id)) continue
+    messages.push({
+      role: 'tool',
+      tool_call_id: call.id,
+      content: '{"cancelled":true,"message":"Interrupted by the user before this tool finished."}'
+    })
+  }
 }
 
 function isCancellation(error: unknown): boolean {

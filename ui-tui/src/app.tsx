@@ -150,6 +150,7 @@ type BranchView = {
  */
 type ActiveTurn = {
   text: string
+  steers: string[]
   thinking: ThinkingBlock[]
   tools: ToolRun[]
   turnId: string | null
@@ -191,6 +192,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
   const [streaming, setStreaming] = useState('')
   const [activity, setActivity] = useState('')
   const [now, setNow] = useState(Date.now())
+  const [queued, setQueued] = useState<string[]>([])
   const lastEscape = useRef(0)
   const traceOn = useRef(false)
 
@@ -289,6 +291,20 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       } else if (event.type === 'approval.resolved') {
         setApprovalPicker(null)
         setBusy(Boolean(event.payload.continued))
+      } else if (event.type === 'message.steered') {
+        mutateActive(turn => {
+          const current = ensureTurn(turn)
+          return { ...current, steers: [...current.steers, event.payload.text] }
+        })
+      } else if (event.type === 'message.start') {
+        // A turn the gateway started on its own (queued or follow-up steers):
+        // give it a bubble; locally-sent turns already created one.
+        if (!activeTurn.current && event.payload.text) {
+          setBusy(true)
+          const turnId = `turn-${Date.now()}`
+          activeTurn.current = turnId
+          mutateActive(() => ({ text: event.payload.text, steers: [], thinking: [], tools: [], turnId }))
+        }
       } else if (event.type === 'session.updated' && typeof event.payload.running === 'boolean') {
         setBusy(event.payload.running)
       } else if (event.type === 'verification.start') {
@@ -317,6 +333,14 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app, gateway])
+
+  useEffect(() => {
+    if (busy || approvalPicker || !queued.length) return
+    const [next, ...rest] = queued
+    setQueued(rest)
+    sendChat(next!)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, approvalPicker, queued])
 
   useEffect(() => {
     const running = active && (
@@ -445,7 +469,24 @@ export function App({ gateway }: { gateway: GatewayClient }) {
 
   const submit = (value: string) => {
     const text = cleanInput(value)
-    if (!text || (busy && !canNavigateWhileBusy(text))) {
+    if (!text) return
+    if (busy && !canNavigateWhileBusy(text)) {
+      if (text.startsWith('/')) {
+        const queueText = text.match(/^\/queue\s+(.+)$/i)?.[1]?.trim()
+        if (queueText) {
+          setInput('')
+          setQueued(items => [...items, queueText])
+          appendSystem(`Queued (#${queued.length + 1}): ${shortText(queueText, 100)}`)
+        }
+        return
+      }
+      // A plain message while Friday is working steers the running turn: it
+      // is injected before the next model step. If the turn just ended, run
+      // it as the next message instead - nothing typed is lost.
+      setInput('')
+      void gateway.request('chat.steer', { text }).catch(() => {
+        setQueued(items => [...items, text])
+      })
       return
     }
     if (text.startsWith('/')) {
@@ -480,6 +521,10 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       return
     }
 
+    sendChat(text)
+  }
+
+  function sendChat(text: string) {
     beginTurn(text)
     void gateway.request('chat.send', { text }).catch(error => {
       failTurn(error)
@@ -530,7 +575,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
             picker={approvalPicker}
           />
         ) : null}
-        <Header activity={activity} busy={busy} info={info} progress={progress} />
+        <Header activity={activity} busy={busy} info={info} progress={progress} queued={queued.length} />
         {!menu && !branches && !credential && !approvalPicker ? (
           <>
             <Composer
@@ -560,7 +605,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
     setStreaming('')
     const turnId = `turn-${Date.now()}`
     activeTurn.current = turnId
-    mutateActive(() => ({ text, thinking: [], tools: [], turnId }))
+    mutateActive(() => ({ text, steers: [], thinking: [], tools: [], turnId }))
   }
 
   /** Move the finished turn plus its results into the static scrollback. */
@@ -1054,6 +1099,9 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         appendSystem('Forked from the latest Friday response. Use /branches to navigate the fork map.')
         if (result.tree) showBranchTree(result.tree)
       }).catch(requestError)
+    } else if (command === '/queue') {
+      if (!argument) appendSystem('Usage: /queue <message> - runs after the current turn finishes.')
+      else sendChat(argument)
     } else if (command === '/branches') {
       openBranchView()
     } else if (command === '/plugins') {
@@ -1118,6 +1166,7 @@ function isContinuedApproval(result: unknown) {
 }
 
 type UiMessage = Message & {
+  steers?: string[]
   thinking?: ThinkingBlock[]
   tools?: ToolRun[]
   turnId?: string
@@ -1175,13 +1224,14 @@ type ToolRun = {
 
 /** Lazily create the live-turn container for events that arrive without one. */
 function ensureTurn(turn: ActiveTurn | null): ActiveTurn {
-  return turn ?? { text: '', thinking: [], tools: [], turnId: null }
+  return turn ?? { text: '', steers: [], thinking: [], tools: [], turnId: null }
 }
 
 function activeAsMessage(turn: ActiveTurn): UiMessage {
   return {
     role: 'user',
     text: turn.text,
+    steers: turn.steers,
     thinking: turn.thinking,
     tools: turn.tools,
     ...(turn.verification ? { verification: turn.verification } : {})
@@ -1329,9 +1379,10 @@ function branchRows(tree: BranchTree): BranchRow[] {
   return rows
 }
 
-function Header({ activity, busy, info, progress }: { activity: string; busy: boolean; info: SessionInfo | null; progress: ProgressState | null }) {
+function Header({ activity, busy, info, progress, queued = 0 }: { activity: string; busy: boolean; info: SessionInfo | null; progress: ProgressState | null; queued?: number }) {
   const cwd = info?.cwd ?? process.cwd()
-  const status = activity || (busy ? 'thinking' : 'ready')
+  const status = activity || (busy ? 'thinking · Enter steers · /queue waits' : 'ready')
+  const waiting = queued > 0 ? ` · queued ${queued}` : ''
   const model = info?.model_name || info?.model || 'loading model'
   const tools = info?.tools.length ?? 0
   const permissions = info?.permission_mode === 'bypass'
@@ -1352,7 +1403,7 @@ function Header({ activity, busy, info, progress }: { activity: string; busy: bo
       <Box>
         <Text color={busy ? theme.warn : theme.ok}>● </Text>
         <Text color={busy ? theme.warn : theme.ok}>{status}</Text>
-        <Text color={theme.dim}> · {shortModel(model)}{thinking} · {tools} tools · {permissions}</Text>
+        <Text color={theme.dim}> · {shortModel(model)}{thinking} · {tools} tools · {permissions}{waiting}</Text>
       </Box>
     </Box>
   )
@@ -1387,6 +1438,12 @@ function MessageLine({
         <Text color={theme.accent}>{message.text ? '❯ ' : '· '}</Text>
         <Box flexDirection="column">
           {message.text ? <Text bold wrap="wrap">{message.text}</Text> : null}
+          {(message.steers ?? []).map((steer, index) => (
+            <Text key={index} wrap="wrap">
+              <Text color={theme.warn}>↳ </Text>
+              <Text bold>{steer}</Text>
+            </Text>
+          ))}
           <ThinkingPanel blocks={message.thinking ?? []} expanded={thinkingExpanded} now={now} tail={tail} />
           <ToolPanel now={now} runs={message.tools ?? []} toolsExpanded={toolsExpanded} />
           {message.verification ? <VerificationLine verification={message.verification} /> : null}

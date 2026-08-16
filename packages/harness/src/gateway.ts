@@ -272,6 +272,7 @@ export class Gateway {
             )
             this.emitTurn(session, result)
             this.titleSession(session)
+            if (result.status === 'done') this.followUpSteers(session)
             requestFinalized = true
             return result
           } catch (error) {
@@ -363,6 +364,7 @@ export class Gateway {
             )
             this.emitTurn(session, result)
             this.titleSession(session)
+            if (result.status === 'done') this.followUpSteers(session)
             requestFinalized = true
             return result
           } catch (error) {
@@ -374,6 +376,15 @@ export class Gateway {
         requestSession = session
         const result = await run
         this.ok(id, { text: result.text, session_id: session.sessionId })
+      } else if (method === 'chat.steer') {
+        const text = typeof params.text === 'string' ? params.text.trim() : ''
+        if (!text) throw new Error('Steering message cannot be empty.')
+        const session = this.session
+        session.steer(text)
+        // Everyone watching this session renders the injected message from
+        // this event; the steering client does not add a local copy.
+        this.event('message.steered', { text, session_id: session.sessionId })
+        this.ok(id, { steered: true, session_id: session.sessionId })
       } else if (method === 'chat.cancel') {
         const sessionId = String(params.session_id || this.session.sessionId)
         const session = this.sessions.get(sessionId)
@@ -505,6 +516,33 @@ export class Gateway {
     this.ok(id, outcome.continued
       ? { approval: outcome.approval, approved: decision === 'approve', continued: true, message: { text: outcome.turn?.text || '' } }
       : outcome.approval)
+  }
+
+  /**
+   * Steers accepted after the turn's last model step never reached the model;
+   * run them as an immediate follow-up turn so nothing typed is lost. The
+   * turn announces itself through the same events as a client-sent message.
+   */
+  private followUpSteers(session: FridaySession): void {
+    const pending = session.takeUndeliveredSteers()
+    if (!pending.length) return
+    const text = pending.join('\n')
+    void this.runSession(session, text, async () => {
+      this.event('message.start', { text, session_id: session.sessionId })
+      this.event('session.updated', { running: true, session_id: session.sessionId })
+      try {
+        const result = await session.chat(
+          text,
+          chunk => this.event('message.delta', { text: chunk, session_id: session.sessionId }),
+          {}
+        )
+        this.emitTurn(session, result)
+        this.titleSession(session)
+        if (result.status === 'done') this.followUpSteers(session)
+      } catch (error) {
+        this.finishTurnError(session.sessionId, error)
+      }
+    }).catch(() => {})
   }
 
   /**

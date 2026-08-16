@@ -107,7 +107,10 @@ test('the harness loads legacy config, chats, and writes a resumable snapshot', 
     await stalledRequest
     assert.equal(resumed.cancel(), true)
     await assert.rejects(cancelled, error => error instanceof Error && error.name === 'AbortError')
-    assert.deepEqual(resumed.context.messages.map(message => message.role), rolesBeforeCancellation)
+    // An interrupt keeps what actually happened: the user message stays in
+    // the conversation instead of the turn being rolled back wholesale.
+    assert.deepEqual(resumed.context.messages.map(message => message.role), [...rolesBeforeCancellation, 'user'])
+    assert.equal(resumed.context.messages.at(-1)?.content, 'cancel this turn')
   } finally {
     if (previousHome === undefined) delete process.env.FRIDAY_HOME
     else process.env.FRIDAY_HOME = previousHome
@@ -1154,6 +1157,78 @@ function sessionRunningStates(output: unknown[]): boolean[] {
       : []
   })
 }
+
+test('a message sent mid-turn steers the running model before its next step', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-steer-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  const requests: Array<Record<string, unknown>> = []
+  const server = createServer((request, response) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', chunk => { body += chunk })
+    request.on('end', () => {
+      requests.push(JSON.parse(body) as Record<string, unknown>)
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      if (requests.length === 1) {
+        // A slow tool keeps the turn alive long enough for the steer to land.
+        sse(response, { choices: [{ delta: { tool_calls: [{ index: 0, id: 'slow-1', type: 'function', function: { name: 'Bash', arguments: JSON.stringify({ command: 'node -e "setTimeout(() => process.exit(0), 1500)"' }) } }] } }] })
+        sse(response, { choices: [], usage: { prompt_tokens: 5, completion_tokens: 2 } })
+      } else {
+        sse(response, { choices: [{ delta: { content: 'steered and finished' } }] })
+        sse(response, { choices: [], usage: { prompt_tokens: 9, completion_tokens: 3 } })
+      }
+      response.end('data: [DONE]\n\n')
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'steer', profiles: [{
+        id: 'steer', name: 'Steer', provider: 'openai-compatible', model: 'mock',
+        base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000, max_output_tokens: 2_000
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ steer: 'secret' }))
+    const output: unknown[] = []
+    const gateway = new Gateway(workspace, value => output.push(value))
+    await gateway.start()
+    await gateway.handle({ id: 'permission', method: 'permission.set', params: { mode: 'bypass' } })
+    output.length = 0
+    const run = gateway.handle({ id: 'chat', method: 'chat.send', params: { text: 'start the slow work' } })
+    // Wait until the first model step answered and the slow tool is running.
+    for (let waited = 0; requests.length < 1 && waited < 100; waited += 1) await new Promise(resolve => setTimeout(resolve, 50))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await gateway.handle({ id: 'steer', method: 'chat.steer', params: { text: 'actually, focus on the tests only' } })
+    assert.equal((responseResult(output, 'steer') as { steered: boolean }).steered, true)
+    await run
+    // The second model request must contain the injected user message, and it
+    // must sit AFTER the tool exchange - never between a call and its result.
+    const messages = requests[1]!.messages as Array<{ role: string; content?: unknown }>
+    const steerIndex = messages.findIndex(message => message.role === 'user' && String(message.content).includes('focus on the tests only'))
+    const toolIndex = messages.findIndex(message => message.role === 'tool')
+    assert(toolIndex > 0)
+    assert(steerIndex > toolIndex)
+    // The steered event was announced for every window on this session.
+    assert.equal(output.some(value => {
+      const message = value as { method?: string; params?: { type?: string; payload?: { text?: string } } }
+      return message.method === 'event' && message.params?.type === 'message.steered'
+        && message.params.payload?.text === 'actually, focus on the tests only'
+    }), true)
+    assert.equal((responseResult(output, 'chat') as { text: string }).text, 'steered and finished')
+  } finally {
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await rm(temporary, { recursive: true, force: true })
+  }
+})
 
 function responseResult(output: unknown[], id: string): unknown {
   const message = output.find(value => (value as { id?: unknown }).id === id) as { result?: unknown; error?: unknown } | undefined

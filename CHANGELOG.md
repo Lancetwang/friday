@@ -2,6 +2,18 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## Unreleased
+
+### Added
+- Messages sent while Friday is working now do something. A plain message steers the running turn: it is injected before the model's next step (never between a tool call and its result), resets the no-progress guard, and renders as an inline `↳` line under the active turn in both UIs. Steers that arrive after the turn's last step run as an immediate follow-up turn, so nothing typed is lost. Queueing is the second mode: `/queue <text>` in the TUI or Cmd/Ctrl+Enter in the desktop composer holds a message and sends it automatically once the current turn (and any pending approval) finishes.
+- `FRIDAY_TRACE_PAYLOADS=1` persists the exact model request and response payloads with each turn's trace - secrets still redacted, nothing clipped - so the precise prompt at any step can be reconstructed from the Trace Workbench. Every event now also carries a monotonic sequence number for a total order inside one millisecond.
+
+### Changed
+- Interrupting a turn keeps what actually happened instead of pretending it never did: the user message and every completed tool exchange stay in the conversation, unanswered tool calls are closed with an explicit cancellation result so the message array stays API-valid, spent tokens are accounted, and the partial turn is saved and traced with status `cancelled`. Only real errors still roll the turn back.
+
+### Fixed
+- Stop now bites mid-scan: Read, Glob, and Grep honor cancellation inside their file loops, so interrupting a turn during large workspace scans (including parallel tool batches) no longer waits for the scans to finish on their own. Cancellation pressed between goal phases is remembered and honored at the next phase boundary instead of being silently dropped.
+
 ## v0.7.1 (2026-08-15)
 
 ### Fixed

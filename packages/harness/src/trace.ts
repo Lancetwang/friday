@@ -56,7 +56,16 @@ export async function writeTrace(options: {
     progress: safe(options.progress),
     events: options.events
       .filter(event => !['message.add', 'model.delta', 'model.reasoning.delta'].includes(event.type))
-      .map(event => ({ type: event.type, category: event.category, step: event.step, timestamp: event.timestamp, data: safe(event.data) }))
+      .map(event => ({
+        type: event.type,
+        category: event.category,
+        seq: event.seq,
+        step: event.step,
+        timestamp: event.timestamp,
+        // Payload observations exist to reconstruct the exact prompt later:
+        // secrets are still redacted, but nothing is clipped.
+        data: event.type.endsWith('.payload') ? lossless(event.data) : safe(event.data)
+      }))
   })
 }
 
@@ -366,6 +375,18 @@ function errorMessage(error: unknown): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function lossless(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return redact(value)
+  if (value === null || ['number', 'boolean'].includes(typeof value)) return value
+  if (depth >= 24) return '[truncated]'
+  if (Array.isArray(value)) return value.map(item => lossless(item, depth + 1))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => [key, SECRET_KEY.test(key) ? '[redacted]' : lossless(item, depth + 1)]))
+  }
+  return String(value ?? '')
 }
 
 function safe(value: unknown, depth = 0): unknown {

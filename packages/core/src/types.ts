@@ -64,6 +64,8 @@ export type AgentEvent = {
   type: string
   category: string
   runId: string
+  /** Monotonic per-context sequence: a total order even within one millisecond. */
+  seq: number
   step?: number
   data: JsonObject
   timestamp: number

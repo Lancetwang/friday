@@ -45,8 +45,8 @@ test('trace RPC serves local structured records and stops idempotently', async (
       workspace, sessionId: 's1', mode: 'chat',
       user: 'inspect tvly-example-secret-12345', assistant: 'sk-example-secret-12345', status: 'done',
       events: [
-        { type: 'tool.call', category: 'tool', runId: 'r1', timestamp: 1, data: { name: 'Read', arguments: { path: 'README.md' } } },
-        { type: 'tool.result', category: 'tool', runId: 'r1', timestamp: 2, data: { authorization: 'Bearer private-token', content: 'API_KEY=private-key' } }
+        { type: 'tool.call', category: 'tool', runId: 'r1', seq: 1, timestamp: 1, data: { name: 'Read', arguments: { path: 'README.md' } } },
+        { type: 'tool.result', category: 'tool', runId: 'r1', seq: 1, timestamp: 2, data: { authorization: 'Bearer private-token', content: 'API_KEY=private-key' } }
       ]
     })
     gateway = new Gateway(workspace, value => output.push(value))

@@ -24,6 +24,7 @@ export class RunContext {
   onEvent?: (event: AgentEvent) => void
   onObservation?: (event: AgentEvent) => void
   step?: number
+  private sequence = 0
 
   addMessage(message: Message): Message {
     this.messages.push(message)
@@ -84,6 +85,7 @@ export class RunContext {
       type,
       category,
       runId: this.runId,
+      seq: ++this.sequence,
       ...(this.step === undefined ? {} : { step: this.step }),
       data,
       timestamp: Date.now()

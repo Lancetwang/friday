@@ -21,6 +21,7 @@ export const COMMANDS = [
   { name: '/fork', detail: 'Fork from the latest Friday response' },
   { name: '/branches', detail: 'Navigate the fork map with ↑↓←→, Enter, Ctrl+D' },
   { name: '/goal', detail: 'Run a strongly verified goal' },
+  { name: '/queue', detail: 'Run a message after the current turn finishes' },
   { name: '/exit', detail: 'Close Friday' },
 ] as const
 
