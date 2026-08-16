@@ -1,6 +1,6 @@
 {
   "name": "friday-agent-harness",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -17,7 +17,7 @@
     "test": "npm run build && node --test dist/*.test.js"
   },
   "dependencies": {
-    "friday-agent-core": "0.7.1",
+    "friday-agent-core": "0.8.0",
     "ignore": "7.0.6"
   }
 }

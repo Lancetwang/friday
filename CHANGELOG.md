@@ -2,7 +2,7 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
-## Unreleased
+## v0.8.0 (2026-08-16)
 
 ### Added
 - Messages sent while Friday is working now do something. A plain message steers the running turn: it is injected before the model's next step (never between a tool call and its result), resets the no-progress guard, and renders as an inline `↳` line under the active turn in both UIs. Steers that arrive after the turn's last step run as an immediate follow-up turn, so nothing typed is lost. Queueing is the second mode: `/queue <text>` in the TUI or Cmd/Ctrl+Enter in the desktop composer holds a message and sends it automatically once the current turn (and any pending approval) finishes.
