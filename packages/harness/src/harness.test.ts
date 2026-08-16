@@ -1230,6 +1230,94 @@ test('a message sent mid-turn steers the running model before its next step', as
   }
 })
 
+test('a steer during a single-step streaming turn runs as a clean follow-up turn', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-steer-late-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  const requests: Array<Record<string, unknown>> = []
+  const server = createServer((request, response) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', chunk => { body += chunk })
+    request.on('end', () => {
+      requests.push(JSON.parse(body) as Record<string, unknown>)
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      if (requests.length === 1) {
+        // A pure text answer with NO tool step: the stream stays open long
+        // enough for a steer to arrive, but there is no next model step to
+        // deliver it into - the follow-up path must handle it.
+        sse(response, { choices: [{ delta: { content: 'first answer' } }] })
+        setTimeout(() => {
+          sse(response, { choices: [], usage: { prompt_tokens: 5, completion_tokens: 2 } })
+          response.end('data: [DONE]\n\n')
+        }, 600)
+      } else {
+        sse(response, { choices: [{ delta: { content: 'follow-up done' } }] })
+        sse(response, { choices: [], usage: { prompt_tokens: 9, completion_tokens: 3 } })
+        response.end('data: [DONE]\n\n')
+      }
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'late', profiles: [{
+        id: 'late', name: 'Late', provider: 'openai-compatible', model: 'mock',
+        base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000, max_output_tokens: 2_000
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ late: 'secret' }))
+    const output: unknown[] = []
+    const gateway = new Gateway(workspace, value => output.push(value))
+    await gateway.start()
+    output.length = 0
+    const run = gateway.handle({ id: 'chat', method: 'chat.send', params: { text: 'write a poem' } })
+    for (let waited = 0; requests.length < 1 && waited < 100; waited += 1) await new Promise(resolve => setTimeout(resolve, 25))
+    await new Promise(resolve => setTimeout(resolve, 150))
+    await gateway.handle({ id: 'steer', method: 'chat.steer', params: { text: 'make it about the sea' } })
+    assert.equal((responseResult(output, 'steer') as { steered: boolean }).steered, true)
+    await run
+    // The original turn completed normally - the follow-up dispatch must not
+    // trip the idle guard and poison it.
+    assert.equal((responseResult(output, 'chat') as { text: string }).text, 'first answer')
+    // The follow-up turn runs on its own and carries the steer text.
+    for (let waited = 0; requests.length < 2 && waited < 200; waited += 1) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(requests.length, 2)
+    const messages = requests[1]!.messages as Array<{ role: string; content?: unknown }>
+    assert.equal(messages.some(message => message.role === 'user' && String(message.content).includes('make it about the sea')), true)
+    const followUpDone = async () => {
+      for (let waited = 0; waited < 200; waited += 1) {
+        const done = output.some(value => {
+          const message = value as { method?: string; params?: { type?: string; payload?: { text?: string } } }
+          return message.method === 'event' && message.params?.type === 'message.complete'
+            && message.params.payload?.text === 'follow-up done'
+        })
+        if (done) return true
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+      return false
+    }
+    assert.equal(await followUpDone(), true)
+    // The follow-up announced its user message so every window renders it.
+    assert.equal(output.some(value => {
+      const message = value as { method?: string; params?: { type?: string; payload?: { text?: string } } }
+      return message.method === 'event' && message.params?.type === 'message.start'
+        && message.params.payload?.text === 'make it about the sea'
+    }), true)
+  } finally {
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await rm(temporary, { recursive: true, force: true })
+  }
+})
+
 function responseResult(output: unknown[], id: string): unknown {
   const message = output.find(value => (value as { id?: unknown }).id === id) as { result?: unknown; error?: unknown } | undefined
   assert(message && !message.error, `Missing successful response ${id}.`)

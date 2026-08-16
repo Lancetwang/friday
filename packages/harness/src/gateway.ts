@@ -395,6 +395,7 @@ export class Gateway {
         this.requireSessionIdle(session)
         requestSession = session
         await this.resolveApproval(id, session, 'approve', params, () => { requestFinalized = true })
+        this.followUpSteers(session)
       } else if (method === 'approval.instruct') {
         const instruction = typeof params.text === 'string' ? params.text.trim() : ''
         if (!instruction) throw new Error('Tell Friday what to do before continuing.')
@@ -402,11 +403,13 @@ export class Gateway {
         this.requireSessionIdle(session)
         requestSession = session
         await this.resolveApproval(id, session, 'instruct', { text: instruction }, () => { requestFinalized = true })
+        this.followUpSteers(session)
       } else if (method === 'approval.reject') {
         const session = this.session
         this.requireSessionIdle(session)
         requestSession = session
         await this.resolveApproval(id, session, 'reject', params, () => { requestFinalized = true })
+        this.followUpSteers(session)
       } else throw new Error(`Method not implemented by the TypeScript gateway: ${method}`)
     } catch (error) {
       if (requestSession && isAbort(error) && (method === 'chat.send' || method === 'goal.run')) {
@@ -524,6 +527,14 @@ export class Gateway {
    * turn announces itself through the same events as a client-sent message.
    */
   private followUpSteers(session: FridaySession): void {
+    if (this.deletingSessions.has(session.sessionId)) return
+    // The finishing turn may still be registered while its final bookkeeping
+    // runs; dispatching inside that window would trip the idle guard and
+    // poison the finishing turn's own completion. Wait it out.
+    if (session.running || this.activeRuns.has(session.sessionId)) {
+      setTimeout(() => this.followUpSteers(session), 25)
+      return
+    }
     const pending = session.takeUndeliveredSteers()
     if (!pending.length) return
     const text = pending.join('\n')

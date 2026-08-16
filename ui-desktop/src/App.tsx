@@ -1004,7 +1004,25 @@ function App() {
         }
         return
       }
-      if (type === 'message.start') cancelledEventKeys.current.delete(eventKey)
+      if (type === 'message.start') {
+        cancelledEventKeys.current.delete(eventKey)
+        // Turns the gateway starts on its own (steers delivered after the
+        // last model step) need a user bubble here; locally-sent turns
+        // already added one in submit, so an identical trailing text skips.
+        const startText = String(payload.text || '')
+        if (startText) {
+          updateView(workspace, current => {
+            const lastUser = [...current.items].reverse().find(item => item.kind === 'user')
+            if (lastUser?.text === startText) return { ...current, busy: true, cancelling: false }
+            return {
+              ...current,
+              busy: true,
+              cancelling: false,
+              items: [...current.items, { createdAt: new Date().toISOString(), id: nextId('user'), kind: 'user', text: startText }]
+            }
+          })
+        }
+      }
       if (cancelledEventKeys.current.has(eventKey) && (
         type === 'message.delta' ||
         type === 'reasoning.delta' ||
@@ -1160,6 +1178,12 @@ function App() {
           ]
         }))
       } else if (type === 'session.updated') {
+        if (typeof payload.running === 'boolean') {
+          const running = payload.running
+          updateView(workspace, current => current.busy === running
+            ? current
+            : { ...current, busy: running, ...(running ? {} : { cancelling: false }) })
+        }
         void refreshSessions(workspace).catch(() => undefined)
       } else if (type === 'session.titled') {
         void refreshSessions(workspace).catch(() => undefined)
