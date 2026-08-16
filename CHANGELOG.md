@@ -2,6 +2,11 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## Unreleased
+
+### Fixed
+- Multiple tool calls in one model reply no longer collapse into a single corrupted call on OpenAI-compatible providers that stream tool-call deltas without an `index` field. All calls used to merge into slot zero - names concatenated, arguments interleaved into invalid JSON - so every multi-tool turn degenerated into "tool not found" retries until the step budget ran out, which looked like a hang; a single tool call was unaffected. The stream merger now keys slots by `index`, then by call id, and treats bare fragments as continuations of the last slot; identical or extending name resends replace instead of concatenating. The executor also synthesizes unique call ids when a provider omits or repeats them, keeping result pairing and the echoed follow-up request consistent.
+
 ## v0.7.0 (2026-08-15)
 
 ### Added

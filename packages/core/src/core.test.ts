@@ -191,6 +191,61 @@ test('unchanged repeated tool calls warn once and then finish without tools', as
   ])
 })
 
+test('indexless streamed tool calls stay separate and ids are synthesized', async () => {
+  // Several OpenAI-compatible providers stream one tool call per chunk with
+  // no `index` field; some also resend the whole function name in every
+  // fragment. Getting the merge wrong collapses every call into one slot of
+  // concatenated garbage - which only shows up when a model calls several
+  // tools at once.
+  const server = createServer((request, response) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', chunk => { body += chunk })
+    request.on('end', () => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      const chunkFor = (calls: unknown) => sse(response, { choices: [{ delta: { tool_calls: calls } }] })
+      // Call 1: id, no index; arguments arrive as a later bare fragment.
+      chunkFor([{ id: 'a1', type: 'function', function: { name: 'Read' } }])
+      chunkFor([{ function: { arguments: '{"path":' } }])
+      chunkFor([{ function: { arguments: '"x.txt"}' } }])
+      // Call 2: new id, whole name resent twice, no index anywhere.
+      chunkFor([{ id: 'b2', type: 'function', function: { name: 'Bash', arguments: '{"command":"ls"}' } }])
+      chunkFor([{ id: 'b2', type: 'function', function: { name: 'Bash' } }])
+      // Call 3: no id and no index on its opening chunk would be ambiguous,
+      // so providers of this shape always send the id; verify a third call.
+      chunkFor([{ id: 'c3', type: 'function', function: { name: 'Glob', arguments: '{"pattern":"*"}' } }])
+      sse(response, { choices: [{ delta: {} }], usage: { prompt_tokens: 4, completion_tokens: 2 } })
+      response.write('data: [DONE]\n\n')
+      response.end()
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  try {
+    const model = new OpenAIModel({ apiKey: 'k', model: 'mock', baseUrl: `http://127.0.0.1:${address.port}` })
+    const result = await model.complete({ messages: [{ role: 'user', content: 'go' }] })
+    assert.deepEqual(result.tool_calls?.map(call => [call.id, call.function.name, call.function.arguments]), [
+      ['a1', 'Read', '{"path":"x.txt"}'],
+      ['b2', 'Bash', '{"command":"ls"}'],
+      ['c3', 'Glob', '{"pattern":"*"}']
+    ])
+    // Executor-side hardening: missing and duplicated ids are synthesized so
+    // result pairing and the echoed next request stay consistent.
+    const executor = new ToolExecutor([])
+    const parsed = executor.parse({
+      tool_calls: [
+        { id: '', type: 'function', function: { name: 'A', arguments: '{}' } },
+        { id: 'dup', type: 'function', function: { name: 'B', arguments: '{}' } },
+        { id: 'dup', type: 'function', function: { name: 'C', arguments: '{}' } }
+      ]
+    })
+    assert.deepEqual(parsed.map(call => call.id), ['call_0', 'dup', 'dup_2'])
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  }
+})
+
 test('Anthropic Messages preserves signed thinking and tool turns', async () => {
   let payload: JsonObject | undefined
   let requestPath = ''

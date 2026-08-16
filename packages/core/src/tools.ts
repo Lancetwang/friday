@@ -40,7 +40,17 @@ export class ToolExecutor {
   }
 
   parse(message: { tool_calls?: ToolCall[] }): ToolCall[] {
-    return Array.isArray(message.tool_calls) ? message.tool_calls.filter(validCall) : []
+    const calls = Array.isArray(message.tool_calls) ? message.tool_calls.filter(validCall) : []
+    // Providers occasionally omit or repeat call ids; downstream everything
+    // pairs results to calls by id, and the next request echoes them back.
+    // Synthesize unique ids in place so the stored assistant message and the
+    // tool results it pairs with stay consistent.
+    const seen = new Set<string>()
+    for (const [index, call] of calls.entries()) {
+      if (!call.id || seen.has(call.id)) call.id = uniqueCallId(call.id, index, seen)
+      seen.add(call.id)
+    }
+    return calls
   }
 
   async preflightAll(calls: readonly ToolCall[], signal?: AbortSignal): Promise<ToolBatchPreflight | undefined> {
@@ -105,6 +115,12 @@ export class ToolExecutor {
       return failure(call.id, `Tool '${tool.name}' failed: ${errorText(error)}`, started)
     }
   }
+}
+
+function uniqueCallId(base: string, index: number, seen: ReadonlySet<string>): string {
+  let candidate = base ? `${base}_${index}` : `call_${index}`
+  while (seen.has(candidate)) candidate = `${candidate}x`
+  return candidate
 }
 
 function validCall(value: unknown): value is ToolCall {

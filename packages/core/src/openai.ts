@@ -54,6 +54,7 @@ async function readStream(body: ReadableStream<Uint8Array>, request: ModelReques
   let reasoning = ''
   let usage: JsonObject | undefined
   const calls = new Map<number, ToolCall>()
+  const state: MergeState = { lastSlot: -1 }
 
   for await (const chunk of readSseJson(body)) {
     if (isObject(chunk.usage)) usage = chunk.usage
@@ -67,7 +68,7 @@ async function readStream(body: ReadableStream<Uint8Array>, request: ModelReques
       reasoning += delta.reasoning_content
       request.onReasoningDelta?.(delta.reasoning_content)
     }
-    mergeToolCalls(calls, delta.tool_calls)
+    mergeToolCalls(calls, delta.tool_calls, state)
   }
   return {
     role: 'assistant',
@@ -84,20 +85,44 @@ function firstDelta(chunk: JsonObject): JsonObject | undefined {
   return isObject(choices[0].delta) ? choices[0].delta : undefined
 }
 
-function mergeToolCalls(target: Map<number, ToolCall>, value: unknown): void {
+type MergeState = { lastSlot: number }
+
+/**
+ * Streamed tool-call deltas vary by provider, and getting the merge wrong
+ * corrupts exactly the multi-call case: several calls collapse into one slot
+ * whose name and arguments are concatenated garbage. Rules, in order:
+ * - a numeric `index` names the slot (the OpenAI contract);
+ * - without one, a fresh `id` opens a new slot (or rejoins its existing one),
+ *   because providers that omit `index` mark each call with an id up front;
+ * - a fragment with neither continues the slot that streamed last.
+ * Names are not blindly concatenated: an identical or extending resend
+ * replaces, only a genuine fragment appends.
+ */
+function mergeToolCalls(target: Map<number, ToolCall>, value: unknown, state: MergeState): void {
   if (!Array.isArray(value)) return
-  value.forEach((raw, fallback) => {
-    if (!isObject(raw)) return
-    const index = typeof raw.index === 'number' ? raw.index : fallback
-    const current = target.get(index) ?? { id: '', type: 'function', function: { name: '', arguments: '' } }
-    if (typeof raw.id === 'string') current.id = raw.id
+  for (const raw of value) {
+    if (!isObject(raw)) continue
+    const id = typeof raw.id === 'string' ? raw.id : ''
+    let slot: number
+    if (typeof raw.index === 'number') slot = raw.index
+    else if (id) {
+      const existing = [...target.entries()].find(([, call]) => call.id === id)
+      slot = existing ? existing[0] : target.size
+    } else {
+      slot = state.lastSlot >= 0 ? state.lastSlot : 0
+    }
+    state.lastSlot = slot
+    const current = target.get(slot) ?? { id: '', type: 'function', function: { name: '', arguments: '' } }
+    if (id) current.id = id
     const fn = raw.function
     if (isObject(fn)) {
-      if (typeof fn.name === 'string') current.function.name += fn.name
+      if (typeof fn.name === 'string' && fn.name && fn.name !== current.function.name) {
+        current.function.name = fn.name.startsWith(current.function.name) ? fn.name : current.function.name + fn.name
+      }
       if (typeof fn.arguments === 'string') current.function.arguments += fn.arguments
     }
-    target.set(index, current)
-  })
+    target.set(slot, current)
+  }
 }
 
 function normalizeBaseUrl(value?: string): string {
