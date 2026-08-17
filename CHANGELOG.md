@@ -2,7 +2,15 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
-## v0.8.1 (2026-08-16)
+## Unreleased
+
+### Changed
+- Permission mode is now a hot swap. Changing it takes effect immediately - even while a request is running - and governs the running turn's very next command, because the mode is read at each tool preflight instead of being fixed when the run starts. The change reaches every live session of the gateway (not just the one in front), future sessions inherit it, and both UIs stay unlocked while Friday works: the TUI accepts `/permission` mid-turn and the desktop permission picker no longer greys out. A `permission.updated` event keeps every open view in sync.
+
+### Fixed
+- Shell commands that leave a background process behind no longer hang the Bash tool. The runner used to wait for the child's stdio pipes to drain, and any survivor holding them - a dev server started with `&`, a daemon, an orphaned grandchild - kept the tool call (and the whole turn) stuck even after the process itself had exited, on every surface. The runner now settles when the command exits, with a short grace for trailing output and a hard ceiling after a kill, then releases its ends of the pipes.
+- Stopping a turn is now honest against stuck tools. The executor races every tool against the cancel signal, so Esc-Esc in the TUI and Stop on the desktop take effect immediately even when a tool ignores cancellation or its process cannot be killed (uninterruptible I/O); the tool call is closed with an explicit cancellation result and the abandoned process is left behind instead of holding the turn hostage.
+- Cancelling also stops what was about to run: steers the turn never delivered and locally queued messages no longer fire a surprise follow-up turn after the stop - they return to the composer on both UIs so nothing typed is lost.
 
 ### Fixed
 - Steering during a plain streaming answer no longer errors the running turn. A steer that arrives after the turn's last model step is delivered as a follow-up turn; that dispatch used to fire while the finishing turn was still registered, tripping the idle guard and surfacing "already has a request in progress" against the original message (the desktop hit this on any single-step turn; the TUI only avoided it because tool loops delivered steers in-step). The follow-up now waits for the turn to fully settle, and approval continuations dispatch stranded steers too.

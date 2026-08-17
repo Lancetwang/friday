@@ -303,6 +303,15 @@ export async function runShell(
   let lastProgress = 0
   let timedOut = false
   let stopping = false
+  let settled = false
+  let exitCode: number | null = null
+  let settleOutcome: ((value: { code: number | null; error?: Error }) => void) | undefined
+  const graceTimers: NodeJS.Timeout[] = []
+  const settleAfter = (ms: number) => {
+    const grace = setTimeout(() => settleOutcome?.({ code: exitCode }), ms)
+    grace.unref?.()
+    graceTimers.push(grace)
+  }
   const spill = spillPath ? spillWriter(spillPath) : undefined
   const report = (content: string, final = false) => {
     liveTail = (liveTail + content).slice(-8_000)
@@ -313,6 +322,7 @@ export async function runShell(
     }
   }
   const consume = (state: StreamState, chunk: string) => {
+    if (settled) return
     state.total += chunk.length
     if (state.head.length < SHELL_HEAD_CHARS) state.head += chunk.slice(0, SHELL_HEAD_CHARS - state.head.length)
     state.tail = (state.tail + chunk).slice(-MAX_OUTPUT_CHARS)
@@ -327,6 +337,10 @@ export async function runShell(
     if (stopping) return
     stopping = true
     terminateProcessTree(child)
+    // SIGKILL cannot free a process stuck in uninterruptible I/O and cannot
+    // reach a survivor that re-parented out of the group; the wait below must
+    // not depend on either of them dying.
+    settleAfter(1_500)
   }
   const timer = setTimeout(() => {
     timedOut = true
@@ -335,11 +349,25 @@ export async function runShell(
   const abort = () => stop()
   signal?.addEventListener('abort', abort, { once: true })
   const outcome = await new Promise<{ code: number | null; error?: Error }>(resolveOutcome => {
+    settleOutcome = resolveOutcome
     child.once('error', error => resolveOutcome({ code: null, error }))
+    // 'close' waits for stdio to drain and never fires while a background
+    // survivor holds the pipes; 'exit' plus a short flush grace is the honest
+    // signal that the command itself is over.
     child.once('close', code => resolveOutcome({ code }))
+    child.once('exit', code => {
+      exitCode = code
+      settleAfter(800)
+    })
   })
+  settled = true
+  for (const grace of graceTimers) clearTimeout(grace)
   clearTimeout(timer)
   signal?.removeEventListener('abort', abort)
+  // Release our end of the pipes: stops late data from a lingering holder and
+  // lets it die on the next write instead of blocking.
+  child.stdout!.destroy()
+  child.stderr!.destroy()
   report('', true)
   const spilled = await (spill?.finish() ?? Promise.resolve(false))
   signal?.throwIfAborted()

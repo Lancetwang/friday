@@ -1188,6 +1188,12 @@ function App() {
       } else if (type === 'session.titled') {
         void refreshSessions(workspace).catch(() => undefined)
         void refreshTree(workspace).catch(() => undefined)
+      } else if (type === 'permission.updated') {
+        // Gateway-wide hot swap; may have been made from another view.
+        const mode = String(payload.permission_mode || '') as PermissionMode
+        if (['manual', 'auto', 'bypass'].includes(mode)) {
+          updateView(workspace, current => ({ ...current, info: { ...current.info, permission_mode: mode } }))
+        }
       } else if (type === 'message.steered') {
         updateView(workspace, current => ({
           ...current,
@@ -1542,8 +1548,18 @@ function App() {
           ? { ...item, streaming: false }
           : item)
     }))
-    void sendGateway<{ cancelled: boolean }>(activeProject, 'chat.cancel', { session_id: activeSession })
+    // Stop means stop everything: locally queued drafts must not auto-send
+    // after the stop, and steers the turn never delivered come back from the
+    // gateway. Both return to the composer so nothing typed is lost.
+    const queueKey = pathKey(activeProject)
+    const held = queuedTexts.current.get(queueKey) ?? []
+    queuedTexts.current.delete(queueKey)
+    void sendGateway<{ cancelled: boolean; dropped_steers?: string[] }>(activeProject, 'chat.cancel', { session_id: activeSession })
       .then(result => {
+        const returned = [...(result.dropped_steers ?? []), ...held]
+        if (returned.length) {
+          updateView(activeProject, current => ({ ...current, draft: current.draft || returned.join('\n') }))
+        }
         if (result.cancelled) return
         cancelledEventKeys.current.delete(eventKey)
         updateView(activeProject, current => ({ ...current, busy: false, cancelling: false }))
@@ -2648,16 +2664,14 @@ function App() {
                 </button>
               )}
               <MenuDetails
-                className={`permission-picker ${busy ? 'disabled' : ''}`}
+                className="permission-picker"
                 key={`${activeProject}-permissions`}
               >
+                {/* Deliberately usable mid-run: permission is a hot swap that
+                    governs the next tool call of the running turn. */}
                 <summary
-                  aria-disabled={busy}
                   aria-label="Permission mode"
-                  onClick={event => {
-                    if (busy) event.preventDefault()
-                  }}
-                  tabIndex={busy ? -1 : 0}
+                  tabIndex={0}
                   title={t('permission.title')}
                 >
                   <span aria-hidden="true" className={`permission-indicator mode-${info.permission_mode}`} />

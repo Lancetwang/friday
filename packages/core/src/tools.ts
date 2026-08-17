@@ -109,12 +109,44 @@ export class ToolExecutor {
     try {
       signal?.throwIfAborted()
       const args = parseArguments(call.function.arguments)
-      const value = await currentCall.run(call, () => tool.execute(args, signal, content => onProgress?.(call, content)))
+      // The race is what keeps cancellation honest: a tool that ignores its
+      // signal (or a child process the kernel will not release) must not hold
+      // the whole turn hostage. On abort the tool's own promise is orphaned
+      // and settles in the background.
+      const work = Promise.resolve(currentCall.run(call, () => tool.execute(args, signal, content => onProgress?.(call, content))))
+      const value = await raceAbort(work, signal)
       return { toolCallId: call.id, content: stringify(value), isError: false, elapsedMs: performance.now() - started }
     } catch (error) {
       return failure(call.id, `Tool '${tool.name}' failed: ${errorText(error)}`, started)
     }
   }
+}
+
+function raceAbort<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      work.catch(() => {})
+      const error = new Error('Tool execution was cancelled.')
+      error.name = 'AbortError'
+      reject(error)
+    }
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    work.then(
+      value => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      error => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      }
+    )
+  })
 }
 
 function uniqueCallId(base: string, index: number, seen: ReadonlySet<string>): string {

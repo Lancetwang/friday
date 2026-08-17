@@ -424,6 +424,24 @@ test('OpenAI Responses replays typed items and normalizes completed output', asy
   }
 })
 
+test('a tool that ignores its abort signal cannot hold the turn hostage', async () => {
+  const stuck: Tool = {
+    name: 'stuck', description: 'never settles', parameters: { type: 'object' },
+    execute: () => new Promise(() => {})
+  }
+  const executor = new ToolExecutor([stuck])
+  const controller = new AbortController()
+  const started = performance.now()
+
+  const pending = executor.execute(call('stuck', 1), controller.signal)
+  setTimeout(() => controller.abort(), 50)
+  const result = await pending
+
+  assert.equal(result.isError, true)
+  assert.match(result.content, /AbortError/)
+  assert(performance.now() - started < 2_000)
+})
+
 function call(name: string, index: number): ToolCall {
   return { id: String(index), type: 'function', function: { name, arguments: '{}' } }
 }

@@ -184,9 +184,16 @@ export class Gateway {
           user_profile: loadUserProfile()
         })
       } else if (method === 'permission.set') {
-        this.requireSessionIdle(this.session)
+        // Permission is a hot swap: preflight reads the mode per tool call,
+        // so a switch made while a request runs governs the very next
+        // command. It applies to every live session and to sessions loaded
+        // later, not just the one currently in front.
         const permission_mode = this.session.selectPermissionMode(params.mode)
+        for (const session of this.sessions.values()) session.selectPermissionMode(permission_mode)
         this.permissionMode = permission_mode
+        // Deliberately no session_id: the mode is gateway-wide, and a scoped
+        // event would be filtered out by views watching other sessions.
+        this.event('permission.updated', { permission_mode })
         this.ok(id, { permission_mode, session_id: this.session.sessionId })
       } else if (method === 'approval.pending') this.ok(id, this.session.approval())
       else if (method === 'session.reset') {
@@ -389,7 +396,15 @@ export class Gateway {
         const sessionId = String(params.session_id || this.session.sessionId)
         const session = this.sessions.get(sessionId)
         const cancelled = !!session && this.activeRuns.has(sessionId) && session.cancel()
-        this.ok(id, { cancelled, ...(cancelled ? { session_id: sessionId } : {}) })
+        // Cancel means stop everything: steers still queued for delivery must
+        // not fire a follow-up turn behind the user's back. They go back to
+        // the client so nothing typed is lost.
+        const dropped = session ? session.takeUndeliveredSteers() : []
+        this.ok(id, {
+          cancelled,
+          ...(dropped.length ? { dropped_steers: dropped } : {}),
+          ...(cancelled ? { session_id: sessionId } : {})
+        })
       } else if (method === 'approval.approve') {
         const session = this.session
         this.requireSessionIdle(session)

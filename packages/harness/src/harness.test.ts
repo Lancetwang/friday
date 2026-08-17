@@ -340,6 +340,142 @@ test('the gateway keeps a running session alive while another session is selecte
   }
 })
 
+test('permission mode hot-swaps while a request runs and reaches every live session', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-permission-hot-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  let held: ServerResponse | undefined
+  let announce = () => {}
+  const started = new Promise<void>(resolve => { announce = resolve })
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    held = response
+    announce()
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  const output: unknown[] = []
+  let gateway: Gateway | undefined
+  const release = () => {
+    if (!held || held.writableEnded) return
+    sse(held, { choices: [{ delta: { content: 'late answer' } }] })
+    held.end('data: [DONE]\n\n')
+  }
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'local', profiles: [{
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock',
+        base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000,
+        max_output_tokens: 2_000
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
+    gateway = new Gateway(workspace, value => output.push(value))
+    await gateway.start()
+    await gateway.handle({ id: 'first-info', method: 'session.info' })
+    const firstId = String((responseResult(output, 'first-info') as { session_id: unknown }).session_id)
+    await gateway.handle({ id: 'new', method: 'session.new' })
+    const secondId = String((responseResult(output, 'new') as { info: { session_id: unknown } }).info.session_id)
+    await gateway.handle({ id: 'back-to-first', method: 'session.resume', params: { id: firstId } })
+
+    const run = gateway.handle({ id: 'busy-chat', method: 'chat.send', params: { text: 'keep running' } })
+    await started
+    // The swap lands while the request is mid-flight: no idle requirement.
+    await gateway.handle({ id: 'swap', method: 'permission.set', params: { mode: 'bypass' } })
+    assert.deepEqual(responseResult(output, 'swap'), { permission_mode: 'bypass', session_id: firstId })
+    const updated = output.find(value => {
+      const message = value as { method?: unknown; params?: { type?: unknown; payload?: Record<string, unknown> } }
+      return message.method === 'event' && message.params?.type === 'permission.updated'
+    }) as { params: { payload: Record<string, unknown> } } | undefined
+    assert(updated)
+    // Gateway-wide: the event must not be scoped to one session.
+    assert.deepEqual(updated.params.payload, { permission_mode: 'bypass' })
+
+    release()
+    await run
+    // Every live session picked the mode up, not just the one in front.
+    await gateway.handle({ id: 'check-second', method: 'session.resume', params: { id: secondId } })
+    const info = (responseResult(output, 'check-second') as { info: { permission_mode: unknown } }).info
+    assert.equal(info.permission_mode, 'bypass')
+  } finally {
+    release()
+    await gateway?.close()
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await rm(temporary, { recursive: true, force: true })
+  }
+})
+
+test('cancelling returns undelivered steers instead of firing a follow-up turn', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-cancel-steers-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  let requests = 0
+  let announce = () => {}
+  const started = new Promise<void>(resolve => { announce = resolve })
+  const server = createServer((_request, response) => {
+    requests += 1
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    announce()
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  const output: unknown[] = []
+  let gateway: Gateway | undefined
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'local', profiles: [{
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock',
+        base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000,
+        max_output_tokens: 2_000
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
+    gateway = new Gateway(workspace, value => output.push(value))
+    await gateway.start()
+    await gateway.handle({ id: 'info', method: 'session.info' })
+    const sessionId = String((responseResult(output, 'info') as { session_id: unknown }).session_id)
+
+    const run = gateway.handle({ id: 'chat', method: 'chat.send', params: { text: 'long task' } })
+    await started
+    await gateway.handle({ id: 'steer', method: 'chat.steer', params: { text: 'change of plans' } })
+    await gateway.handle({ id: 'stop', method: 'chat.cancel' })
+    assert.deepEqual(responseResult(output, 'stop'), {
+      cancelled: true, dropped_steers: ['change of plans'], session_id: sessionId
+    })
+    await run
+    assert.deepEqual(responseResult(output, 'chat'), { cancelled: true, session_id: sessionId })
+
+    // Past the follow-up dispatch window: the dropped steer must not have
+    // started a new turn behind the user's back.
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert.equal(requests, 1)
+    const followUp = output.find(value => {
+      const message = value as { method?: unknown; params?: { type?: unknown; payload?: { text?: unknown } } }
+      return message.method === 'event' && message.params?.type === 'message.start'
+        && message.params.payload?.text === 'change of plans'
+    })
+    assert.equal(followUp, undefined)
+  } finally {
+    await gateway?.close()
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await rm(temporary, { recursive: true, force: true })
+  }
+})
+
 test('session reset clears only project state by default and preserves model configuration', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'friday-reset-'))
   const home = join(temporary, 'home')

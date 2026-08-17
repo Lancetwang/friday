@@ -132,6 +132,46 @@ test('shell timeout reports live output and kills the spawned process tree', asy
   }
 })
 
+test('a background survivor holding the pipes does not hang the shell call', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'friday-shell-orphan-'))
+  // The command finishes immediately but leaves a detached grandchild that
+  // inherited stdout/stderr. 'close' will not fire until that survivor dies;
+  // the call must come home on 'exit' instead of waiting six seconds.
+  const source = [
+    "require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},6000)'],{stdio:'inherit'}).unref()",
+    "console.log('done')"
+  ].join(';')
+  const encoded = Buffer.from(source).toString('base64')
+  const evaluate = `eval(Buffer.from('${encoded}','base64').toString())`
+  const command = `${process.platform === 'win32' ? '& ' : ''}${JSON.stringify(process.execPath)} -e ${JSON.stringify(evaluate)}`
+  try {
+    const started = performance.now()
+    const outcome = await runShell(root, command, 30)
+
+    assert(performance.now() - started < 4_000)
+    assert.equal(outcome.exit_code, 0)
+    assert.match(String(outcome.stdout), /done/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('cancelling a shell command settles quickly instead of waiting for the tree', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'friday-shell-cancel-'))
+  const command = `${process.platform === 'win32' ? '& ' : ''}${JSON.stringify(process.execPath)} -e "setTimeout(()=>{},30000)"`
+  const controller = new AbortController()
+  try {
+    const started = performance.now()
+    const pending = runShell(root, command, 60, controller.signal)
+    setTimeout(() => controller.abort(), 150)
+
+    await assert.rejects(pending, (error: Error) => error.name === 'AbortError')
+    assert(performance.now() - started < 4_000)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('the Memory tool replaces the Python CLI dependency inside agent turns', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'friday-memory-tool-'))
   const home = join(temporary, 'home')

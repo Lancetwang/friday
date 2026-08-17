@@ -307,6 +307,11 @@ export function App({ gateway }: { gateway: GatewayClient }) {
         }
       } else if (event.type === 'session.updated' && typeof event.payload.running === 'boolean') {
         setBusy(event.payload.running)
+      } else if (event.type === 'permission.updated') {
+        // Gateway-wide hot swap; may have been made from another view.
+        const mode = event.payload.permission_mode
+        if (infoRef.current) infoRef.current = { ...infoRef.current, permission_mode: mode }
+        setInfo(value => value && { ...value, permission_mode: mode })
       } else if (event.type === 'verification.start') {
         setActivity('verifying')
         mutateActive(turn => ({ ...ensureTurn(turn), verification: { running: true } }))
@@ -443,7 +448,15 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       if (pressed - lastEscape.current <= 750) {
         lastEscape.current = 0
         setActivity('Stopping...')
-        void gateway.request('chat.cancel').catch(error => setActivity(error.message))
+        // Stop means stop everything: locally queued messages and steers the
+        // turn never delivered go back into the composer instead of firing a
+        // surprise follow-up turn.
+        const held = queued
+        setQueued([])
+        void gateway.request<{ dropped_steers?: string[] }>('chat.cancel').then(result => {
+          const returned = [...(result.dropped_steers ?? []), ...held]
+          if (returned.length) setInput(value => value || returned.join(' '))
+        }).catch(error => setActivity(error.message))
       } else {
         lastEscape.current = pressed
         setActivity('Press Esc again to stop the response.')
@@ -1148,7 +1161,9 @@ function cleanInput(value: string) {
 }
 
 function canNavigateWhileBusy(value: string) {
-  return /^\/(?:new|resume|branches)$/i.test(value)
+  // /permission is deliberately usable mid-run: the mode is a hot swap that
+  // governs the next tool call of the running turn.
+  return /^\/(?:new|resume|branches|permission)$/i.test(value)
 }
 
 function sessionId(event: GatewayEvent) {
