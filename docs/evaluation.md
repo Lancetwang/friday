@@ -44,7 +44,7 @@ trial:
 ```bash
 harbor run ... \
   --agent integrations.harbor.friday:FridayAgent \
-  --ae FRIDAY_NPM_SPEC=friday-agent@0.8.1
+  --ae FRIDAY_NPM_SPEC=friday-agent@0.8.2
 ```
 
 For reproducible results, also pin Harbor, the model, task dataset, environment,

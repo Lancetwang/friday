@@ -2,7 +2,7 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
-## Unreleased
+## v0.8.2 (2026-08-17)
 
 ### Changed
 - Permission mode is now a hot swap. Changing it takes effect immediately - even while a request is running - and governs the running turn's very next command, because the mode is read at each tool preflight instead of being fixed when the run starts. The change reaches every live session of the gateway (not just the one in front), future sessions inherit it, and both UIs stay unlocked while Friday works: the TUI accepts `/permission` mid-turn and the desktop permission picker no longer greys out. A `permission.updated` event keeps every open view in sync.
