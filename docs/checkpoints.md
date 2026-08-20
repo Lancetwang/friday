@@ -1,35 +1,61 @@
 # Checkpoints
 
-Friday creates one checkpoint before each user turn. The checkpoint covers:
+Friday creates checkpoints lazily. A user turn records an in-memory checkpoint
+seed, and the first built-in `Write`, `Edit`, or `Bash` preflight materializes
+it. A turn that only chats, reads, searches, or fetches the web creates no
+restorable checkpoint. Approval continuations reuse the pending checkpoint for
+their original user turn.
 
-- non-ignored files inside the current workspace;
-- the conversation state before the turn;
-- the current objective, plan, and progress;
-- an approval continuation as part of its original user turn.
+A materialized checkpoint covers:
 
-In the desktop timeline, use the restore action on a user message to return to the state before that request. Restoring an older checkpoint also supersedes newer checkpoints because workspace history is linear. TUI `/fork` and `/backward` navigate conversation branches; they do not silently restore workspace files.
+- files selected by the private backend inside the current workspace: tracked
+  plus non-ignored untracked files with Git, or non-ignored files with the
+  fallback backend;
+- the live and archived conversation state from before the turn;
+- objective, plan, progress, turn count, and thinking effort;
+- the workspace tree after the turn and the paths changed between both trees.
 
-The desktop attaches restore only to user messages, returning to the state
-before that request. Fork is attached only to assistant responses, so a branch
-always starts from a complete request-response boundary.
+The desktop exposes restore on user messages that have a matching checkpoint.
+Restoring returns files, conversation, progress, and thinking effort to the
+pre-turn boundary. Restoring an older checkpoint supersedes newer checkpoints
+because workspace history is linear. TUI `/fork` and `/branches` create and
+navigate conversation branches; they do not restore workspace files.
 
-## Storage And Safety
+## Storage
 
-File snapshots use a separate content-addressed store under
-`~/.friday/projects/<workspace-id>/checkpoints-ts/`; Friday never changes the
-workspace's `.git` index, branch, commits, or stash. Conversation content is
-reused from the trace object store instead of being copied into every
-checkpoint. Friday retains the latest 50 restorable checkpoints per project;
-older and superseded entries are removed and the private Git object store is
-garbage-collected.
+Checkpoint state lives under:
 
-Before restoring, Friday compares the workspace with the state recorded after
-its latest turn. If files changed afterward, restore stops instead of
-overwriting them. Inspect those files first or explicitly use `--force`.
+```text
+~/.friday/projects/<workspace-id>/checkpoints-ts/
+  entries/       checkpoint JSON records
+  repo.git/      private bare Git object database when Git is available
+  files/         content-addressed fallback when Git is unavailable
+```
 
-Checkpoints do not include ignored files, `.git/`, `.friday/`, global Friday
-state, paths outside the workspace, or external side effects such as pushes,
-network requests, database writes, and deployed resources. Those operations
-remain subject to approval and require their own compensating action.
+Workspace file content is content-addressed in the private backend, so unchanged
+files are not copied for every checkpoint. Friday never changes the workspace's
+own Git index, branch, commits, stash, or object database.
 
-Deleting a saved conversation also removes its associated checkpoints.
+Conversation state is different: every checkpoint entry currently stores its
+own `before_messages` and `before_archived` arrays rather than referencing the
+trace store. Long conversations can therefore multiply checkpoint disk usage.
+Friday retains the latest 50 active checkpoints per project; pruning removes
+older or superseded entries, unreachable file snapshots, and private Git
+objects.
+
+## Restore safety
+
+Before restore, Friday compares the current workspace with the latest recorded
+post-turn tree. If files changed afterward, the normal UI restore stops instead
+of overwriting them. The gateway has an explicit `force: true` option for a
+client that deliberately accepts that overwrite; ordinary UI actions do not
+silently force it.
+
+Restore also refuses type changes that would replace a path containing ignored
+files. Inspect and move those files yourself before retrying.
+
+Checkpoints exclude ignored files, `.git/`, `.friday/`, global Friday state,
+paths outside the workspace, and external side effects such as pushes, network
+requests, database writes, and deployments. Those effects need their own
+recovery procedure. Deleting a saved conversation removes its associated
+checkpoints.

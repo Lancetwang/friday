@@ -12,19 +12,25 @@ friday --help
 friday --version
 ```
 
-Common options:
+Workspace selection works for both the TUI and headless commands:
 
 ```text
 --cwd <path>                   Select the workspace
+```
+
+Headless options for `ask`, `goal`, and `run`:
+
+```text
 --permission-mode <mode>       manual, auto, or bypass
 --stdin                        Read the prompt from standard input
 --json                         Print the final result as JSON
 --trajectory <path>            Write an ATIF-v1.7 trajectory
 ```
 
-`ask` and `goal` retain the configured permission policy. `run` defaults to
-bypass mode because it is designed for an evaluator-provided sandbox; hard
-denials still apply. Override it with `--permission-mode auto` when desired.
+`ask` and `goal` leave the gateway default unchanged: `FRIDAY_PERMISSION_MODE`
+when valid, otherwise `manual`. `run` defaults to bypass mode because it is
+designed for an evaluator-provided sandbox; hard denials still apply. Override
+it with `--permission-mode auto` when desired.
 
 Examples:
 
@@ -53,6 +59,7 @@ TUI slash commands:
 /permission
 /fork
 /branches
+/queue <message>
 /exit
 ```
 
@@ -70,7 +77,8 @@ prefers pnpm`, `/memory status`, `/memory consolidate`.
 `/plugins` lists every plugin - the built-in capabilities (workspace, web,
 memory, skills) and external ones - with its on/off state, tools, and
 description. `Enter` switches the selected plugin on or off; the change
-persists in `disabled_plugins` and takes effect immediately. The required
+persists in `disabled_plugins` and reloads the active session. Plugin changes
+are rejected while a request in that gateway is running. The required
 `workspace` pack stays on.
 
 `/branches` opens the fork map: the conversation tree drawn with guide lines,

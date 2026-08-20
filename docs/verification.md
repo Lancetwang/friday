@@ -1,36 +1,125 @@
-# Verification
+# Verification, Run Guards, and Compaction
 
-Friday keeps verification independent from the main agent. The verifier receives the original goal, workspace, and changed-path hints, but not the main agent's natural-language claims. It inspects the deliverable itself.
+Friday has two different forms of checking:
 
-The verifier works as a challenger rather than a confirmer. It first derives acceptance criteria from the original goal alone, then tries to falsify each one, choosing the check most likely to expose a failure over the check most likely to confirm success. A criterion passes only after surviving that attempt. The goal is constant across attempts, so the derived criteria stay constant too. Optional improvements, stylistic preferences, and invented requirements can neither fail the deliverable nor trigger repair, which is what keeps challenge strength from becoming scope creep.
+- Every Agent turn is instructed to inspect evidence and validate changed work
+  before answering.
+- `friday goal` adds a separate model-driven verifier after the main Agent
+  finishes. Ordinary chat, `friday ask`, and the default `friday run` path do
+  not invoke this independent verifier.
 
-## Verdicts
+## Independent Goal verification
 
-| Verdict | Meaning | Loop action |
+The verifier starts with a fresh `RunContext`. It receives the original goal,
+the workspace and operating environment, up to four earlier public user
+requirements for acceptance context, and bounded delivery hints derived from
+recent `Write`, `Edit`, and `Bash` calls. It does not receive the main Agent's
+answer or natural-language claim that the work is complete.
+
+Its prompt asks it to derive acceptance criteria from the user goal, challenge
+each criterion, and avoid inventing requirements. The available built-in tools
+are `Read`, `Glob`, `Grep`, and a mutation-filtered `Bash`; enabled `web` and
+`skills` packs can additionally contribute `WebSearch`, `WebFetch`, and `Skill`.
+External plugins never enter the verifier. Bash filtering rejects common
+mutation commands, but it is command policy, not an operating-system read-only
+sandbox.
+
+### Verdicts
+
+| Verdict | Meaning | Goal-loop action |
 | --- | --- | --- |
-| `pass` | Explicit criteria have independent evidence. | Finish |
-| `repair` | A concrete requirement is unmet and a specific next check can address it. | Run the main agent again |
-| `blocked` | Workspace or external conditions prevent completion. | Stop with evidence |
-| `inconclusive` | Evidence is insufficient and no useful new check is available. | Stop without inventing an answer |
+| `pass` | The requested criteria survived the verifier's checks. | Finish |
+| `repair` | A concrete requirement failed and `next_check` names a useful follow-up. | Ask the main Agent to repair |
+| `blocked` | Workspace or external conditions prevent completion. | Stop |
+| `inconclusive` | Evidence is insufficient and no useful next check is available. | Stop |
 
-Only `repair` can continue the loop. It must include `next_check`; vague feedback is downgraded to `inconclusive`.
+Only `repair` continues the loop. A repair without `next_check` is converted to
+`inconclusive`. Every repair prompt repeats the original goal, verifier feedback,
+and next check. A Goal run performs at most six Agent/Verifier attempts.
+Approval suspension pauses it for the user's decision. Passing, blocking or
+inconclusive evidence, cancellation, repeated no-progress, verifier error, or
+the sixth failed attempt stops it.
 
-## Gates
+## Runtime limits and no-progress guard
 
-Friday fingerprints exact tool name/argument pairs separately from their results, without volatile call IDs. The same call appearing three times in one batch triggers corrective feedback; across rounds, the call and result must match in each of the latest three tool rounds. Repeating it with the same result after that warning forces one final answer without tools. Across repair attempts, repeating both the same delivery trajectory and the same repair request stops with `no_progress`.
+Limits are fault containment, not spend budgets:
 
-A run has no small task-level attempt cap and no spend ceiling. It ends when the work is done, when it stops making progress, or when the context window can no longer be made to fit. The runtime call still carries a 10,000-step fault fuse so a broken graph cannot execute forever; ordinary work is expected to stop through semantic conditions long before it. Neither the number of requests nor their cumulative token usage may otherwise end a run: because every step re-sends the conversation, cumulative usage grows with the square of the step count and crosses any fixed ceiling while the window is still mostly empty. Both figures are recorded for the trace and the cost shown in the UIs, and compared against nothing.
+| Scope | Current bound |
+| --- | ---: |
+| One main-Agent invocation | 100 model steps |
+| One verifier invocation | 40 model steps |
+| One Goal run | 6 verification attempts |
+| Parallel tool batch | 4 explicitly parallel-safe calls at a time |
 
-The window is therefore the only normal resource bound, and compaction is what keeps it from being reached. At 85% occupancy the guard first probes every uncompacted tool result and only applies the lossless pass when it would reclaim at least 25% of the current prompt. Otherwise it rewrites the conversation in place as a structured summary plus the largest complete recent tool-cycle tail that fits. Only a window that neither pass can bring back under 85% gives the active Agent one final answer without tools. The answer, verification evidence, and stop reason remain in the trace.
+`run_token_budget` remains accepted in configuration for compatibility and is
+not enforced. Provider input, output, request, and cache totals are recorded as
+usage; they do not stop a turn. A provider can still reject a request whose
+configured context or output limits exceed its real capabilities.
 
-Normal turns verify only after delivery-changing tools. A concrete repair can repeat without a fixed attempt cap; pass, blockage, insufficient evidence, approval, or repeated no-progress ends the loop. Goal mode always visits the Verify node, keeps the original objective in every repair prompt, and requires verifier pass before reporting completion. A simple goal yields few derived criteria, so it can still pass after one short verifier run.
+The Core fingerprints tool name and normalized arguments separately from the
+result. The same call appearing three times in one model response, or the same
+call returning the same result in each of the latest three tool rounds, adds a
+warning. Repeating that unchanged call and result after the warning disables
+tools and asks for one final supported answer. Across Goal repairs, repeating
+both the same delivery-event signature and the same repair request stops with
+`no_progress`.
 
-The verifier retains Bash because executable checks, builds, tests, and runtime behavior cannot be established by reading alone. Its independence is epistemic: it receives the original request and delivery hints rather than the main agent's claims, and its prompt forbids modifying the deliverable. Friday does not claim that removing Write/Edit would create a read-only boundary because shell commands can also write.
+## Context measurement
 
-## Task continuity
+Context occupancy includes the current message array and all active tool
+schemas. After a normal provider response, Friday anchors the estimate to that
+response's exact prompt-token count. Until the next response, it adds or
+subtracts a local delta at approximately four serialized characters per token.
+Before the first usable provider count, the whole prompt uses that local
+estimate. Cumulative input-token spend is never treated as current occupancy.
 
-During one active run, the outer loop tracks the original request, attempt count, latest verifier feedback and next check, repeated attempt and repair signatures, approval state, and cumulative Token usage. Every repair prompt repeats the original request so later attempts do not rely on recalling only the first message.
+## Compaction
 
-Conversation history, tool observations, and verification feedback remain in one shared `RunContext`; Friday does not create per-task contexts. A session-scoped progress snapshot separately records the current objective, plan, status, next action, and verifier verdict. `UpdatePlan`, loop completion, approval waits, and semantic stops update that snapshot and emit trace events.
+The main Agent checks occupancy before every model step. At 85% of the
+configured window it compacts automatically; `/compact` forces the same path
+between turns. There is no separate tool-result compaction pass.
 
-At context pressure between turns, Friday rebuilds the model input as the fresh stable prefix, structured summary, the largest complete recent tail that fits (up to ten user turns), and one current progress checkpoint. Session snapshots persist both messages and progress for `resume`. Resume does not automatically execute an interrupted `/goal` or recover its in-memory attempt counter; it restores the evidence and next action so continuation is explicit and safe.
+Friday tries three summary strategies in order:
+
+1. **Insert.** When the current prompt, a 2,000-token allowance for the compact
+   instruction, and the configured maximum output can fit together, Friday
+   appends one compact instruction to the complete live conversation. It sends
+   the same tool schemas with `tool_choice: none`, preserving the provider's
+   reusable prompt prefix while making this request text-only.
+2. **Bounded transcript.** If insert lacks headroom or fails, Friday makes a
+   fresh two-message summary request from at most 120,000 transcript characters.
+   Each user message can contribute up to 8,000 characters; other messages
+   contribute up to 2,000.
+3. **Offline summary.** If the model summary also fails, Friday writes a minimal
+   local summary so model failure does not itself block the Agent Loop.
+
+The replacement keeps the existing system prefix, one structured session
+summary, and the largest recent complete replay that fits the remaining budget.
+The target is 55% of the configured window after accounting for the prefix,
+tool schemas, and summary; it is a target rather than a guarantee, because
+Friday retains a minimum replay even when that replay alone exceeds the target.
+During an active tool loop, Friday preserves the latest public request and as
+many recent assistant/tool cycles as fit. Otherwise it tries recent tails of
+10, 6, 3, 2, and 1 public user turns.
+
+Messages removed from the model prompt are archived in the session. The UI,
+resume, and fork history therefore retain the original conversation even though
+the model reads the compacted state. If the rebuilt prompt is still at or above
+85%, the main Agent receives one final step with tools disabled and must report
+the best supported result and unresolved items.
+
+The verifier uses its own fresh bounded run and does not share the main
+session's compaction state.
+
+## Progress and resume
+
+The Harness stores the current objective, plan, status, next action, and latest
+verifier summary in `RunContext.artifacts` and in the session snapshot. Progress
+is UI and recovery state; it is not inserted as a standalone model message.
+Model continuity comes from the persisted conversation, tool observations, and
+any compact summary already present in that conversation.
+
+Loading a saved session restores its messages and progress but does not
+automatically restart an interrupted Goal. A turn suspended for approval is
+different: after the decision, Friday resumes that same turn and returns an
+active Goal to verification, using the saved verification attempt when present.

@@ -65,7 +65,7 @@ Inside the TUI, use slash commands for session and runtime operations:
 /compact
 /permission
 /fork
-/backward
+/branches
 ```
 
 Project state is stored under `~/.friday/projects/<workspace-id>/`. Global configuration, model credentials, user profile, memory, rules, and user skills live directly under `~/.friday/`.

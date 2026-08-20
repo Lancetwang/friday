@@ -1,27 +1,54 @@
 # Memory
 
-Friday's memory system is file-based and owned by the harness. It separates stable facts, recalled personal episodes, current task progress, and project rules.
+Friday's memory system is file-based and owned by the Harness. Durable facts,
+episodic recall, resumable conversation, and live progress are separate stores.
 
 ## Storage
 
 - `~/.friday/USER.md`: bounded stable user profile and preferences.
 - `~/.friday/MEMORY.md`: bounded global cross-project facts.
 - `~/.friday/projects/<workspace-id>/MEMORY.md`: bounded project facts and lasting decisions.
-- `~/.friday/memory/YYYY-MM-DD.md`: dated episodic notes captured as original user text.
-- `~/.friday/projects/<workspace-id>/sessions/*.json`: exact resumable conversation and progress snapshots.
-- `~/.friday/observability/sessions/`: append-only observability evidence, not normal recall material.
+- `~/.friday/memory/YYYY-MM-DD.md`: dated episodic notes captured from public user messages.
+- `~/.friday/projects/<workspace-id>/sessions/*.json`: resumable messages, archived messages, progress, and session metadata.
+- `~/.friday/projects/<workspace-id>/traces-ts/*.json`: observability records, not recall material.
 
-`friday.progress` is the only live task-state store. It holds the current objective, plan, status, next action, and verifier result. Episodic notes record what happened; they never duplicate or update live progress.
+Compaction bounds the model-facing prompt, not stored history: the session
+snapshot retains archived messages so resume, UI history, and forks remain
+complete. Long conversations and branches therefore continue to consume disk.
+Episodic notes and trace records also have no automatic age-based expiry;
+consolidation removes only episode entries used by accepted merge or promotion
+operations. See [Checkpoints](checkpoints.md) for the additional cost of copied
+conversation arrays and [Observability](observability.md) for trace retention.
 
-## Capture And Recall
+`friday.progress` inside `RunContext.artifacts` is the live task-state record. It
+holds the objective, latest request, mode, plan, status, next action, and a small
+verifier summary. It is persisted in the session snapshot but is not inserted as
+a standalone model message.
 
-Friday deterministically detects explicit memory signals such as "remember", "from now on", preferences, and corrections. Ordinary candidates are saved to the current dated Markdown file with hidden source, session, and occurrence-count metadata. Exact repeats increment the existing count instead of adding another bullet. An explicit request to remember something forever, permanently, or always skips the episode and is routed directly to user, global, or project memory. Credential-like content is rejected.
+## Capture and recall
 
-Before each model turn, the harness searches episodic Markdown with English terms and Chinese character pairs. It injects at most three relevant entries and labels them as background evidence; the current user statement always wins over stale or conflicting memory. This dynamic tail does not alter the stable system-prefix order.
+Before each public user turn, Friday checks the message for explicit memory
+signals such as “remember”, “from now on”, preferences, and corrections.
+Ordinary candidates are saved to the current dated episode with hidden source,
+session, and occurrence-count metadata. Exact repeats increment the count rather
+than adding another visible bullet. A request to remember something forever,
+permanently, or always goes directly to user, global, or project memory.
+Credential-like content is rejected.
 
-Memory is evidence from an earlier point in time, not authority over current state. Before acting on a remembered file, function, flag, date, or external resource, Friday checks the current workspace or source and updates or removes stale entries.
+For that same turn, Friday searches episodic Markdown with English terms and
+Chinese character pairs. At most three relevant entries are prepended to the
+user message and labelled as background evidence. This keeps recall in the
+append-only conversation body instead of inserting and later deleting a system
+message. The current user statement wins over recalled content.
 
-The main agent can promote a durable fact through the built-in `Memory` tool. People can inspect or manage the same store from the TUI:
+Memory is evidence from an earlier point in time, not authority over current
+state. Before relying on a remembered file, function, flag, date, or external
+resource, the Agent is instructed to check the current workspace or source.
+
+## Managing memory
+
+The built-in `Memory` tool is the Agent's memory interface; it does not invoke a
+second `friday` process. People can inspect the same store from the TUI:
 
 ```text
 /memory help
@@ -34,21 +61,41 @@ The main agent can promote a durable fact through the built-in `Memory` tool. Pe
 /memory consolidate --days 2
 ```
 
-`consolidate` reads recent episodes and existing permanent memory, makes one non-streaming LLM call, then applies only validated `merge` and `promote` operations. Promotion requires a combined count of at least two. Unknown, unsupported, transient, or single notes remain untouched. Entries are ordinary Markdown bullets; hidden HTML comments carry ids, sources, timestamps, and episode counts. Friday removes those comments from the model prefix.
+`consolidate` reads recent episodes and existing permanent memory, makes one
+non-streaming model call, then applies only validated `merge` and `promote`
+operations. Promotion requires a combined occurrence count of at least two.
+Unknown, unsupported, transient, or single notes remain untouched. Entries are
+ordinary Markdown bullets; hidden HTML comments carry ids, sources, timestamps,
+and episode counts, and are removed from the model-facing prefix.
 
-## Context Lifecycle
+Disabling the `memory` capability removes the Memory tool and also stops
+automatic capture and recall for subsequent public turns.
 
-`USER.md`, global memory, and project memory are loaded into a frozen system prefix at session start. A memory change is written to disk immediately but does not rewrite the active system message. The updated hot memory enters context on the next start, resume, or compact rebuild.
+## Context lifecycle
 
-The desktop app's **Settings > General** fields manage a marked profile block inside `USER.md` for the user's preferred name and Friday response language. **Settings > Memory** opens the bounded `USER.md` and global `MEMORY.md` files for explicit inspection and editing; project and episodic memory remain available through TUI `/memory`.
+The system prompt contains `USER.md`, global memory, and project memory. Friday
+builds it when a session is created and refreshes it before a new user turn,
+before an approval continuation, when plugins or the model are reloaded, and
+before a manual `/compact`. Automatic compaction inside an already running tool
+loop preserves the current system prefix rather than rereading memory files.
 
-`/compact` first gives Friday a chance to persist ordinary memory candidates as episodes, then rebuilds the live context from the fresh prefix, structured summary, the largest recent complete user-turn tail that fits (up to ten turns), and one current progress checkpoint. Only explicitly permanent requests bypass episodes. Compact summaries and temporary task progress are never stored as long-term memory.
+Compaction asks the summarizer for a `## Memory` section, removes that section
+from the live session summary, and reports its candidates in the compaction
+record. The current Harness does not persist those candidates. Durable writes
+come only from automatic user-message capture, the Memory tool, TUI memory
+commands, desktop memory settings, or consolidation. `/compact` by itself does
+not create long-term memory.
 
-Rule files:
+The desktop **Settings > General** fields manage a marked profile block inside
+`USER.md`. **Settings > Memory** edits bounded user and global memory; project
+and episodic memory remain available through `/memory`.
 
-- `~/.friday/AGENTS.md`: user-owned cross-project operating rules (language, toolchain, validation, and other do/don't preferences). Project rules override it.
-- `AGENTS.md`: project rules (root or nested); shared with any other agent that reads `AGENTS.md`.
+Rule files are separate from memory:
 
-System-owned behavior lives in bundled `RUNTIME.md` and `TOOL_GUIDANCE.md`; it is versioned with Friday rather than copied into user rules. Rules are not memory. Memory commands accept only fixed scopes and never edit rule, model, or permission files.
+- `~/.friday/AGENTS.md`: user-owned cross-project operating rules.
+- `AGENTS.md` and `.friday/AGENTS.md` from the workspace and its ancestors:
+  project rules loaded into the system prompt.
 
-Do not save secrets, command output, temporary conclusions, compact summaries, or transient task progress as memory. Reusable procedures belong in skills.
+System-owned behavior lives in bundled prompt files. Do not store credentials,
+command output, temporary conclusions, compact summaries, or transient task
+progress as durable memory. Reusable procedures belong in Skills.

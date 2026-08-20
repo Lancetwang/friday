@@ -65,7 +65,7 @@ friday run --trajectory C:\logs\trajectory.json -- "修复失败的测试"
 /compact
 /permission
 /fork
-/backward
+/branches
 ```
 
 项目状态保存在 `~/.friday/projects/<workspace-id>/`。全局配置、模型凭据、用户档案、记忆、规则和用户 Skill 位于 `~/.friday/`。

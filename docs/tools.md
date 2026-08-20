@@ -1,55 +1,116 @@
-# Tools
+# Tools and Permissions
 
-Friday keeps the tool surface small:
+The built-in capability packs expose this tool surface:
 
-- `Read`: read a continuous text page, or load a local image into a vision-capable model.
-- `Write`: create or overwrite a UTF-8 text file.
-- `Edit`: apply one or more exact, non-overlapping replacements in one call.
-- `Bash`: run shell commands in the workspace.
-- `Glob`: find files by path pattern.
-- `Grep`: search file contents by regex.
-- `WebSearch`: search the live web through a provider fallback chain when current external information is needed.
-- `WebFetch`: fetch a known URL as clean Markdown through Jina Reader.
-- `UpdatePlan`: maintain the visible objective and step status for non-trivial work in the current session.
+| Tool | Purpose |
+| --- | --- |
+| `Read` | Page through a UTF-8 text file or list a directory. |
+| `Write` | Create or replace a UTF-8 text file. |
+| `Edit` | Apply exact, non-overlapping text replacements. |
+| `Glob` | Find workspace files and directories by glob. |
+| `Grep` | Search workspace text files with a JavaScript regular expression. |
+| `Bash` | Run PowerShell on Windows or `/bin/bash -lc` elsewhere. |
+| `WebSearch` | Search through the configured Tavily/AnySearch fallback chain. |
+| `WebFetch` | Fetch a public URL as bounded Markdown through Jina Reader. |
+| `UpdatePlan` | Update the session's visible objective, steps, and next action. |
+| `Memory` | Inspect and change Friday's file-based durable memory. |
+| `Skill` | Read one discovered Skill or a resource inside that Skill. |
 
-`Read` follows the same useful ceiling as Pi: at most 2,000 lines or 50 KiB per call. A truncated result includes `next_start_line`; because the source file already contains the complete text, Friday does not create a duplicate artifact for reads.
+`workspace` is required. `web`, `memory`, and `skills` can be disabled; doing
+so removes their tools and any Harness hooks described in [Plugins](plugins.md).
 
-`Write` and `Edit` use atomic replacement and serialize concurrent changes to the same resolved path. `Edit` matches every replacement against the original file, rejects ambiguous or overlapping matches, and preserves its UTF-8 BOM and line-ending style.
+## File tools
 
-`Bash` runs PowerShell on Windows and `bash -lc` elsewhere. It streams a rolling output tail to interactive clients while running. Output is bounded at birth: up to 16,000 characters the tool result is complete; beyond that the result carries the true head and tail with a pointer, and the full stream (up to 2 MB) is saved under the session's tool-spill directory, which is readable by the agent - `Read` the pointer path (paged) when the middle matters. Because the conversation is append-only between compactions, what enters the context is never rewritten afterwards. A timeout terminates the whole spawned process tree so grandchildren cannot keep Friday blocked by inherited output pipes. Deleting a conversation removes its spill directory.
+`Read` accepts paths inside the workspace, user-selected attachment paths, and
+the active session's Friday-managed tool-spill directory. It resolves symlinks
+before checking the boundary. Arbitrary sibling directories and files such as
+`~/.friday/model-credentials.json` are not readable through this tool unless the
+user explicitly supplied the path as an attachment.
 
-Every Bash call passes a code-level pre-execution policy. Destructive system operations and explicit deny rules are rejected even in full-access mode. Other risky commands either suspend the Agent Loop for approval or, in `auto` mode, go to a separate tool-free reviewer that compares the current user request, command, workspace, and risk; reviewer failure denies safely. The TUI offers four manual decisions: approve once, approve without asking again in the active session, reject, or reject and tell Friday how to continue.
+One Read returns at most 2,000 lines and 50,000 characters. A truncated result
+contains `next_start_line`. Read treats files as UTF-8 text; it does not turn a
+local image into model vision input. Desktop images enter as user attachments
+and require a model profile marked vision-capable.
 
-Commands that send data off the machine (`curl`, `wget`, `scp`, `rsync`, `ssh`, `nc`, PowerShell's web cmdlets), install packages, read credential stores, rewrite history destructively, change file permissions, or install persistence all require approval. Reading a secret and piping it outward in one command is denied outright rather than offered for approval, because approving such a command is never the intent behind a legitimate request.
+`Write` and `Edit` resolve their targets inside the workspace, write by atomic
+replacement, and serialize concurrent changes to the same resolved file.
+`Edit` evaluates every replacement against the original file, rejects ambiguous
+or overlapping matches, and preserves a UTF-8 BOM and the existing line-ending
+style.
 
-Friday-managed API keys are read directly by their owning services and are never added to tool subprocess environments. Keys already exported in the user's shell are passed through unchanged, since the user put them there.
+`Glob` and `Grep` remain inside the workspace even when symlinks point outward.
+They skip `.git` and common generated directories unless the requested pattern
+explicitly names a generated directory. Long scans check cancellation while
+walking and reading files.
 
-## Threat model
+## Bash output and cancellation
 
-Friday is a local agent that acts with the privileges of the user who ran it. Two limits follow from that and are deliberate:
+Every Bash call starts in the workspace. The command itself is not path-
+confined: shell syntax and absolute paths can reach anything allowed to the
+launching user after permission preflight.
 
-- `Read` is not confined to the workspace and can reach any file the user can read, including `~/.friday/model-credentials.json`; `Glob` and `Grep` remain workspace searches. Confining `Read` would break ordinary work — reading a config in `~`, comparing against a sibling checkout — and would not contain an attacker who already has Bash.
-- Because reads are unconfined, the approval prompt on network egress is the control that matters. A prompt-injected instruction can get file contents into the model's context without asking, but it cannot move them off the machine without an approved `Bash` egress command or a `WebFetch` call.
+Each of the stdout and stderr streams is bounded separately before it enters
+the conversation:
 
-The practical consequence: treat an egress approval as approving the *contents of the current context*, not just the command. In `bypass` mode there is no such checkpoint, so use it only in workspaces whose inputs you trust.
+- a stream up to 16,000 characters is returned complete;
+- a larger stream returns its true first 8,000 and last 4,000 characters with an
+  omission notice;
+- when spill storage is available, Friday saves the combined streams up to
+  roughly 2,000,000 characters and returns a path the Agent can page with
+  `Read`.
 
-After a completed turn, Friday compares its existing checkpoint trees and attaches changed Markdown, text, image, PDF, JSON, CSV, and HTML files to that assistant reply. The desktop reads previews only through workspace-relative paths, renders HTML as source text, and rejects unsupported, escaped, missing, or over-25-MB files.
+Small outputs do not create spill files. Deleting a conversation removes its
+session spill directory.
 
-`WebSearch` uses Tavily first when it is configured, then falls back to AnySearch when Tavily is unconfigured or unavailable. Configure either key through **Settings > Web Search**, TUI `/search`, or an explicit process environment variable. Friday-managed keys are stored privately in `~/.friday/web-credentials.json` and are never returned to the UI.
-`WebFetch` works without a key through Jina Reader; set `JINA_API_KEY` for higher rate limits.
-They are Friday application tools, not part of `friday-agent-core`.
+The default timeout is 60 seconds and the accepted range is 1–600 seconds. A
+timeout asks the operating system to terminate the spawned process tree. Friday
+settles from process exit rather than waiting indefinitely for inherited output
+pipes, and uses a bounded grace after termination. Cancellation also races the
+tool promise itself, so a child that ignores the signal cannot keep the Agent
+turn waiting; an unkillable or detached process may remain outside Friday after
+the cancelled call has settled.
 
-`Read`, `Glob`, `Grep`, `WebSearch`, and `WebFetch` are read-only and may run concurrently when one model response requests several of them. `Write`, `Edit`, `Bash`, and `UpdatePlan` remain serial barriers. Agent Core uses at most four worker threads for each parallel batch and returns results in the model's original call order.
+## Concurrency
 
-Skill discovery and memory management are first-class Harness tools. `Skill` reads only a selected skill and its referenced resources; `Memory` manages durable facts without spawning another process. The Harness still performs automatic memory capture and recall in code.
+`Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, and `Skill` are marked
+parallel-safe. Core executes consecutive parallel calls with `Promise.all`, at
+most four at a time, and returns their results in model-call order. This is
+asynchronous I/O concurrency, not a pool of worker threads.
 
-## Web research contract
+`Write`, `Edit`, `Bash`, `UpdatePlan`, `Memory`, and tools without the parallel
+flag are serial barriers. Core flushes pending parallel work before a serial
+call and before returning the batch.
 
-Friday starts with one broad search and searches again only when a required fact or source is missing, exhaustive coverage was requested, a specific artifact must be read, or an important claim would otherwise be unsupported. Empty or suspiciously narrow results get one or two meaningful fallbacks. It does not repeat searches only to improve wording or add optional detail.
+## Bash permission policy
 
-Research answers cite retrieved sources next to the claims they support, distinguish inference from directly supported facts, report material conflicts, and narrow the answer instead of guessing when evidence is missing.
+Before Bash executes, the Harness applies hard denials and project permission
+rules, then the active mode:
 
-Persistent Bash policy lives in `~/.friday/projects/<workspace-id>/permissions.json`:
+- `manual`: dangerous commands pause the turn for a person to approve once,
+  allow for the active session, reject, or reject with guidance;
+- `auto`: dangerous commands go to a separate text-only model review; a missing,
+  failed, or negative review denies safely;
+- `bypass`: interactive approval is skipped, but hard denials and explicit deny
+  rules remain active. Use it only inside an isolated evaluator.
+
+The mode is gateway-wide and is read again for every Bash preflight. Changing
+it from the TUI or desktop while a request is running therefore governs that
+request's next Bash call; it does not retroactively change a call whose
+preflight already finished.
+
+Common network egress, credential-store access, package installation,
+destructive Git operations, permission changes, elevation, and persistence
+commands are classified as dangerous. Credential exfiltration, disk/boot
+operations, destructive system-root operations, encoded PowerShell, and common
+download-and-execute forms include hard-denied patterns. This is a practical
+command policy, not a complete shell sandbox; equivalent commands can be
+spelled in forms the pattern set does not recognize.
+
+Persistent Bash rules live at:
+
+```text
+~/.friday/projects/<workspace-id>/permissions.json
+```
 
 ```json
 {
@@ -61,3 +122,42 @@ Persistent Bash policy lives in `~/.friday/projects/<workspace-id>/permissions.j
   }
 }
 ```
+
+The Goal verifier receives a separate Bash preflight that rejects the normal
+dangerous set plus common Git, packaging, redirection, file-creation, and move
+commands. It still runs a real shell and is not an OS-enforced read-only
+environment.
+
+## Network and credentials
+
+`WebSearch` uses Tavily first when configured, then AnySearch when Tavily is
+unconfigured or unavailable. Configure keys in desktop **Settings > Web
+Search**, TUI `/search`, or explicit process environment variables. Friday-
+managed keys stay in `~/.friday/web-credentials.json`, are omitted from normal
+settings responses, and are returned only by the explicit reveal action. They
+are not injected into tool subprocess environments.
+
+`WebFetch` sends the requested public URL to Jina Reader and rejects loopback,
+private-network, and credential-bearing targets. It works without a key and
+sends `JINA_API_KEY` as a bearer credential when one is configured. WebSearch
+and WebFetch are network tools in their own right and do not pass through Bash
+approval. Retrieved content is untrusted model input.
+
+Model and web keys managed by Friday are read by their owning services. Process
+environment variables that the user exported before starting Friday remain
+part of Friday's inherited environment and therefore of Bash subprocesses.
+
+## Delivered artifacts
+
+When a turn materialized a checkpoint, Friday compares its before/after trees
+and attaches changed Markdown, text, image, PDF, JSON, CSV, and HTML files to
+the final assistant reply. The desktop loads previews only from workspace-
+relative paths, renders HTML as source text, and rejects escaped, missing,
+unsupported, or over-25-MB files.
+
+## Web research contract
+
+The bundled runtime prompt asks the Agent to begin with one broad search and to
+search again only when a required fact, source, or artifact is still missing.
+It also asks the Agent to cite retrieved sources for externally verifiable
+claims and distinguish inference from evidence.

@@ -31,9 +31,9 @@ Friday 在本地工作区内读取和编辑文件、执行命令、联网检索�
 ## 为什么选择 Friday
 
 - **桌面端与终端共用一个 Agent。** 日常工作使用原生桌面应用，在任意 Shell 中使用键盘优先的 TUI，或在隔离评测环境中运行 `friday run`。
-- **长任务有明确结构。** 持久会话、显式计划、可恢复进度、上下文压缩和独立验证 Loop 共同维持任务方向，同时保留可检查的状态变化。
+- **长任务有明确结构。** 持久会话、显式计划、可恢复进度、上下文压缩和 Goal Mode 的独立验证 Loop 共同维持任务方向，同时保留可检查的状态变化。
 - **本地状态可检查。** 项目状态存放在项目目录之外；凭据与会话、Trace 分离；UI 可以查看工具活动、用量、上下文压缩和验证证据。
-- **执行边界由程序保证。** 工作区隔离、危险命令硬拒绝、可配置审批、Secret 脱敏和只读验证工具由代码实施，而不只依赖提示词。
+- **执行边界由程序保证。** 工作区文件边界、危险命令硬拒绝、可配置审批、Secret 脱敏和验证器命令过滤由代码实施，而不只依赖提示词。
 - **Core 可以独立复用。** [`friday-agent-core`](https://www.npmjs.com/package/friday-agent-core) 是一个公开的小型模型/工具 Loop，不依赖 Friday 的 UI、持久化、记忆或产品逻辑。
 
 ## 安装
@@ -91,15 +91,15 @@ friday run --cwd /workspace --json --trajectory /logs/trajectory.json -- "完成
 
 ### 任务执行
 
-Friday 将受保护的模型/工具 Loop 与文件读取、搜索、编辑、Shell、联网检索、记忆、Skill 和计划工具组合在一起。只读工作可以并发执行，修改操作保持有序且可审计。
+Friday 将受保护的模型/工具 Loop 与文件读取、搜索、编辑、Shell、联网检索、记忆、Skill 和计划工具组合在一起。明确标记为可并发的工具可以并行执行；内置修改操作保持有序且可审计。
 
 ### 上下文、记忆与 Skill
 
-稳定指令位于动态状态之前，以利用供应商的 Prefix Cache。对话增长后，Friday 会先压缩工具结果，再重写较早的对话，同时保留完整的近期 Turn。长期事实、项目知识、情景记忆和当前任务进度彼此分离；Skill 先通过精简元数据发现，只在选中后加载正文与引用资源。
+稳定指令位于动态状态之前，以利用供应商的 Prefix Cache。当模型上下文达到配置窗口的 85% 时，Friday 会用结构化摘要替换较早的对话，并在目标预算内重放尽可能大的完整近期尾部；即使目标无法满足，也会保留最小近期尾部。UI、Resume 和 Fork 仍保留完整会话。长期事实、项目知识、情景记忆和当前任务进度彼此分离；Skill 先通过精简元数据发现，只在选中后加载正文与引用资源。
 
 ### 验证与恢复
 
-Goal Mode 使用独立验证器检查交付物，并能把具体失败反馈给下一次尝试。Turn 检查点可以同时恢复被修改的文件、对话边界和任务进度，不改动项目自身的 Git 历史或 Index。
+Goal Mode 使用独立验证器检查交付物，并能把具体失败反馈给下一次尝试。修改型 Turn 在执行前物化的检查点可以同时恢复被修改的文件、对话边界和任务进度，不改动项目自身的 Git 历史或 Index。
 
 ### 可观测性
 
@@ -117,7 +117,7 @@ flowchart TB
     end
     Surfaces --> Gateway["Gateway — NDJSON JSON-RPC"]
     Gateway --> Session["会话 — 统一 Turn 框架：<br/>检查点 · 审批 · 压缩 · Goal 验证"]
-    subgraph Registry["插件注册表 — 核心循环之外的一切"]
+    subgraph Registry["能力注册表 — 工具与提示词片段"]
         direction LR
         Workspace["workspace*<br/>文件 · Shell · 计划"]
         Web["web<br/>搜索 · 抓取"]
@@ -126,7 +126,7 @@ flowchart TB
         External["你的插件<br/>.friday/plugins"]
     end
     Registry -- "工具 + 提示段" --> Session
-    Session --> Core["Core — 完整运行时：<br/>带守护的 模型 ⇄ 工具 循环"]
+    Session --> Core["Core — 可复用运行时：<br/>带守护的 模型 ⇄ 工具 循环"]
     Core --> Providers["模型供应商<br/>Anthropic · OpenAI · 兼容端点"]
 ```
 

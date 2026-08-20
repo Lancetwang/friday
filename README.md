@@ -31,9 +31,9 @@ Local-first does not mean offline: model requests and enabled web tools send the
 ## Why Friday
 
 - **One agent across desktop and terminal.** Use a native desktop app for daily work, a keyboard-first TUI in any shell, or `friday run` in an isolated evaluator.
-- **Long tasks have structure.** Persistent sessions, explicit plans, resumable progress, context compaction, and an independent verification loop keep work moving without hiding the state transition.
+- **Long tasks have structure.** Persistent sessions, explicit plans, resumable progress, context compaction, and Goal mode's independent verification loop keep work moving without hiding the state transition.
 - **Local state is inspectable.** Project data is stored outside the project tree, credentials are separated from sessions and traces, and the UI exposes tool activity, usage, compaction, and verification evidence.
-- **Execution has enforceable boundaries.** Workspace containment, hard command denials, configurable approvals, secret redaction, and read-only verifier tools are implemented in code rather than left to prompting alone.
+- **Execution has enforceable boundaries.** Workspace-scoped file tools, hard command denials, configurable approvals, secret redaction, and verifier command filtering are implemented in code rather than left only to prompting.
 - **The core is reusable.** [`friday-agent-core`](https://www.npmjs.com/package/friday-agent-core) is a small public model/tool loop with no Friday UI, persistence, memory, or product dependencies.
 
 ## Install
@@ -91,15 +91,15 @@ friday run --cwd /workspace --json --trajectory /logs/trajectory.json -- "Comple
 
 ### Task execution
 
-Friday combines a guarded model/tool loop with workspace tools for reading, searching, editing, shell execution, web research, memory, skills, and planning. Read-only work can execute concurrently; mutations remain ordered and auditable.
+Friday combines a guarded model/tool loop with workspace tools for reading, searching, editing, shell execution, web research, memory, skills, and planning. Tools explicitly marked parallel-safe can execute concurrently; built-in mutations remain ordered and auditable.
 
 ### Context, memory, and skills
 
-Stable instructions precede volatile state for provider prefix caching. When a conversation grows, Friday first compacts tool results and then rewrites older dialogue while preserving a complete recent tail. Durable facts, project knowledge, episodic recall, and live task progress are stored separately. Skills are discovered from compact metadata and loaded only when selected.
+Stable instructions precede volatile state for provider prefix caching. When the model context reaches 85% of its configured window, Friday replaces older dialogue with a structured summary and replays the largest complete recent tail within its target, retaining a minimum tail even if the target cannot be met; the full conversation remains available to the UI, resume, and forks. Durable facts, project knowledge, episodic recall, and live task progress are stored separately. Skills are discovered from compact metadata and loaded only when selected.
 
 ### Verification and recovery
 
-Goal mode checks the deliverable through a separate verifier and can feed concrete failures back into another attempt. Turn checkpoints can restore changed files together with the conversation boundary and task progress without modifying the project's Git history or index.
+Goal mode checks the deliverable through a separate verifier and can feed concrete failures back into another attempt. Checkpoints materialized before a mutating turn can restore changed files together with the conversation boundary and task progress without modifying the project's Git history or index.
 
 ### Observability
 
@@ -117,7 +117,7 @@ flowchart TB
     end
     Surfaces --> Gateway["Gateway — NDJSON JSON-RPC"]
     Gateway --> Session["Session — one turn frame:<br/>checkpoints · approvals · compaction · goal verification"]
-    subgraph Registry["Plugin registry — everything outside the core loop"]
+    subgraph Registry["Capability registry — tools and prompt sections"]
         direction LR
         Workspace["workspace*<br/>files · shell · plan"]
         Web["web<br/>search · fetch"]
@@ -126,7 +126,7 @@ flowchart TB
         External["your plugins<br/>.friday/plugins"]
     end
     Registry -- "tools + prompt sections" --> Session
-    Session --> Core["Core — the whole runtime:<br/>model ⇄ tools loop, guarded"]
+    Session --> Core["Core — reusable runtime:<br/>guarded model ⇄ tools loop"]
     Core --> Providers["Model providers<br/>Anthropic · OpenAI · compatible"]
 ```
 

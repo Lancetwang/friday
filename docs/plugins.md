@@ -1,12 +1,17 @@
 # Plugins
 
-Friday's runtime core is a guarded model → tools → model loop and nothing
-else. **Everything outside that loop is a plugin**, including the
-capabilities Friday ships with: there is one registry, and the only two seams
-any capability can use - the tool list the loop receives and the system
-prompt the session composes - are the same for built-in and user code. The
-difference between "shipped with Friday" and "added by you" is packaging,
-not architecture.
+Friday's reusable Core accepts a model, a tool list, and a `RunContext`, then
+runs the guarded model → tools → model loop. The Harness has one capability
+registry for the tools and prompt sections supplied to that loop. Friday's
+built-in capability packs and external plugins both participate in that
+registry.
+
+The registry is deliberately narrower than the Harness itself. Sessions,
+permissions, compaction, checkpoints, traces, memory recall/capture, and Goal
+verification remain Harness services. A built-in pack can act as a feature
+gate for those services - disabling `memory`, for example, also disables the
+Harness's recall and capture hooks. The public external-plugin contract does
+not expose arbitrary session-lifecycle hooks.
 
 ## The built-in plugins
 
@@ -29,13 +34,19 @@ tools, disabled state, and any errors.
   project's config.json, or `FRIDAY_DISABLED_PLUGINS=web,memory` in the
   environment.
 
-All three drive the same switch (the UI toggle persists into
-`disabled_plugins` and applies immediately). Disabling is real, not
-cosmetic: a disabled `memory` removes the Memory tool *and* stops
-recall/capture in every turn; a disabled `web` or `skills` disappears from
-the agent, the prompt, and the Goal-mode verifier. The required `workspace`
-pack refuses and records why. `FRIDAY_DISABLE_PLUGINS=1` (singular) skips
-external plugin code entirely - the right default for hermetic evaluation
+The effective disabled set is the union of both JSON layers and the environment
+list. A UI toggle persists the choice in JSON, then reloads the active session;
+Friday rejects the change until all requests in that gateway are idle.
+Only that active session is rebuilt. Other cached sessions and other gateway
+processes keep their assembled registry until a later toggle rebuilds them or
+they are recreated. An environment-disabled plugin cannot be re-enabled from a
+UI running in that environment.
+
+Disabling is real, not cosmetic: a disabled `memory` removes the Memory tool
+*and* stops recall/capture in subsequent public turns; a disabled `web` or `skills`
+disappears from the agent, the prompt, and the Goal-mode verifier. The required
+`workspace` pack refuses and records why. `FRIDAY_DISABLE_PLUGINS=1` (singular)
+skips external plugin code entirely - the right default for hermetic evaluation
 runs.
 
 ## Writing an external plugin
@@ -49,8 +60,7 @@ export default {
   version: '1.0.0',
   description: 'Looks tickets up in the local tracker.',
 
-  // Optional. A string, or a function re-evaluated on every prompt rebuild
-  // (that is how the built-in skills plugin keeps its routing list fresh).
+  // Optional. A string, or a function re-evaluated on every prompt rebuild.
   // Rendered as `## Plugin: ticket-lookup` after Friday's own rules.
   instructions: 'Use the Ticket tool whenever the user names a ticket id.',
 
@@ -90,12 +100,13 @@ export default {
 
 | Scope | Directory |
 | --- | --- |
-| Project | `<workspace>/.friday/plugins/*.mjs` |
-| User | `~/.friday/plugins/*.mjs` |
+| Project | `<workspace>/.friday/plugins/*.mjs` or `*.js` |
+| User | `~/.friday/plugins/*.mjs` or `*.js` |
 
-Project plugins shadow user plugins with the same name. Files are re-imported
-when a new session starts, so editing a plugin takes effect with `/new` - no
-gateway restart needed.
+Files with either extension must contain an ES module. Project plugins shadow
+user plugins with the same name. Files are re-imported when a new session
+starts, so editing a plugin takes effect with `/new` - no gateway restart
+needed.
 
 ## Rules the host enforces
 
@@ -106,13 +117,18 @@ gateway restart needed.
 - **Wrappers must be transparent.** `wrapTool` must return a tool with the
   same name, description, and parameters object; anything else is discarded
   and recorded. Middleware may observe and veto, not impersonate.
-- **A broken plugin never breaks Friday.** Import errors, invalid exports,
-  and thrown factories are captured per plugin; the session starts without
-  the broken parts.
+- **Load failures are isolated.** Import errors, invalid exports, and thrown
+  factories are captured per plugin; the session starts without the broken
+  parts. Plugins are still trusted process-local code, so this is not
+  protection against a module that blocks or terminates the process.
 - **The verifier assembles from built-ins only.** Goal-mode verification uses
-  the read-only tools each built-in pack declares (checked loudly at build
-  time), never external plugin code - verification cannot be steered by the
-  code it is checking. The user's disabled list is honored there too.
+  only the tool names the host declares for built-in packs, never external
+  plugin code. Missing declarations fail when the verifier tools are assembled.
+  The user's disabled list is honored there too. Its Bash tool has an extra
+  mutation filter, but this is command screening rather than an OS sandbox.
+- **External modules cannot claim host privileges.** `required` and
+  `verifierTools` are stripped while loading external plugins; only the host
+  can make a pack mandatory or expose tools to the verifier.
 - **Prompt position is fixed.** Capability and plugin sections render after
   Friday's security, runtime, and user rule sections and before the
   environment. They can guide tool choice; they cannot outrank the security
