@@ -119,7 +119,25 @@ jobs:
       - run: npm ci --prefix ui-desktop
       - run: npm run sidecar
       - name: Build desktop installer
+        if: runner.os != 'macOS'
         run: npm run tauri --prefix ui-desktop -- build --bundles ${{ matrix.bundle }} --verbose
+      - name: Build desktop installer (retry transient macOS disk-image failures)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npm run tauri --prefix ui-desktop -- build --bundles "${{ matrix.bundle }}" --verbose; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            echo "::warning::DMG build attempt $attempt failed; detaching stale Friday images before retrying"
+            hdiutil info | awk '/\/Volumes\/Friday/ { print $1 }' | while read -r device; do
+              hdiutil detach "$device" -force || true
+            done
+            sleep $((attempt * 5))
+          done
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
