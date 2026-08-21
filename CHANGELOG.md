@@ -2,6 +2,21 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.8.3 (2026-08-21)
+
+### Added
+- Memory and context compaction are now first-class Harness plugin services alongside tools, prompt sections, and transparent tool wrappers. Each service has one visible owner, conflicting providers fail loudly, and replacing a built-in requires explicitly disabling it; Agent Core remains unaware of Friday plugins, persistence, memory, and compaction policy.
+- Context compaction is configurable from both product surfaces: the TUI adds `/compaction`, while desktop Settings adds the same automatic/manual policy, integer threshold from 50% through 95%, insert or two-stage strategy, and a direct **Compact now** action.
+- The optional two-stage strategy replaces sufficiently old tool results with deterministic receipts before semantic compaction. It protects the latest three tool batches, preserves exact outputs for UI history, resume, and forks, and commits transactionally only when the receipts reach the target headroom; otherwise the original context is restored before insert-and-compact runs.
+
+### Changed
+- The memory switch now owns the complete model-facing memory behavior: its tool, durable prompt section, per-public-turn recall and capture, and model-backed consolidation all leave together. Disabling it is prospective and non-destructive, so stored files, administrative access, and recall already embedded in conversation history remain intact; an external provider can then take over the same turn boundary.
+- Memory guidance moved into the memory plugin's own prompt asset, and internal `friday-memory` bookkeeping comments are filtered from the model-facing durable-memory prefix.
+
+### Fixed
+- Harness remeasures every compactor's output and retains the final context-window guard, so an external provider cannot bypass occupancy safety with an incorrect receipt. Compaction events are normalized across built-in and external implementations for identical TUI, desktop, resume, and trace behavior.
+- Documentation now describes the actual plugin ownership, disable semantics, compaction defaults and thresholds, tool-receipt rollback, and the distinct TUI and desktop manual controls.
+
 ## v0.8.2 (2026-08-17)
 
 ### Changed
