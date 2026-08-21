@@ -3,8 +3,18 @@ import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
+import type {
+  CompactionSettings,
+  DiscoveredModel,
+  ModelCatalog,
+  ModelProfile,
+  ModelProvider
+} from 'friday-agent-protocol'
+
 import { writeJsonAtomic } from './storage.js'
 import { localTimestamp } from './time.js'
+
+export type { CompactionSettings, DiscoveredModel, ModelCatalog, ModelProfile, ModelProvider } from 'friday-agent-protocol'
 
 export type ModelConfig = {
   profileId: string
@@ -12,16 +22,11 @@ export type ModelConfig = {
   provider: string
   model: string
   baseUrl: string
-  vision: boolean
+  /** Advisory positive hint; the provider remains the authority for images. */
+  vision?: boolean
   contextWindow: number
   maxOutputTokens: number
   apiKey: string
-}
-
-export type CompactionSettings = {
-  automatic: boolean
-  threshold_percent: number
-  strategy: 'insert' | 'two-stage'
 }
 
 type StoredProfile = {
@@ -37,49 +42,17 @@ type StoredProfile = {
   auto?: unknown
 }
 
-export type ModelProfile = {
-  id: string
-  name: string
-  provider: string
-  model: string
-  base_url: string
-  vision: boolean
-  context_window: number
-  max_output_tokens: number
-  run_token_budget: number
-  api_key_configured: boolean
-  enabled: boolean
-  auto?: boolean
-}
-
-export type ModelProvider = {
-  id: string
-  label: string
-  builtin: boolean
-  base_url: string
-  models: Array<{ id: string; vision: boolean }>
-  api_key_configured: boolean
-  enabled: boolean
-}
-
-export type ModelCatalog = {
-  active: string
-  disabled: string[]
-  profiles: ModelProfile[]
-  providers: ModelProvider[]
-}
-
 type ProviderDefinition = Omit<ModelProvider, 'api_key_configured' | 'enabled'>
 type ValidProfile = Omit<ModelProfile, 'api_key_configured' | 'enabled'>
 
 const PROVIDERS: readonly ProviderDefinition[] = [
   {
     id: 'deepseek', label: 'DeepSeek', builtin: true, base_url: 'https://api.deepseek.com',
-    models: [{ id: 'deepseek-v4-flash', vision: false }, { id: 'deepseek-v4-pro', vision: false }]
+    models: [{ id: 'deepseek-v4-flash' }, { id: 'deepseek-v4-pro' }]
   },
   {
     id: 'mimo', label: 'Xiaomi MiMo', builtin: true, base_url: 'https://api.xiaomimimo.com/v1',
-    models: [{ id: 'mimo-v2.5', vision: true }, { id: 'mimo-v2.5-pro', vision: false }]
+    models: [{ id: 'mimo-v2.5', vision: true }, { id: 'mimo-v2.5-pro' }]
   },
   {
     id: 'openai', label: 'OpenAI', builtin: true, base_url: 'https://api.openai.com/v1',
@@ -98,7 +71,7 @@ const PROVIDERS: readonly ProviderDefinition[] = [
       ['mimo-v2.5-pro', false], ['minimax-m3', true], ['minimax-m2.7', false],
       ['minimax-m2.5', false], ['qwen3.8-max', true], ['qwen3.7-max', false],
       ['qwen3.7-plus', true], ['qwen3.6-plus', true], ['hy3', false]
-    ].map(([id, vision]) => ({ id: String(id), vision: Boolean(vision) }))
+    ].map(([id, vision]) => ({ id: String(id), ...(vision ? { vision: true } : {}) }))
   },
   { id: 'openai-compatible', label: 'OpenAI Compatible', builtin: false, base_url: '', models: [] }
 ]
@@ -131,7 +104,7 @@ export function loadModelConfig(workspace: string, requestedProfile?: string): M
     provider: profile.provider,
     model: profile.model,
     baseUrl: profile.base_url,
-    vision: profile.vision === true,
+    ...(profile.vision === true ? { vision: true } : {}),
     contextWindow: profile.context_window,
     maxOutputTokens: profile.max_output_tokens,
     apiKey: text(credentials[profile.id], providerKey(profile.provider))
@@ -202,7 +175,7 @@ export async function saveModelProfile(
       else profiles[index] = profile
     }
     if (provider.builtin && key) {
-      let models: string[] | undefined
+      let models: DiscoveredModel[] | undefined
       try {
         models = await fetchProviderModels(provider.id, provider.base_url, key)
       } catch (error) {
@@ -341,19 +314,20 @@ export async function refreshModelProfiles(
     const key = readModelCredential(workspace, provider, profile)
     if (!key) throw new Error('Add an API key before refreshing models.')
     const baseUrl = selected?.base_url || definition.base_url
-    const models = await fetchProviderModels(definition.id, baseUrl, key)
+    const discovered = await fetchProviderModels(definition.id, baseUrl, key)
+    const models = discovered.map(model => model.id)
     if (profile) return { catalog, models }
     if (!definition.builtin) throw new Error(`Unknown built-in model provider: ${provider}`)
     const base = baseConfig(workspace)
     const synced = syncBuiltin(
-      definition, models, catalog.profiles.map(storedProfile), base, credentialsObject(), key
+      definition, discovered, catalog.profiles.map(storedProfile), base, credentialsObject(), key
     )
     await writeModelState(catalog.active, synced.profiles, new Set(catalog.disabled), synced.credentials)
     return { catalog: loadModelCatalog(workspace), models }
   })
 }
 
-export async function fetchProviderModels(provider: string, baseUrl: string, apiKey: string): Promise<string[]> {
+export async function fetchProviderModels(provider: string, baseUrl: string, apiKey: string): Promise<DiscoveredModel[]> {
   const anthropic = provider === 'anthropic'
   const base = baseUrl.replace(/\/$/, '')
   const endpoint = anthropic
@@ -373,7 +347,15 @@ export async function fetchProviderModels(provider: string, baseUrl: string, api
   if (!response.ok) throw new Error(`Could not list models from ${provider} (HTTP ${response.status}).`)
   const value: unknown = await response.json()
   if (!isObject(value) || !Array.isArray(value.data)) throw new Error(`Invalid model list returned by ${provider}.`)
-  return [...new Set(value.data.flatMap(item => isObject(item) && typeof item.id === 'string' ? [item.id] : []))].sort()
+  const models = new Map<string, DiscoveredModel>()
+  for (const item of value.data) {
+    if (!isObject(item) || typeof item.id !== 'string' || !item.id.trim()) continue
+    const id = item.id.trim()
+    const vision = discoveredVision(item)
+    const existing = models.get(id)
+    if (!existing || vision) models.set(id, { id, ...(vision ? { vision: true } : {}) })
+  }
+  return [...models.values()].sort((left, right) => left.id.localeCompare(right.id))
 }
 
 export function projectStateDir(workspace: string): string {
@@ -545,13 +527,14 @@ function validateProfile(value: StoredProfile | Record<string, unknown>, base: t
   const maxOutputTokens = positive(value.max_output_tokens, base.max_output_tokens)
   const runTokenBudget = positive(value.run_token_budget, base.run_token_budget)
   if (maxOutputTokens > contextWindow) throw new Error('Maximum output tokens cannot exceed the context window.')
+  const vision = value.vision === true || supportsVision(provider, model) === true
   return {
     id,
     name,
     provider,
     model,
     base_url: baseUrl,
-    vision: typeof value.vision === 'boolean' ? value.vision : supportsVision(provider, model),
+    ...(vision ? { vision: true } : {}),
     context_window: contextWindow === 353_000 ? base.context_window : contextWindow,
     max_output_tokens: maxOutputTokens,
     run_token_budget: runTokenBudget,
@@ -566,25 +549,35 @@ function defaultProfile(base: typeof DEFAULTS): ValidProfile {
 
 function syncBuiltin(
   provider: ProviderDefinition,
-  modelIds: string[] | undefined,
+  modelIds: DiscoveredModel[] | undefined,
   profiles: ValidProfile[],
   base: typeof DEFAULTS,
   credentials: Record<string, string>,
   apiKey: string
 ): { profiles: ValidProfile[]; credentials: Record<string, string> } {
-  const served = [...new Set(modelIds ?? provider.models.map(model => model.id))].sort()
+  const served = [...new Map((modelIds ?? provider.models).map(model => [model.id, model])).values()]
+    .sort((left, right) => left.id.localeCompare(right.id))
   const removed = profiles.filter(profile => profile.auto && profile.provider === provider.id)
   const next = profiles.filter(profile => !(profile.auto && profile.provider === provider.id))
   for (const profile of removed) delete credentials[profile.id]
-  for (const model of served) {
+  for (const discovered of served) {
+    const model = discovered.id
+    const vision = discovered.vision === true || supportsVision(provider.id, model) === true
     let profile = next.find(item => item.provider === provider.id && item.model === model)
     if (profile) {
-      profile = { ...profile, auto: true, name: model, base_url: provider.base_url, vision: supportsVision(provider.id, model) }
+      const { vision: _oldVision, ...rest } = profile
+      profile = {
+        ...rest,
+        auto: true,
+        name: model,
+        base_url: provider.base_url,
+        ...(vision ? { vision: true } : {})
+      }
       next[next.findIndex(item => item.id === profile!.id)] = profile
     } else {
       profile = validateProfile({
         id: profileId(`${provider.id}-${model}`), name: model, provider: provider.id, model,
-        base_url: provider.base_url, auto: true
+        base_url: provider.base_url, auto: true, ...(vision ? { vision: true } : {})
       }, base)
       next.push(profile)
     }
@@ -647,14 +640,48 @@ function profileId(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
-function supportsVision(provider: string, model: string): boolean {
+function supportsVision(provider: string, model: string): true | undefined {
   const known = providerDefinition(provider).models.find(item => item.id === model)
-  if (known) return known.vision
+  if (known?.vision === true) return true
   const lower = model.toLowerCase()
-  if (provider === 'anthropic') return lower.startsWith('claude-')
-  if (provider === 'mimo') return lower === 'mimo-v2.5'
-  if (provider === 'openai') return /^(gpt-4o|gpt-4\.1|gpt-5)/.test(lower)
-  return false
+  if (provider === 'anthropic' && lower.startsWith('claude-')) return true
+  if (provider === 'mimo' && lower === 'mimo-v2.5') return true
+  if (provider === 'openai' && /^(gpt-4o|gpt-4\.1|gpt-5)/.test(lower)) return true
+  if (/(^|[-_.])(vision|vl\d*|omni|image|ocr)([-_.]|$)/.test(lower)) return true
+  return undefined
+}
+
+/**
+ * Provider catalogs have no common capability schema. Accept positive image
+ * evidence from the shapes used by common OpenAI-compatible catalogs, but do
+ * not turn an absent (or stale negative) field into a local rejection. The
+ * provider is the only reliable authority for a newly released model.
+ */
+function discoveredVision(model: Record<string, unknown>): true | undefined {
+  const architecture = isObject(model.architecture) ? model.architecture : undefined
+  const capabilities = isObject(model.capabilities) ? model.capabilities : undefined
+  if (
+    model.vision === true
+    || model.supports_vision === true
+    || model.supports_image_input === true
+    || capabilities?.vision === true
+    || capabilities?.image === true
+  ) return true
+
+  const modalities = [
+    model.input_modalities,
+    model.supported_input_modalities,
+    model.modalities,
+    Array.isArray(model.capabilities) ? model.capabilities : undefined,
+    architecture?.input_modalities,
+    architecture?.modalities
+  ]
+  for (const values of modalities) {
+    if (Array.isArray(values) && values.some(value => /^(image|vision)$/i.test(String(value)))) return true
+  }
+
+  const modality = typeof architecture?.modality === 'string' ? architecture.modality.split('->')[0] ?? '' : ''
+  return /(^|[+,/\s])(image|vision)([+,/\s]|$)/i.test(modality) ? true : undefined
 }
 
 function validateUrl(value: string): void {

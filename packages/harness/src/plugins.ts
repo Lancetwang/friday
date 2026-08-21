@@ -2,10 +2,29 @@ import { readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import type { JsonObject, Tool } from 'friday-agent-core'
+import type { Tool } from 'friday-agent-core'
+import type { PluginInfo } from 'friday-agent-protocol'
 
 import { fridayHome } from './config.js'
-import type { ContextCompactor } from './context.js'
+import type {
+  ContextCompactor,
+  FridayPlugin,
+  MemoryProvider,
+  PluginApi
+} from './plugin-api.js'
+
+export type {
+  CompactionRequest,
+  CompactionResult,
+  ContextCompaction,
+  ContextCompactor,
+  FridayPlugin,
+  MemoryPreparation,
+  MemoryProvider,
+  PluginApi,
+  PluginCompactionSettings,
+  PluginModelConfig
+} from './plugin-api.js'
 
 /**
  * Friday's extensible Harness capabilities share one registry. The built-in
@@ -35,44 +54,7 @@ import type { ContextCompactor } from './context.js'
  * their declared read-only tools, so verification cannot be steered by the
  * code it is checking.
  */
-export type PluginApi = {
-  workspace: string
-}
-
-export type MemoryPreparation = { recall?: string; capture?: JsonObject }
-
-export type MemoryProvider = {
-  prepare(request: { workspace: string; sessionId: string; text: string }): Promise<MemoryPreparation>
-  consolidate?(request: {
-    workspace: string
-    days: number
-    signal: AbortSignal
-    review(payload: JsonObject): Promise<unknown>
-  }): Promise<Record<string, unknown>>
-}
-
-export type FridayPluginModule = {
-  name: string
-  version?: string
-  description?: string
-  /**
-   * A system prompt section. A function is re-evaluated every time the
-   * prompt is rebuilt, so a plugin can reflect current on-disk state - the
-   * built-in skills plugin uses this to keep its routing list fresh.
-   */
-  instructions?: string | ((api: PluginApi) => string)
-  /** Extra tools for the agent. Names already registered win collisions. */
-  tools?: (api: PluginApi) => Tool[]
-  /**
-   * Middleware over every assembled tool. The wrapper must preserve the
-   * tool's name and schema; a wrapper that changes either is discarded and
-   * recorded as a plugin error.
-   */
-  wrapTool?: (api: PluginApi, tool: Tool) => Tool
-  /** Optional singleton service for per-turn recall/capture and consolidation. */
-  memory?: MemoryProvider
-  /** Optional singleton Harness service for model-context compaction. */
-  compact?: ContextCompactor
+type HostPlugin = FridayPlugin & {
   /** Built-in only: the plugin cannot be disabled (the workspace tools). */
   required?: boolean
   /** Built-in only: tool names safe for the read-only Goal verifier. */
@@ -88,11 +70,11 @@ export type LoadedPlugin = {
   disabled: boolean
   toolNames: string[]
   errors: string[]
-  module: FridayPluginModule | undefined
+  module: HostPlugin | undefined
 }
 
 /** Wrap a built-in capability module as a registered plugin. */
-export function builtinPlugin(module: FridayPluginModule): LoadedPlugin {
+export function builtinPlugin(module: HostPlugin): LoadedPlugin {
   return {
     name: module.name,
     version: module.version ?? '',
@@ -160,7 +142,7 @@ async function loadPlugin(source: string, scope: 'project' | 'user'): Promise<Lo
     const imported: unknown = await import(`${pathToFileURL(source).href}?mtime=${stamp}`)
     const module = (imported as { default?: unknown }).default
     if (!module || typeof module !== 'object') throw new Error('default export must be a plugin object')
-    const plugin = module as Partial<FridayPluginModule>
+    const plugin = module as Partial<HostPlugin>
     if (typeof plugin.name !== 'string' || !plugin.name.trim()) throw new Error('plugin.name must be a non-empty string')
     if (plugin.tools !== undefined && typeof plugin.tools !== 'function') throw new Error('plugin.tools must be a function returning tools')
     if (plugin.wrapTool !== undefined && typeof plugin.wrapTool !== 'function') throw new Error('plugin.wrapTool must be a function')
@@ -178,7 +160,7 @@ async function loadPlugin(source: string, scope: 'project' | 'user'): Promise<Lo
     entry.description = typeof plugin.description === 'string' ? plugin.description : ''
     // `required` and `verifierTools` are host guarantees, not plugin claims.
     const { required: _required, verifierTools: _verifier, ...kept } = plugin
-    entry.module = kept as FridayPluginModule
+    entry.module = kept as HostPlugin
   } catch (error) {
     entry.errors.push(error instanceof Error ? error.message : String(error))
   }
@@ -318,7 +300,7 @@ export function assembleCompactor(plugins: LoadedPlugin[]): RegisteredCompactor 
 }
 
 /** Metadata for the gateway and UIs; the live module stays private. */
-export function pluginInfo(plugins: LoadedPlugin[]): Array<Record<string, unknown>> {
+export function pluginInfo(plugins: LoadedPlugin[]): PluginInfo[] {
   return plugins.map(plugin => ({
     name: plugin.name,
     version: plugin.version,

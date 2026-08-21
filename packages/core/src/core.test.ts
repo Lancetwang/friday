@@ -4,6 +4,7 @@ import { test } from 'node:test'
 
 import { Agent } from './agent.js'
 import { AnthropicModel } from './anthropic.js'
+import { ModelRequestError } from './errors.js'
 import { OpenAIModel } from './openai.js'
 import { ResponsesModel } from './responses.js'
 import { ToolExecutor } from './tools.js'
@@ -440,6 +441,26 @@ test('a tool that ignores its abort signal cannot hold the turn hostage', async 
   assert.equal(result.isError, true)
   assert.match(result.content, /AbortError/)
   assert(performance.now() - started < 2_000)
+})
+
+test('provider HTTP failures expose structured status and detail to callers', async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(400, { 'content-type': 'application/json' })
+    response.end('{"error":"upstream-private-detail: image input is unsupported"}')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  try {
+    const model = new OpenAIModel({ apiKey: 'test', model: 'text-only', baseUrl: `http://127.0.0.1:${address.port}` })
+    const error = await model.complete({ messages: [{ role: 'user', content: 'hello' }] }).catch(value => value as unknown)
+    assert(error instanceof ModelRequestError)
+    assert.equal(error.status, 400)
+    assert.match(error.detail, /upstream-private-detail/)
+    assert.match(error.message, /upstream-private-detail/)
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  }
 })
 
 function call(name: string, index: number): ToolCall {

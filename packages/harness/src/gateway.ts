@@ -3,6 +3,13 @@ import { createInterface } from 'node:readline'
 import { pathToFileURL } from 'node:url'
 
 import type { AgentEvent } from 'friday-agent-core'
+import type {
+  ApprovalInfo,
+  ArtifactInfo,
+  GatewayEvent,
+  MessageMetrics,
+  VerificationResult
+} from 'friday-agent-protocol'
 
 import {
   clearModelCredential,
@@ -39,8 +46,9 @@ import { checkpointChoices, restoreCheckpoint } from './checkpoint.js'
 import { artifactDetail } from './artifacts.js'
 import { formatMemoryResult, runMemoryCommand } from './memory.js'
 import { startTraceServer, stopTraceServer, type TraceServer } from './trace.js'
-import { imageUrls, localAttachments } from './attachments.js'
+import { imageUrls, prepareLocalAttachments } from './attachments.js'
 import { resetFriday } from './reset.js'
+import { ImageInputRejectedError } from './model-errors.js'
 import {
   loadUserProfile,
   loadWebSearchSettings,
@@ -52,6 +60,10 @@ import {
 } from './settings.js'
 
 type Request = { id?: unknown; method?: unknown; params?: Record<string, unknown> }
+type GatewayPayload<Type extends GatewayEvent['type'], Event = GatewayEvent> =
+  Event extends { type: infer EventType; payload: infer Payload }
+    ? Type extends EventType ? Payload : never
+    : never
 
 const MAX_CACHED_SESSIONS = 8
 
@@ -157,6 +169,7 @@ export class Gateway {
       else if (method === 'skill.list') this.ok(id, { skills: discoverSkills(this.workspace) })
       else if (method === 'skill.get') this.ok(id, skillDetail(this.workspace, String(params.path || '')))
       else if (method === 'artifact.get') this.ok(id, await artifactDetail(this.workspace, String(params.path || '')))
+      else if (method === 'attachment.prepare') this.ok(id, await prepareLocalAttachments(params.attachments))
       else if (method === 'model.list') this.ok(id, modelCatalog(this.workspace))
       else if (method === 'projects.list') this.ok(id, { projects: listProjects(true) })
       else if (method === 'projects.close') {
@@ -273,8 +286,9 @@ export class Gateway {
         const text = typeof params.text === 'string' ? params.text.trim() : ''
         if (!text) throw new Error('Goal cannot be empty.')
         const session = this.session
-        const images = imageUrls(params.images)
-        const attachments = await localAttachments(params.attachments)
+        const selected = await prepareLocalAttachments(params.attachments)
+        const images = imageUrls([...imageUrls(params.images), ...selected.images.map(image => image.data_url)])
+        const attachments = selected.attachments
         const run = this.runSession(session, `/goal ${text}`, async () => {
           this.event('message.start', { text: `/goal ${text}`, session_id: session.sessionId })
           this.event('session.updated', { running: true, session_id: session.sessionId })
@@ -365,8 +379,9 @@ export class Gateway {
         const text = typeof params.text === 'string' ? params.text : ''
         if (!text.trim()) throw new Error('Message cannot be empty.')
         const session = this.session
-        const images = imageUrls(params.images)
-        const attachments = await localAttachments(params.attachments)
+        const selected = await prepareLocalAttachments(params.attachments)
+        const images = imageUrls([...imageUrls(params.images), ...selected.images.map(image => image.data_url)])
+        const attachments = selected.attachments
         const run = this.runSession(session, text, async () => {
           this.event('message.start', { text, session_id: session.sessionId })
           this.event('session.updated', { running: true, session_id: session.sessionId })
@@ -445,7 +460,16 @@ export class Gateway {
         this.finishActivity(sessionId, true)
         this.event('session.updated', { running: false, session_id: sessionId })
       }
-      this.send({ jsonrpc: '2.0', id: id ?? null, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } })
+      const imageRejection = error instanceof ImageInputRejectedError ? error : undefined
+      this.send({
+        jsonrpc: '2.0',
+        id: id ?? null,
+        error: {
+          code: imageRejection ? -32010 : -32000,
+          message: error instanceof Error ? error.message : String(error),
+          ...(imageRejection ? { data: { kind: imageRejection.kind, status: imageRejection.status } } : {})
+        }
+      })
     }
   }
 
@@ -465,17 +489,20 @@ export class Gateway {
     this.releaseSessions()
   }
 
-  private event(type: string, payload: Record<string, unknown>): void {
+  private event<Type extends GatewayEvent['type']>(
+    type: Type,
+    payload: GatewayPayload<Type>
+  ): void {
     this.send({ jsonrpc: '2.0', method: 'event', params: { type, payload } })
   }
 
   private emitTurn(session: FridaySession, result: {
     text: string
-    metrics: unknown
+    metrics: MessageMetrics
     status: 'done' | 'paused'
     stop_reason?: string
-    verification?: unknown
-    artifacts?: unknown
+    verification?: VerificationResult
+    artifacts?: ArtifactInfo[]
   }): void {
     this.finishActivity(session.sessionId)
     if (result.status === 'paused') {
@@ -838,7 +865,7 @@ export class Gateway {
         active = { id: `reasoning-${++this.reasoningSequence}`, started: event.timestamp }
         this.reasoning.set(reasoningKey, active)
       }
-      this.event('reasoning.delta', { id: active.id, text: event.data.content, session_id: sessionId })
+      this.event('reasoning.delta', { id: active.id, text: String(event.data.content ?? ''), session_id: sessionId })
     } else if (event.type === 'model.response' && event.data.has_reasoning) {
       const active = this.reasoning.get(reasoningKey)
       if (active) {
@@ -851,22 +878,35 @@ export class Gateway {
       }
     } else if (event.type === 'tool.call') {
       const id = String(event.data.tool_call_id ?? '')
-      this.toolNames.set(`${sessionId}:${id}`, String(event.data.name ?? ''))
-      this.event('tool.start', { ...event.data, session_id: sessionId })
+      const name = String(event.data.name ?? '')
+      this.toolNames.set(`${sessionId}:${id}`, name)
+      this.event('tool.start', {
+        arguments: event.data.arguments,
+        name,
+        tool_call_id: id,
+        session_id: sessionId
+      })
     } else if (event.type === 'tool.result') {
       const id = String(event.data.tool_call_id ?? '')
       const name = this.toolNames.get(`${sessionId}:${id}`) ?? ''
       const approval = approvalPayload(event.data.content)
       this.toolNames.delete(`${sessionId}:${id}`)
       this.event('tool.complete', {
-        ...event.data,
+        content: String(event.data.content ?? ''),
+        ...(typeof event.data.elapsed_ms === 'number' ? { elapsed_ms: event.data.elapsed_ms } : {}),
         name,
-        error: event.data.is_error,
+        error: event.data.is_error === true,
+        tool_call_id: id,
         ...(approval ? { approval } : {}),
         session_id: sessionId
       })
     } else if (event.type === 'tool.progress') {
-      this.event('tool.update', { ...event.data, session_id: sessionId })
+      this.event('tool.update', {
+        content: String(event.data.content ?? ''),
+        name: String(event.data.name ?? ''),
+        tool_call_id: String(event.data.tool_call_id ?? ''),
+        session_id: sessionId
+      })
     } else if (event.type === 'context.compacted') this.event('context.compacted', { ...event.data, session_id: sessionId })
     else if (event.type === 'memory.updated') this.event('memory.updated', { ...event.data, session_id: sessionId })
     else if (event.type === 'progress.updated') this.event('progress.update', { ...event.data, session_id: sessionId })
@@ -907,12 +947,12 @@ function isAbort(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
 }
 
-function approvalPayload(value: unknown): Record<string, unknown> | undefined {
+function approvalPayload(value: unknown): ApprovalInfo | undefined {
   if (typeof value !== 'string') return undefined
   try {
     const parsed: unknown = JSON.parse(value)
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (parsed as Record<string, unknown>).approval_required === true
-      ? parsed as Record<string, unknown>
+      ? parsed as ApprovalInfo
       : undefined
   } catch {
     return undefined

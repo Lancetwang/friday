@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import type { UserProfileSettings, WebSearchSettings } from 'friday-agent-protocol'
+
 import { fridayHome } from './config.js'
 import { writeJsonAtomic, writeTextAtomic } from './storage.js'
 
@@ -12,8 +14,8 @@ const PROFILE_END = '<!-- friday-profile:end -->'
 const PROFILE_BLOCK = new RegExp(`${escapeRegex(PROFILE_START)}\\n([\\s\\S]*?)\\n${escapeRegex(PROFILE_END)}`)
 const SECRET = /(?:api[_ -]?key|password|passwd|secret|access[_ -]?token)\s*[:=]\s*\S+|\b(?:sk-|hf_|tvly-|as_sk_)[A-Za-z0-9_-]{8,}/i
 
-export type WebSearchSettings = { tavily_configured: boolean; anysearch_configured: boolean }
-export type UserProfile = { preferred_name: string; preferred_language: string; habits: string }
+export type { WebSearchSettings } from 'friday-agent-protocol'
+export type UserProfile = UserProfileSettings
 
 export function loadWebSearchSettings(): WebSearchSettings {
   const saved = readObject(join(fridayHome(), 'web-credentials.json'))

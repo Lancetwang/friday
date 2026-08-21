@@ -4340,44 +4340,126 @@ input[type="checkbox"] {
 
 .compaction-settings {
   max-width: 560px;
+  gap: 16px;
 }
 
-.compaction-toggle {
-  display: flex;
+.compaction-controls {
+  display: grid;
+}
+
+.compaction-control {
+  display: grid;
   align-items: center;
-  justify-content: space-between;
-  padding-bottom: 12px;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin: 0;
+  padding: 14px 2px;
+  border: 0;
   border-bottom: 1px solid var(--line);
 }
 
-.compaction-toggle > span {
+.compaction-copy {
   display: grid;
+  min-width: 0;
   gap: 3px;
+  padding: 0;
+  color: var(--ink);
+  text-align: left;
 }
 
-.compaction-toggle strong {
+.compaction-copy strong {
   font-size: var(--text-control);
   font-weight: var(--weight-semibold);
 }
 
-.compaction-toggle small,
-.field-line small {
+.compaction-copy small,
+.compaction-strategy-note {
   color: var(--faint);
   font-size: var(--text-caption);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-control);
 }
 
-.field-line select {
-  min-width: 0;
-  flex: 1;
-  height: 32px;
-  padding: 0 2px 6px;
+.threshold-stepper {
+  display: grid;
+  height: 30px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  grid-template-columns: 30px 52px 30px;
+  background: var(--fill);
+}
+
+.threshold-stepper button {
+  --glyph-size: 12px;
+  display: grid;
+  padding: 0;
   border: 0;
-  border-bottom: 1px solid var(--line-strong);
-  border-radius: 0;
-  outline: 0;
-  color: var(--ink);
+  place-items: center;
+  color: var(--muted);
   background: transparent;
+  transition:
+    color var(--dur-1) ease-out,
+    background-color var(--dur-1) ease-out,
+    transform var(--dur-1) ease-out;
+}
+
+.threshold-stepper button:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--fill-strong);
+}
+
+.threshold-stepper button:active:not(:disabled) {
+  transform: scale(0.9);
+}
+
+.threshold-stepper button:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.threshold-stepper button:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.threshold-stepper output {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 1px;
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--canvas);
   font-size: var(--text-control);
+  font-variant-numeric: tabular-nums;
+  line-height: 28px;
+}
+
+.threshold-stepper output small {
+  color: var(--faint);
+  font-size: var(--text-micro);
+}
+
+.compaction-strategy {
+  align-items: start;
+}
+
+.compaction-strategy-choice {
+  display: grid;
+  width: min(100%, 320px);
+  gap: 7px;
+}
+
+.compaction-strategy-choice .language-options {
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.compaction-strategy-note {
+  min-height: 16px;
 }
 
 .plugin-list {

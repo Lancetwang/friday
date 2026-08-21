@@ -38,13 +38,14 @@ friday
 ```
 
 npm 会生成对应平台的可执行 Shim，因此 PowerShell、cmd、bash 与 zsh 中都使用同一个
-`friday` 命令。完整包已经包含 Core、Harness 与 TUI。
+`friday` 命令。安装产品包时，npm 会同时解析版本一致的 `friday-agent-core` 依赖；
+Harness 与 TUI 位于 `friday-agent` 包中。
 
-如果某个预发布版本还没有进入 npm Registry，请从同版本的 GitHub Release 下载
-`friday-agent` tarball，并安装已经通过测试的完整包：
+如果某个预发布版本还没有进入 npm Registry，请从同版本的 GitHub Release 下载两个
+npm tarball，并一起安装这组已经通过测试的产物：
 
 ```bash
-npm install --global ./friday-agent-0.8.3.tgz
+npm install --global ./friday-agent-core-0.8.4.tgz ./friday-agent-0.8.4.tgz
 friday --version
 ```
 
@@ -67,7 +68,7 @@ npm install friday-agent-core
 同一个 GitHub Release 也提供 Core tarball，作为 Registry 发布前的备用安装方式：
 
 ```bash
-npm install ./friday-agent-core-0.8.3.tgz
+npm install ./friday-agent-core-0.8.4.tgz
 ```
 
 ## 从源码开发

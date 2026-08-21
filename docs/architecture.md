@@ -38,6 +38,11 @@ modules import Core's public `Agent`, `RunContext`, message, event, model, and
 tool contracts where they need them. The UIs do not duplicate the Agent Loop or
 mutate a running `Agent` directly.
 
+`packages/protocol` contains only the gateway's serializable TypeScript types.
+Harness and both clients compile against that one wire contract, so a status or
+event shape cannot drift independently in the TUI and desktop. Protocol imports
+neither Core nor Harness and emits no JavaScript into the product bundles.
+
 ## Capability registry
 
 Tools, capability-specific prompt sections, transparent tool wrappers, and the
@@ -73,7 +78,9 @@ flowchart TD
 
 TUI and desktop are protocol clients of the same gateway. Desktop releases
 compile the gateway into a standalone Bun sidecar; npm installs bundle the
-runtime next to the `friday` entry point. Neither client contains another Agent
+Harness next to the `friday` entry point and declare `friday-agent-core` as an
+ordinary package dependency. The desktop sidecar bundles that same Core package
+only so installers remain self-contained. Neither client contains another Agent
 Loop.
 
 ## State and concurrency

@@ -1,6 +1,6 @@
 {
   "name": "friday-desktop",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,6 +18,7 @@
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-shell": "^2.3.5",
+    "friday-agent-protocol": "file:../packages/protocol",
     "katex": "^0.16.47",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

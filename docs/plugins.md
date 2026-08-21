@@ -103,10 +103,15 @@ compaction reads the history.
 
 ## Writing an external plugin
 
-One ES module whose default export describes the extension:
+The installed `friday-agent` package exposes the stable authoring contract at
+`friday-agent/plugin`. Import it as a type while developing; the resulting
+module has no runtime dependency on that subpath. Compile TypeScript to one
+`.mjs` or `.js` ES module before placing it in a plugin directory.
 
-```js
-// .friday/plugins/ticket-lookup.mjs
+```ts
+// ticket-lookup.ts
+import type { FridayPlugin } from 'friday-agent/plugin'
+
 export default {
   name: 'ticket-lookup',
   version: '1.0.0',
@@ -147,7 +152,7 @@ export default {
       }
     }
   }
-}
+} satisfies FridayPlugin
 ```
 
 | Scope | Directory |

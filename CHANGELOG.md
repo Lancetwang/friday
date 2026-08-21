@@ -2,6 +2,22 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.8.4 (2026-08-21)
+
+### Added
+- `friday-agent/plugin` now publishes the narrow `FridayPlugin` authoring contract for TypeScript developers: tools, prompt sections, transparent wrappers, and replaceable memory or compaction providers, without exposing Harness lifecycle internals or built-in verifier privileges.
+- Core model HTTP failures expose structured status and bounded provider detail to callers. The Harness uses that seam for transient retries and one targeted recovery path when a provider explicitly rejects image input; Core remains unaware of Friday UI policy.
+
+### Changed
+- The npm CLI now declares and loads `friday-agent-core` as a real package dependency instead of embedding another copy in the Harness bundle. Desktop installers still compile the same dependency into their standalone sidecar so Windows, macOS, and Linux installs remain self-contained.
+- Harness, TUI, and desktop compile against one type-only gateway protocol. The Harness event emitter is checked against it and forwards only the public tool-event fields, while neither UI imports Core or Harness runtime code.
+- Desktop compaction controls now reuse the settings design system: a compact numeric stepper, segmented strategy choice, shared switches, focus treatment, and the same labels and behavior as the TUI controls.
+
+### Fixed
+- Images selected through the file picker now use the exact multimodal input path as pasted images. Model discovery treats capability metadata as positive evidence rather than a permanent denial, so newly released vision models can be tried immediately; an explicit upstream rejection restores the draft and attachments with a stable Harness message.
+- Model calls retry transient transport and HTTP failures before surfacing an error, but never replay after streamed output and never retry deterministic request rejections.
+- Restored TUI conversations no longer render saved reasoning as assistant prose, and saved tool failures use the same `error` status as live turns and desktop history.
+
 ## v0.8.3 (2026-08-21)
 
 ### Added

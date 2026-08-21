@@ -2,6 +2,20 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Static, Text, useApp, useInput, useStdout } from 'ink'
 import TextInput from 'ink-text-input'
 
+import type {
+  CompactionSettings,
+  ForkNode,
+  ForkTree,
+  HistoryItem,
+  ModelCatalog,
+  ModelProfile,
+  ModelProvider,
+  PluginInfo,
+  ResumeChoice,
+  SessionResult,
+  WebSearchSettings
+} from 'friday-agent-protocol'
+
 import type { GatewayClient } from './gatewayClient.js'
 import { Markdown, type Theme } from './markdown.js'
 import {
@@ -44,93 +58,15 @@ Type any command prefix after \`/\`, then use ↑/↓ and Enter.`
 /** How many restored messages are replayed into the scrollback on resume. */
 const MAX_RESTORED_MESSAGES = 60
 
-type ModelProfile = {
-  api_key_configured: boolean
-  enabled: boolean
-  id: string
-  model: string
-  name: string
-  provider: string
-  thinking_options?: string[]
-  vision: boolean
-}
-
-type ModelProvider = {
-  api_key_configured: boolean
-  base_url: string
-  builtin: boolean
-  enabled: boolean
-  id: string
-  label: string
-}
-
-type ModelCatalog = {
-  active: string
-  profiles: ModelProfile[]
-  providers: ModelProvider[]
-}
-
 type SearchProvider = {
   configured: boolean
   id: 'anysearch' | 'tavily'
   label: string
 }
 
-type WebSearchSettings = {
-  anysearch_configured: boolean
-  tavily_configured: boolean
-}
-
-type CompactionSettings = {
-  automatic: boolean
-  threshold_percent: number
-  strategy: 'insert' | 'two-stage'
-}
-
-type HistoryItem = {
-  arguments?: unknown
-  kind: 'assistant' | 'tool' | 'user'
-  message_index?: number
-  metrics?: Message['metrics']
-  name?: string
-  status?: 'done' | 'failed' | 'running'
-  text: string
-  tool_call_id?: string
-}
-
-type SessionResult = {
-  count?: number
-  history: HistoryItem[]
-  info: SessionInfo
-  progress?: ProgressState
-}
-
 type CredentialInput =
   | { kind: 'model'; parent: PickerMenu; provider: ModelProvider; value: string }
   | { kind: 'search'; parent: PickerMenu; provider: SearchProvider; value: string }
-
-type BranchNode = {
-  fork_message_index?: number
-  fork_source?: string
-  id: string
-  parent: string
-  time: string
-  title: string
-  turns?: number
-}
-
-type PluginInfo = {
-  capabilities?: string[]
-  description: string
-  disabled?: boolean
-  errors: string[]
-  name: string
-  required?: boolean
-  scope: string
-  source: string
-  tools: string[]
-  version: string
-}
 
 type MemoryRecord = {
   content: string
@@ -139,7 +75,8 @@ type MemoryRecord = {
   scope: string
 }
 
-type BranchTree = { nodes: BranchNode[]; root: string }
+type BranchNode = ForkNode
+type BranchTree = ForkTree
 
 type BranchRow = { depth: number; guide: string; node: BranchNode }
 
@@ -1232,18 +1169,6 @@ type VerificationStatus = VerificationResult & {
   running?: boolean
 }
 
-type ResumeChoice = {
-  assistant: string
-  id: string
-  objective: string
-  running?: boolean
-  status: string
-  time: string
-  title: string
-  turns: string
-  user: string
-}
-
 type Approval = {
   command?: string
   id?: string
@@ -1285,7 +1210,7 @@ function activeAsMessage(turn: ActiveTurn): UiMessage {
   }
 }
 
-function restoredMessages(history: HistoryItem[]) {
+export function restoredMessages(history: HistoryItem[]) {
   const messages: UiMessage[] = []
   let current: UiMessage | undefined
   for (const [index, item] of history.entries()) {
@@ -1301,14 +1226,28 @@ function restoredMessages(history: HistoryItem[]) {
           arguments: item.arguments,
           content: item.text,
           endMs: item.status === 'running' ? undefined : timestamp,
-          error: item.status === 'failed',
+          error: item.status === 'error',
           id: item.tool_call_id || `history-tool-${index}`,
           name: item.name || 'Tool',
           startMs: timestamp,
         },
       ]
-    } else {
+    } else if (item.kind === 'reasoning') {
+      if (!current) continue
+      current.thinking = [
+        ...(current.thinking ?? []),
+        {
+          ended: item.elapsed_ms ?? 0,
+          error: item.status === 'error',
+          id: `history-reasoning-${index}`,
+          started: 0,
+          text: item.text
+        }
+      ]
+    } else if (item.kind === 'assistant') {
       messages.push({ metrics: item.metrics, role: 'assistant', text: item.text })
+    } else if (item.kind === 'system') {
+      messages.push({ role: 'system', text: item.text })
     }
   }
   if (messages.length > MAX_RESTORED_MESSAGES) {

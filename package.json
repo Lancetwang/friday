@@ -1,6 +1,6 @@
 {
   "name": "friday-agent",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Friday, a local-first general-purpose agent.",
   "license": "MIT",
   "repository": {
@@ -10,6 +10,12 @@
   "type": "module",
   "bin": {
     "friday": "dist/friday.js"
+  },
+  "exports": {
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    }
   },
   "files": [
     "dist",
@@ -37,6 +43,9 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "friday-agent-core": "0.8.4"
   },
   "devDependencies": {
     "@types/node": "24.13.2",

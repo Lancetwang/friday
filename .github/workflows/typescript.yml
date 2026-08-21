@@ -65,14 +65,16 @@ jobs:
       - name: Smoke test npm packages
         run: |
           cli_prefix="$RUNNER_TEMP/friday-cli"
-          core_dir="$RUNNER_TEMP/friday-core"
-          npm install --global --prefix "$cli_prefix" artifacts/npm/friday-agent-*.tgz
+          sdk_dir="$RUNNER_TEMP/friday-sdk"
+          core="$(find artifacts/npm -maxdepth 1 -name 'friday-agent-core-*.tgz' -print -quit)"
+          full="$(find artifacts/npm -maxdepth 1 -name 'friday-agent-*.tgz' ! -name 'friday-agent-core-*' -print -quit)"
+          npm install --global --prefix "$cli_prefix" "$core" "$full"
           "$cli_prefix/bin/friday" --version
-          mkdir -p "$core_dir"
-          cd "$core_dir"
+          mkdir -p "$sdk_dir"
+          cd "$sdk_dir"
           npm init -y >/dev/null
-          npm install "$GITHUB_WORKSPACE"/artifacts/npm/friday-agent-core-*.tgz
-          node --input-type=module -e "const core = await import('friday-agent-core'); if (typeof core.Agent !== 'function') process.exit(1)"
+          npm install "$GITHUB_WORKSPACE/$core" "$GITHUB_WORKSPACE/$full"
+          node --input-type=module -e "const core = await import('friday-agent-core'); await import('friday-agent/plugin'); if (typeof core.Agent !== 'function') process.exit(1)"
       - name: Check Harbor adapter syntax
         run: python -m py_compile integrations/harbor/friday.py
       - uses: actions/upload-artifact@v6

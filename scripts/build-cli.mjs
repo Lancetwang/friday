@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -28,6 +28,7 @@ for (const [entry, name] of [
     naming: name,
     target: 'node',
     minify: true,
+    external: name === 'gateway.js' ? ['friday-agent-core'] : [],
     plugins: name === 'friday.js' ? [devtoolsStub] : []
   })
   if (!result.success) {
@@ -36,4 +37,11 @@ for (const [entry, name] of [
   }
   if (!existsSync(target)) throw new Error(`Bun did not produce ${target}`)
   if (process.platform !== 'win32') chmodSync(target, 0o755)
+}
+
+for (const extension of ['js', 'd.ts']) {
+  copyFileSync(
+    join(root, 'packages', 'harness', 'dist', `plugin-api.${extension}`),
+    join(output, `plugin.${extension}`)
+  )
 }

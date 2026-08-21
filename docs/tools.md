@@ -29,9 +29,11 @@ before checking the boundary. Arbitrary sibling directories and files such as
 user explicitly supplied the path as an attachment.
 
 One Read returns at most 2,000 lines and 50,000 characters. A truncated result
-contains `next_start_line`. Read treats files as UTF-8 text; it does not turn a
-local image into model vision input. Desktop images enter as user attachments
-and require a model profile marked vision-capable.
+contains `next_start_line`. Read treats files as UTF-8 text. In the desktop app,
+clipboard images and selected PNG, JPEG, WebP, or GIF files are normalized into
+the same model image input; selected non-image files and folders remain local
+attachments for Read. File signatures, rather than extensions, determine which
+selected files are images.
 
 `Write` and `Edit` resolve their targets inside the workspace, write by atomic
 replacement, and serialize concurrent changes to the same resolved file.

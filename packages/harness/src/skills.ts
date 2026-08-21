@@ -2,17 +2,13 @@ import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import type { JsonObject, Tool } from 'friday-agent-core'
+import type { SkillInfo } from 'friday-agent-protocol'
 
 import { fridayHome, projectStateDir } from './config.js'
 
 const MAX_SKILL_CHARS = 80_000
 
-export type SkillInfo = {
-  name: string
-  description: string
-  scope: 'project' | 'user'
-  path: string
-}
+export type { SkillInfo } from 'friday-agent-protocol'
 
 export function discoverSkills(workspace: string): SkillInfo[] {
   const found = new Map<string, SkillInfo>()

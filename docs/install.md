@@ -43,13 +43,15 @@ friday
 ```
 
 npm creates the appropriate executable shim, so the command is `friday` in
-PowerShell, cmd, bash, and zsh. The package includes Core, Harness, and TUI.
+PowerShell, cmd, bash, and zsh. Installing the product package also resolves its
+version-matched `friday-agent-core` dependency; the Harness and TUI stay in the
+`friday-agent` package.
 
-If a prerelease is not yet available from npm, download its `friday-agent`
-tarball from the same GitHub Release and install the already-tested package:
+If a prerelease is not yet available from npm, download both npm tarballs from
+the same GitHub Release and install the already-tested pair:
 
 ```bash
-npm install --global ./friday-agent-0.8.3.tgz
+npm install --global ./friday-agent-core-0.8.4.tgz ./friday-agent-0.8.4.tgz
 friday --version
 ```
 
@@ -69,11 +71,11 @@ package, not Friday's internal Harness:
 npm install friday-agent-core
 ```
 
-The same GitHub Release also contains `friday-agent-core-0.8.3.tgz` as a
+The same GitHub Release also contains `friday-agent-core-0.8.4.tgz` as a
 fallback before registry publication:
 
 ```bash
-npm install ./friday-agent-core-0.8.3.tgz
+npm install ./friday-agent-core-0.8.4.tgz
 ```
 
 ## Develop from source

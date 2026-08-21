@@ -1,6 +1,6 @@
 {
   "name": "friday-agent-cli",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "friday-agent-protocol": "0.8.4",
     "ink": "^6.5.1",
     "ink-text-input": "^6.0.0",
     "react": "^19.1.1"

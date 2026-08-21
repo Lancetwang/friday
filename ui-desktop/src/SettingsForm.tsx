@@ -53,6 +53,31 @@ export function SettingsMessage({ failed, message }: { failed: boolean; message:
   return <div className={`settings-message ${failed ? 'error' : ''}`}>{message}</div>
 }
 
+export function SettingsSwitch({
+  checked,
+  disabled = false,
+  label,
+  onChange
+}: {
+  checked: boolean
+  disabled?: boolean
+  label: string
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <label className="settings-switch" title={label}>
+      <input
+        aria-label={label}
+        checked={checked}
+        disabled={disabled}
+        onChange={event => onChange(event.target.checked)}
+        type="checkbox"
+      />
+      <span aria-hidden="true" />
+    </label>
+  )
+}
+
 export function SaveFooter({
   label,
   note = '',

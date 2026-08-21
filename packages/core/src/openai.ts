@@ -1,3 +1,4 @@
+import { throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
 import type { AssistantMessage, ChatModel, JsonObject, ModelRequest, ToolCall } from './types.js'
 
@@ -33,7 +34,7 @@ export class OpenAIModel implements ChatModel {
       }),
       ...(request.signal ? { signal: request.signal } : {})
     })
-    if (!response.ok) throw new Error(`Model request failed (${response.status}): ${(await response.text()).slice(0, 4_000)}`)
+    if (!response.ok) await throwModelRequestError(response)
     if (!response.body) throw new Error('Model response had no body.')
     return readStream(response.body, request)
   }

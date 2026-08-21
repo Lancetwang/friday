@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   Agent, RunContext, type AgentEvent, type Message, type Tool, type ToolCall, type Usage
 } from 'friday-agent-core'
+import type { HistoryItem, ResumeChoice } from 'friday-agent-protocol'
 
 import {
   disabledPlugins,
@@ -52,6 +53,7 @@ import { builtinPlugins, runShell, toolSpillDir } from './tools.js'
 import { writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
 import { modelFor } from './model.js'
+import { presentImageInputError } from './model-errors.js'
 import {
   beginProgress,
   currentProgress,
@@ -274,51 +276,54 @@ export class FridaySession {
     const display = mode === 'goal' ? `/goal ${text}` : text
     const attachments = options.attachments ?? []
     const images = options.images ?? []
-    if (images.length && !this.config.vision) throw new Error(`Model '${this.config.profileName}' does not support image input.`)
     const input = attachmentPrompt(options.input ?? text, attachments)
     const user = options.internal ? '' : display
-    return this.runTurn({
-      user,
-      trace: mode,
-      deferDone: options.deferCompletion === true,
-      async prepare(session, snapshot) {
-        session.checkpointSeed = {
-          user,
-          messages: snapshot.messages,
-          archived: snapshot.archived,
-          progress: snapshot.progress,
-          turns: snapshot.turns,
-          thinkingEffort: session.thinking
+    try {
+      return await this.runTurn({
+        user,
+        trace: mode,
+        deferDone: options.deferCompletion === true,
+        async prepare(session, snapshot) {
+          session.checkpointSeed = {
+            user,
+            messages: snapshot.messages,
+            archived: snapshot.archived,
+            progress: snapshot.progress,
+            turns: snapshot.turns,
+            thinkingEffort: session.thinking
+          }
+          beginProgress(session.context, text, mode, options.continueProgress === true)
+          const prepared = options.internal ? undefined : await session.memoryProvider?.memory.prepare({
+            workspace: session.workspace,
+            text,
+            sessionId: session.sessionId
+          })
+          const recalled = prepared?.recall || ''
+          session.refreshInstructions()
+          if (prepared?.capture) session.context.emit('memory.updated', 'memory', { capture: prepared.capture })
+          for (const attachment of attachments) session.readAllow.add(attachment.path)
+          // Recall rides inside the user message rather than as a separate
+          // system message that the next turn removes: the conversation stays
+          // append-only, so the provider's prompt cache never re-ingests it.
+          const wired = recalled ? `${recalled}\n\n${input}` : input
+          session.context.addMessage({
+            role: 'user',
+            content: images.length
+              ? [{ type: 'text', text: wired }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))]
+              : wired,
+            ...(options.internal ? { friday_internal: true } : {}),
+            ...(wired !== display || mode === 'goal' ? { friday_display_text: display } : {}),
+            ...(attachments.length ? { friday_attachments: attachments } : {}),
+            friday_timestamp: zonedTimestamp(),
+            ...(mode === 'goal' ? { friday_goal: true } : {})
+          })
+          if (!options.continueProgress) session.ensureAgent().resetLoopGuard()
+          if (!options.internal) session.turns += 1
         }
-        beginProgress(session.context, text, mode, options.continueProgress === true)
-        const prepared = options.internal ? undefined : await session.memoryProvider?.memory.prepare({
-          workspace: session.workspace,
-          text,
-          sessionId: session.sessionId
-        })
-        const recalled = prepared?.recall || ''
-        session.refreshInstructions()
-        if (prepared?.capture) session.context.emit('memory.updated', 'memory', { capture: prepared.capture })
-        for (const attachment of attachments) session.readAllow.add(attachment.path)
-        // Recall rides inside the user message rather than as a separate
-        // system message that the next turn removes: the conversation stays
-        // append-only, so the provider's prompt cache never re-ingests it.
-        const wired = recalled ? `${recalled}\n\n${input}` : input
-        session.context.addMessage({
-          role: 'user',
-          content: images.length
-            ? [{ type: 'text', text: wired }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))]
-            : wired,
-          ...(options.internal ? { friday_internal: true } : {}),
-          ...(wired !== display || mode === 'goal' ? { friday_display_text: display } : {}),
-          ...(attachments.length ? { friday_attachments: attachments } : {}),
-          friday_timestamp: zonedTimestamp(),
-          ...(mode === 'goal' ? { friday_goal: true } : {})
-        })
-        if (!options.continueProgress) session.ensureAgent().resetLoopGuard()
-        if (!options.internal) session.turns += 1
-      }
-    }, onDelta)
+      }, onDelta)
+    } catch (error) {
+      throw presentImageInputError(error, images.length > 0)
+    }
   }
 
   async goal(
@@ -1214,7 +1219,7 @@ type Snapshot = {
 
 type SessionRecord = Record<string, unknown> & { session_id?: string }
 
-export async function sessionChoices(workspace: string): Promise<Record<string, unknown>[]> {
+export async function sessionChoices(workspace: string): Promise<ResumeChoice[]> {
   const records = await sessionRecords(workspace)
   return records
     .filter(record => !record.fork_parent)
@@ -1236,9 +1241,9 @@ export async function sessionChoices(workspace: string): Promise<Record<string, 
     })
 }
 
-export function sessionHistory(session: FridaySession): Record<string, unknown>[] {
+export function sessionHistory(session: FridaySession): HistoryItem[] {
   const transcript = session.transcript()
-  const history: Record<string, unknown>[] = []
+  const history: HistoryItem[] = []
   const tools = new Map<string, number>()
   const userRows: number[] = []
   const toolActivity = new Map<string, Record<string, unknown>>()
@@ -1271,7 +1276,7 @@ export function sessionHistory(session: FridaySession): Record<string, unknown>[
           const activity = item as Record<string, unknown>
           if (activity.kind === 'reasoning') history.push({
             kind: 'reasoning', message_index: messageIndex,
-            text: String(activity.text || ''), status: String(activity.status || 'done'),
+            text: String(activity.text || ''), status: historyStatus(activity.status),
             ...(typeof activity.elapsed_ms === 'number' ? { elapsed_ms: activity.elapsed_ms } : {})
           })
         }
@@ -1287,7 +1292,7 @@ export function sessionHistory(session: FridaySession): Record<string, unknown>[
           history.push({
             kind: 'tool', message_index: messageIndex, tool_call_id: id,
             name: String(value.function?.name || 'Tool'), arguments: args,
-            status: String(timing?.status || 'running'), text: '',
+            status: historyStatus(timing?.status, 'running'), text: '',
             ...(typeof timing?.elapsed_ms === 'number' ? { elapsed_ms: timing.elapsed_ms } : {})
           })
         }
@@ -1303,20 +1308,24 @@ export function sessionHistory(session: FridaySession): Record<string, unknown>[
       const id = String(message.tool_call_id ?? '')
       const index = tools.get(id)
       const timing = toolActivity.get(id)
-      const item = {
+      const item: HistoryItem = {
         kind: 'tool', message_index: messageIndex, tool_call_id: id, name: 'Tool', arguments: {},
-        status: String(timing?.status || 'done'), text: content,
+        status: historyStatus(timing?.status), text: content,
         ...(typeof timing?.elapsed_ms === 'number' ? { elapsed_ms: timing.elapsed_ms } : {})
       }
       if (index === undefined) history.push(item)
       else Object.assign(history[index]!, {
-        status: String(timing?.status || 'done'), text: content,
+        status: historyStatus(timing?.status), text: content,
         ...(typeof timing?.elapsed_ms === 'number' ? { elapsed_ms: timing.elapsed_ms } : {})
       })
     }
   }
   for (const index of userRows.slice(0, -6)) if (Array.isArray(history[index]?.images)) history[index]!.images = []
   return history
+}
+
+function historyStatus(value: unknown, fallback: NonNullable<HistoryItem['status']> = 'done'): NonNullable<HistoryItem['status']> {
+  return value === 'approval' || value === 'done' || value === 'error' || value === 'running' ? value : fallback
 }
 
 export async function renameSession(workspace: string, sessionId: string, value: string): Promise<Record<string, unknown>> {

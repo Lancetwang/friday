@@ -13,11 +13,17 @@ test('desktop images and selected local files reach the model and resumable hist
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
   const external = join(temporary, 'selected.txt')
+  const selectedImage = join(temporary, 'selected.png')
   const selectedFolder = join(temporary, 'selected-folder')
   await mkdir(home)
   await mkdir(workspace)
   await mkdir(selectedFolder)
   await writeFile(external, 'selected evidence\n')
+  const selectedImageBytes = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+  ])
+  await writeFile(selectedImage, selectedImageBytes)
   await writeFile(join(selectedFolder, 'nested.txt'), 'nested evidence\n')
   const previous = process.env.FRIDAY_HOME
   process.env.FRIDAY_HOME = home
@@ -41,7 +47,7 @@ test('desktop images and selected local files reach the model and resumable hist
   try {
     await writeFile(join(home, 'models.json'), JSON.stringify({
       active: 'local', profiles: [{
-        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock', vision: true,
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock', vision: false,
         base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000, max_output_tokens: 2_000
       }]
     }))
@@ -51,8 +57,26 @@ test('desktop images and selected local files reach the model and resumable hist
     output.length = 0
 
     await gateway.handle({
+      id: 'prepare', method: 'attachment.prepare', params: {
+        attachments: [{ path: selectedImage }, { path: external }]
+      }
+    })
+    const prepared = response(output, 'prepare') as {
+      attachments: Array<Record<string, unknown>>
+      images: Array<{ data_url: string; path: string; size: number }>
+    }
+    assert.equal(prepared.images.length, 1)
+    assert.match(prepared.images[0]!.data_url, /^data:image\/png;base64,iVBORw0KGgo/)
+    assert.equal(prepared.images[0]!.path, await realpath(selectedImage))
+    assert.equal(prepared.images[0]!.size, selectedImageBytes.length)
+    assert.equal(prepared.attachments.length, 1)
+    const selectedImageUrl = prepared.images[0]!.data_url
+    output.length = 0
+
+    await gateway.handle({
       id: 'chat', method: 'chat.send', params: {
-        text: 'Inspect my attachments.', images: [image], attachments: [{ path: external }, { path: selectedFolder }]
+        text: 'Inspect my attachments.', images: [image],
+        attachments: [{ path: selectedImage }, { path: external }, { path: selectedFolder }]
       }
     })
     assert.equal((response(output, 'chat') as { text: string }).text, 'attachments read')
@@ -62,6 +86,7 @@ test('desktop images and selected local files reach the model and resumable hist
     assert(Array.isArray(user?.content))
     assert.match(String((user.content[0] as { text: string }).text), /selected\.txt/)
     assert.equal((user.content[1] as { image_url: { url: string } }).image_url.url, image)
+    assert.equal((user.content[2] as { image_url: { url: string } }).image_url.url, selectedImageUrl)
     assert.match(JSON.stringify(bodies[1]), /selected evidence/)
     assert.match(JSON.stringify(bodies[1]), /nested\.txt/)
     assert.match(JSON.stringify(bodies[2]), /nested evidence/)
@@ -71,7 +96,7 @@ test('desktop images and selected local files reach the model and resumable hist
     const history = (response(output, 'current') as { history: Array<Record<string, unknown>> }).history
     const restored = history.find(item => item.kind === 'user')!
     assert.equal(restored.text, 'Inspect my attachments.')
-    assert.deepEqual(restored.images, [image])
+    assert.deepEqual(restored.images, [image, selectedImageUrl])
     assert.deepEqual(restored.attachments, [
       { kind: 'file', name: 'selected.txt', path: await realpath(external), size: 18 },
       { kind: 'folder', name: 'selected-folder', path: await realpath(selectedFolder) }
@@ -84,6 +109,62 @@ test('desktop images and selected local files reach the model and resumable hist
     // Windows can briefly retain a directory handle after the gateway's last
     // atomic session write. Let fs.rm retry that transient lock instead of
     // turning a successful integration test into a CI flake.
+    await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  }
+})
+
+test('an upstream image rejection rolls back the turn and exposes only a stable Harness error', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-image-rejection-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previous = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  let requests = 0
+  const server = createServer((_request, response) => {
+    requests += 1
+    response.writeHead(400, { 'content-type': 'application/json' })
+    response.end('{"error":"provider-private-detail: this model does not support image input"}')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  const output: unknown[] = []
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'local', profiles: [{
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'text-only', vision: false,
+        base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000, max_output_tokens: 2_000
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
+    const gateway = new Gateway(workspace, value => output.push(value))
+    await gateway.start()
+    output.length = 0
+
+    await gateway.handle({
+      id: 'rejected', method: 'chat.send', params: {
+        text: 'What is in this image?', images: ['data:image/png;base64,aA==']
+      }
+    })
+    const failed = output.find(value => (value as { id?: unknown }).id === 'rejected') as {
+      error?: { data?: { kind?: string; status?: number }; message?: string }
+    } | undefined
+    assert.equal(failed?.error?.data?.kind, 'image_input_rejected')
+    assert.equal(failed?.error?.data?.status, 400)
+    assert.match(failed?.error?.message || '', /selected model rejected image input/i)
+    assert.doesNotMatch(JSON.stringify(failed), /provider-private-detail/)
+    assert.equal(requests, 1)
+
+    output.length = 0
+    await gateway.handle({ id: 'current-after-rejection', method: 'session.current' })
+    const history = (response(output, 'current-after-rejection') as { history: Array<Record<string, unknown>> }).history
+    assert(!history.some(item => item.kind === 'user' && item.text === 'What is in this image?'))
+  } finally {
+    if (previous === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previous
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 })

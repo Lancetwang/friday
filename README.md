@@ -136,6 +136,7 @@ the TUI (`/plugins`), desktop Settings, or `disabled_plugins`.
 
 - `packages/core` contains the public `Agent`, `RunContext`, provider adapters, tool execution, events, usage, cancellation, and preflight contracts.
 - `packages/harness` owns the Friday product: plugins, prompts, tools, model profiles, sessions, permissions, compaction, memory, skills, checkpoints, traces, and verification.
+- `packages/protocol` is a type-only wire contract shared by the Harness and both UIs; it contains no runtime and imports neither layer.
 - `ui-tui` and `ui-desktop` are protocol clients. They do not contain another agent loop.
 - `integrations/harbor` is a thin adapter for Harbor's Python custom-agent protocol; it installs and invokes the TypeScript package.
 
@@ -152,6 +153,7 @@ The included Harbor adapter runs the npm-distributed Friday runtime on Terminal-
 ```text
 packages/core/          Reusable agent loop and provider adapters
 packages/harness/       Friday runtime, state, tools, and gateway
+packages/protocol/      Type-only Harness/UI wire contract
 ui-tui/                 Terminal UI and cross-platform CLI
 ui-desktop/             React + Tauri desktop application
 integrations/harbor/    Terminal-Bench / Harbor adapter

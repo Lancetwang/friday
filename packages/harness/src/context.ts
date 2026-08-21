@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto'
 import {
   toolSchema,
   type AgentEvent,
-  type ChatModel,
   type JsonObject,
   type Message,
   type RunContext,
@@ -11,8 +10,16 @@ import {
   type ToolCall
 } from 'friday-agent-core'
 
-import type { CompactionSettings, ModelConfig } from './config.js'
+import type { CompactionSettings } from './config.js'
+import type {
+  CompactionRequest,
+  CompactionResult,
+  ContextCompaction,
+  ContextCompactor
+} from './plugin-api.js'
 import { promptTemplate } from './prompts.js'
+
+export type { CompactionRequest, CompactionResult, ContextCompaction, ContextCompactor } from './plugin-api.js'
 
 const COMPACT_TARGET = 0.55
 const TOOL_RESULT_TARGET_DELTA = 0.15
@@ -29,38 +36,6 @@ const SUMMARY_SECTIONS = [
   '## Current Goal', '## Completed', '## Open Items', '## Tried Methods', '## Decisions',
   '## Working Files', '## Commands And Results', '## Verification State', '## Next Steps'
 ]
-
-export type ContextCompaction = {
-  kind: 'conversation' | 'tool_results'
-  ok: boolean
-  fallback: boolean
-  /** How the summary was produced: full-fidelity in-place read, bounded transcript, or offline. */
-  strategy: 'tombstone' | 'insert' | 'transcript' | 'offline' | 'none'
-  reason: string
-  before_tokens: number
-  after_tokens: number
-  window: number
-  kept_turns: number
-  tool_results: number
-  memories: string[]
-  notice: string
-}
-
-export type CompactionResult = { record?: ContextCompaction; summary?: string }
-
-export type CompactionRequest = {
-  context: RunContext
-  tools: readonly Tool[]
-  config: ModelConfig
-  settings: CompactionSettings
-  model: ChatModel
-  archive(messages: Message[]): void
-  force?: boolean
-  signal?: AbortSignal
-}
-
-/** Harness plugin seam: Core knows only that beforeStep returned control. */
-export type ContextCompactor = (request: CompactionRequest) => Promise<CompactionResult>
 
 export function observeContextUsage(context: RunContext, event: AgentEvent): void {
   if (event.type === 'model.request.payload') {

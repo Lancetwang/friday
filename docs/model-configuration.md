@@ -18,6 +18,17 @@ The selected provider/model pair also determines which thinking controls
 Friday offers. Models without a known mapping have no thinking selector;
 mapped models show only the values the runtime knows how to send.
 
+Vision capability is deliberately a positive hint, not a local permission
+check. Friday marks models when its bundled catalog or a provider's `/models`
+metadata positively advertises image input, but missing or stale metadata means
+"unknown", not "text-only". Clipboard and selected-file images are therefore
+sent to the chosen provider even for a newly released or manually configured
+model. The provider remains the authority; if it rejects image input, the
+Harness rolls the failed turn back and returns a stable, actionable Friday
+error instead of exposing the provider's response payload. This classification
+is deliberately narrow: other provider failures keep their normal error after
+the Harness has retried transient HTTP or network failures.
+
 ## Files and precedence
 
 Friday keeps the model catalog and credentials outside the workspace:

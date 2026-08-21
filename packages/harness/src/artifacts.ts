@@ -1,10 +1,11 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 
+import type { ArtifactDetail, ArtifactInfo } from 'friday-agent-protocol'
+
 import { resolveWorkspace } from './config.js'
 
-export type ArtifactInfo = { kind: 'image' | 'markdown' | 'pdf' | 'text'; name: string; path: string; size: number }
-export type ArtifactDetail = ArtifactInfo & { content?: string; data_url?: string }
+export type { ArtifactDetail, ArtifactInfo } from 'friday-agent-protocol'
 
 const TYPES: Record<string, ArtifactInfo['kind']> = {
   '.csv': 'text', '.gif': 'image', '.html': 'text', '.jpeg': 'image', '.jpg': 'image',

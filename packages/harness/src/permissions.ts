@@ -4,11 +4,12 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import type { JsonObject, ToolCall, ToolPreflight } from 'friday-agent-core'
+import type { PermissionMode } from 'friday-agent-protocol'
 
 import { projectStateDir } from './config.js'
 import { writeJsonAtomic } from './storage.js'
 
-export type PermissionMode = 'auto' | 'bypass' | 'manual'
+export type { PermissionMode } from 'friday-agent-protocol'
 
 export type Approval = {
   id: string

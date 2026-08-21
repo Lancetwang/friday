@@ -9,6 +9,37 @@ import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 
+import type {
+  AppSettings,
+  ApprovalInfo,
+  ArtifactDetail,
+  ArtifactInfo,
+  CheckpointChoice,
+  CompactionSettings,
+  ContextCompaction,
+  ForkNode,
+  ForkTree,
+  HistoryItem,
+  LocalAttachment,
+  MemoryFileDetail,
+  MemoryFileInfo,
+  MemoryFileScope,
+  MessageMetrics,
+  ModelCatalog,
+  ModelProfile,
+  ModelProvider,
+  PermissionMode,
+  PluginInfo,
+  PreparedLocalAttachments,
+  ResumeChoice,
+  SessionInfo,
+  SkillDetail,
+  SkillInfo,
+  UserProfileSettings,
+  VerificationResult,
+  WebSearchSettings
+} from 'friday-agent-protocol'
+
 import fridayAvatar from './assets/friday-avatar.svg'
 import { getLanguage, loadLanguage, setLanguage, t, type Language } from './i18n'
 import {
@@ -32,7 +63,7 @@ import {
 } from './Icons'
 import { normalizeMarkdown } from './markdown'
 import { MenuDetails } from './MenuDetails'
-import { SaveFooter, SettingsMessage, useSettingsSave } from './SettingsForm'
+import { SaveFooter, SettingsMessage, SettingsSwitch, useSettingsSave } from './SettingsForm'
 import { collectMessageSources, hostOf, safeIconUrl, type WebSource } from './sources'
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath]
@@ -86,21 +117,7 @@ function markdownComponents(onOpenLink: (url: string) => void): Components {
   }
 }
 
-type Metrics = {
-  cached_tokens?: number | null
-  elapsed_ms?: number
-  estimated_tokens?: boolean
-  /** Cumulative over the turn's requests: what it cost, not how full the window is. */
-  input_tokens?: number | null
-  output_tokens?: number | null
-  /** Model calls the turn made. The token totals are sums over these. */
-  requests?: number | null
-  window?: number | null
-  /** How full the context is once the turn ends. */
-  window_tokens?: number | null
-}
-
-type PermissionMode = 'auto' | 'bypass' | 'manual'
+type Metrics = MessageMetrics
 type ProjectStatus = 'connecting' | 'error' | 'idle' | 'ready'
 type ThinkingEffort = string
 
@@ -130,192 +147,18 @@ const thinkingOptions: ReadonlyArray<{
   { descriptionKey: 'effort.max.desc', labelKey: 'effort.max', value: 'max' }
 ]
 
-type Approval = {
-  approval_required?: boolean
-  command?: string
-  pending?: boolean
-  reason?: string
-}
-
-type VerificationStatus = {
-  approval_required?: boolean
-  error?: boolean
-  feedback?: string
-  passed?: boolean
-  verdict?: string
-}
-
-/** Friday rewrote the conversation to keep it inside the model's context window. */
-type ContextCompaction = {
-  after_tokens?: number
-  before_tokens?: number
-  fallback?: boolean
-  kept_turns?: number
-  kind?: 'conversation' | 'tool_results'
-  notice?: string
-  ok?: boolean
-  reason?: string
-  tool_results?: number
-}
-
-type SessionInfo = {
-  approval?: Approval
-  cwd: string
-  model: string
-  model_configured?: boolean
-  model_name?: string
-  model_profile?: string
-  model_vision?: boolean
-  permission_mode: PermissionMode
-  thinking_effort: ThinkingEffort
-  thinking_options?: ThinkingEffort[]
-  thinking_supported?: boolean
-  session_id?: string
-  running?: boolean
-  tools: string[]
-}
-
-type ModelProfile = {
-  api_key_configured: boolean
-  base_url: string
-  context_window: number
-  enabled: boolean
-  id: string
-  max_output_tokens: number
-  model: string
-  name: string
-  provider: string
-  vision: boolean
-}
-
-type ModelProvider = {
-  api_key_configured: boolean
-  base_url: string
-  builtin: boolean
-  enabled: boolean
-  id: string
-  label: string
-  models: Array<{ id: string; vision: boolean }>
-}
-
-type ModelCatalog = {
-  active: string
-  disabled?: string[]
-  profiles: ModelProfile[]
-  providers: ModelProvider[]
-}
-
-type WebSearchSettings = {
-  anysearch_configured: boolean
-  tavily_configured: boolean
-}
-
-type CompactionSettings = {
-  automatic: boolean
-  threshold_percent: number
-  strategy: 'insert' | 'two-stage'
-}
-
-type UserProfileSettings = {
-  habits: string
-  preferred_language: string
-  preferred_name: string
-}
-
-type MemoryFileInfo = {
-  chars: number
-  limit: number
-  path: string
-}
-
-type MemoryFileDetail = MemoryFileInfo & {
-  content: string
-}
-
-type MemoryFileScope = 'global' | 'user'
-
-type AppSettings = {
-  compaction: CompactionSettings
-  memory_files: Record<MemoryFileScope, MemoryFileInfo>
-  user_profile: UserProfileSettings
-  web_search: WebSearchSettings
-}
-
-type ResumeChoice = {
-  assistant: string
-  id: string
-  objective: string
-  running?: boolean
-  status: string
-  time: string
-  title: string
-  turns: string
-  user: string
-}
-
-type CheckpointChoice = {
-  created: string
-  id: string
-  session_id: string
-  state: string
-  user: string
-}
-
-type SkillInfo = {
-  description: string
-  name: string
-  path: string
-  scope: string
-}
-
-type SkillDetail = {
-  content: string
-  skill: SkillInfo
-}
+type Approval = ApprovalInfo
+type VerificationStatus = VerificationResult
 
 type ImageAttachment = {
   dataUrl: string
   kind: 'image'
   name: string
-}
-
-type LocalAttachment = {
-  kind: 'file' | 'folder'
-  name: string
-  path: string
+  path?: string
   size?: number
 }
 
 type ComposerAttachment = ImageAttachment | LocalAttachment
-
-type ArtifactInfo = {
-  kind: 'image' | 'markdown' | 'pdf' | 'text'
-  name: string
-  path: string
-  size: number
-}
-
-type ArtifactDetail = ArtifactInfo & {
-  content?: string
-  data_url?: string
-}
-
-type HistoryItem = {
-  arguments?: unknown
-  artifacts?: ArtifactInfo[]
-  attachments?: LocalAttachment[]
-  elapsed_ms?: number
-  goal?: boolean
-  images?: string[]
-  kind: TimelineItem['kind']
-  message_index?: number
-  metrics?: Metrics
-  name?: string
-  status?: TimelineItem['status']
-  text: string
-  timestamp?: string
-  tool_call_id?: string
-}
 
 type ThinkingState = {
   ended?: number
@@ -349,19 +192,6 @@ type TimelineItem = {
   toolCallId?: string
 }
 
-type ForkNode = {
-  fork_source?: string
-  id: string
-  parent: string
-  time: string
-  title: string
-}
-
-type ForkTree = {
-  nodes: ForkNode[]
-  root: string
-}
-
 type ProjectView = {
   activeSession: string
   attachments: ComposerAttachment[]
@@ -382,7 +212,7 @@ type ProjectView = {
 }
 
 type GatewayMessage = {
-  error?: { message?: string }
+  error?: { code?: number; data?: { kind?: string; status?: number }; message?: string }
   id?: string
   method?: string
   params?: {
@@ -390,6 +220,17 @@ type GatewayMessage = {
     type?: string
   }
   result?: unknown
+}
+
+class GatewayRequestError extends Error {
+  constructor(
+    message: string,
+    readonly kind = '',
+    readonly status?: number
+  ) {
+    super(message)
+    this.name = 'GatewayRequestError'
+  }
 }
 
 type PendingRequest = {
@@ -435,7 +276,7 @@ function welcomeGreetingKey(now = new Date()): string {
   if (hour >= 18 && hour < 23) return 'welcome.greeting.evening'
   return 'welcome.greeting.late'
 }
-const emptyModelCatalog: ModelCatalog = { active: '', profiles: [], providers: [] }
+const emptyModelCatalog: ModelCatalog = { active: '', disabled: [], profiles: [], providers: [] }
 const CUSTOM_NEW = 'openai-compatible:new'
 
 function nextId(prefix: string) {
@@ -483,6 +324,14 @@ function writeImage(session: string, itemId: string, index: number, dataUrl: str
 function writeMessageImages(session: string, itemId: string, images: string[]) {
   for (let index = 0; index < images.length; index += 1) {
     writeImage(session, itemId, index, images[index]!)
+  }
+}
+
+function dropMessageImages(session: string, itemId: string, count: number) {
+  for (let index = 0; index < count; index += 1) {
+    const key = imageCacheKey(session, itemId, index)
+    imageCacheBytes -= imageCache.get(key)?.length ?? 0
+    imageCache.delete(key)
   }
 }
 
@@ -599,14 +448,31 @@ function pathKey(path: string) {
   return plainPath(path).replace(/[\\/]+$/, '').replace(/\//g, '\\').toLocaleLowerCase()
 }
 
-function localAttachment(path: string, kind: LocalAttachment['kind']): LocalAttachment {
-  const clean = plainPath(path)
-  const parts = clean.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean)
-  return { kind, name: parts.at(-1) || clean, path: clean }
-}
-
 function samePath(left: string, right: string) {
   return pathKey(left) === pathKey(right)
+}
+
+function restoreComposerAttachments(
+  current: ComposerAttachment[],
+  restored: readonly ComposerAttachment[]
+): ComposerAttachment[] {
+  const next = [...current]
+  const paths = new Set(next.flatMap(item => item.path ? [pathKey(item.path)] : []))
+  for (const item of restored) {
+    const path = item.path ? pathKey(item.path) : ''
+    const duplicate = path
+      ? paths.has(path)
+      : item.kind === 'image' && next.some(value => value.kind === 'image' && value.dataUrl === item.dataUrl)
+    if (duplicate) continue
+    const count = item.kind === 'image'
+      ? next.filter(value => value.kind === 'image').length
+      : next.filter(value => value.kind !== 'image').length
+    const limit = item.kind === 'image' ? MAX_IMAGE_ATTACHMENTS : MAX_LOCAL_ATTACHMENTS
+    if (count >= limit) continue
+    next.push(item)
+    if (path) paths.add(path)
+  }
+  return next
 }
 
 function sessionEventKey(workspace: string, sessionId: string) {
@@ -989,7 +855,11 @@ function App() {
         if (pending) {
           pendingRequests.current.delete(message.id)
           message.error
-            ? pending.reject(new Error(message.error.message || 'Friday gateway failed.'))
+            ? pending.reject(new GatewayRequestError(
+                message.error.message || 'Friday gateway failed.',
+                message.error.data?.kind,
+                message.error.data?.status
+              ))
             : pending.resolve(message.result)
           return
         }
@@ -1501,6 +1371,8 @@ function App() {
     }
     const text = draft.trim() || (attachments.length ? t('composer.inspectAttachments') : '')
     if (!text || pendingApproval || status !== 'ready') return
+    const submittedDraft = draft
+    const submittedAttachments = [...attachments]
     const submittedSession = activeSession
     const submittedGoal = goalMode
     const imageAttachments = attachments.filter((item): item is ImageAttachment => item.kind === 'image')
@@ -1537,12 +1409,26 @@ function App() {
         text
       })
     } catch (error) {
+      const imageRejected = error instanceof GatewayRequestError && error.kind === 'image_input_rejected'
+      if (imageRejected) dropMessageImages(submittedSession, userItemId, imageUrls.length)
       updateView(activeProject, current => current.activeSession !== submittedSession ? current : ({
-          ...current,
-          busy: false,
-          cancelling: false,
-          items: [...current.items, { id: nextId('send'), kind: 'system', text: String(error) }]
-        }))
+        ...current,
+        ...(imageRejected ? {
+          attachments: restoreComposerAttachments(current.attachments, submittedAttachments),
+          draft: current.draft || submittedDraft,
+          goalMode: current.goalMode || submittedGoal
+        } : {}),
+        busy: false,
+        cancelling: false,
+        items: [
+          ...(imageRejected ? current.items.filter(item => item.id !== userItemId) : current.items),
+          {
+            id: nextId('send'),
+            kind: 'system',
+            text: imageRejected ? t('composer.imageRejected') : error instanceof Error ? error.message : String(error)
+          }
+        ]
+      }))
     }
   }
 
@@ -1900,42 +1786,82 @@ function App() {
     await selectProject(selected)
   }
 
-  const addLocalAttachments = (paths: string[], kind: LocalAttachment['kind']) => {
-    updateView(activeProject, current => {
-      const existing = new Set(
-        current.attachments
-          .filter((item): item is LocalAttachment => item.kind !== 'image')
-          .map(item => pathKey(item.path))
-      )
-      const added = paths
-        .map(path => localAttachment(path, kind))
+  const addPreparedAttachments = (workspace: string, prepared: PreparedLocalAttachments) => {
+    updateView(workspace, current => {
+      const existing = new Set(current.attachments.flatMap(item => item.path ? [pathKey(item.path)] : []))
+      const images = prepared.images
+        .map((item): ImageAttachment => ({
+          dataUrl: item.data_url,
+          kind: 'image',
+          name: item.name,
+          path: item.path,
+          size: item.size
+        }))
         .filter(item => {
-          const key = pathKey(item.path)
+          const key = pathKey(item.path!)
           if (existing.has(key)) return false
           existing.add(key)
           return true
         })
-      const slots = MAX_LOCAL_ATTACHMENTS - current.attachments.filter(item => item.kind !== 'image').length
+      const locals = prepared.attachments.filter(item => {
+        const key = pathKey(item.path)
+        if (existing.has(key)) return false
+        existing.add(key)
+        return true
+      })
+      const imageSlots = Math.max(
+        0,
+        MAX_IMAGE_ATTACHMENTS - current.attachments.filter(item => item.kind === 'image').length
+      )
+      const localSlots = Math.max(
+        0,
+        MAX_LOCAL_ATTACHMENTS - current.attachments.filter(item => item.kind !== 'image').length
+      )
+      const notices: TimelineItem[] = []
+      if (images.length > imageSlots) {
+        notices.push({ id: nextId('image'), kind: 'system', text: t('composer.imageLimit') })
+      }
+      if (locals.length > localSlots) {
+        notices.push({ id: nextId('attachment'), kind: 'system', text: t('composer.attachmentLimit') })
+      }
       return {
         ...current,
-        attachments: [...current.attachments, ...added.slice(0, Math.max(0, slots))],
-        items: added.length > slots
-          ? [...current.items, { id: nextId('attachment'), kind: 'system', text: t('composer.attachmentLimit') }]
-          : current.items
+        attachments: [
+          ...current.attachments,
+          ...images.slice(0, imageSlots),
+          ...locals.slice(0, localSlots)
+        ],
+        items: notices.length ? [...current.items, ...notices] : current.items
       }
     })
   }
 
+  const prepareAttachments = async (workspace: string, paths: string[]) => {
+    try {
+      const prepared = await sendGateway<PreparedLocalAttachments>(workspace, 'attachment.prepare', {
+        attachments: paths.map(path => ({ path: plainPath(path) }))
+      })
+      addPreparedAttachments(workspace, prepared)
+    } catch (error) {
+      updateView(workspace, current => ({
+        ...current,
+        items: [...current.items, { id: nextId('attachment'), kind: 'system', text: String(error) }]
+      }))
+    }
+  }
+
   const chooseFiles = async () => {
+    const workspace = activeProject
     const selected = await open({ directory: false, multiple: true, title: t('composer.addFiles') })
     if (!selected) return
-    addLocalAttachments(Array.isArray(selected) ? selected : [selected], 'file')
+    await prepareAttachments(workspace, Array.isArray(selected) ? selected : [selected])
   }
 
   const chooseFolder = async () => {
+    const workspace = activeProject
     const selected = await open({ directory: true, multiple: false, title: t('composer.addFolder') })
     if (!selected || Array.isArray(selected)) return
-    addLocalAttachments([selected], 'folder')
+    await prepareAttachments(workspace, [selected])
   }
 
   /** Take a project out of this window, and say where the user ended up. */
@@ -2601,13 +2527,6 @@ function App() {
               const image = Array.from(event.clipboardData.files).find(file => file.type.startsWith('image/'))
               if (!image) return
               event.preventDefault()
-              if (!(selectedModel?.vision ?? info.model_vision)) {
-                updateView(activeProject, current => ({
-                  ...current,
-                  items: [...current.items, { id: nextId('image'), kind: 'system', text: t('composer.visionRequired') }]
-                }))
-                return
-              }
               void readImage(image).then(value => {
                 updateView(activeProject, current => {
                   const imageCount = current.attachments.filter(item => item.kind === 'image').length
@@ -3126,7 +3045,10 @@ function FolderIcon({ className = '', open }: { className?: string; open: boolea
   )
 }
 
-type ModelDraft = Omit<ModelProfile, 'api_key_configured' | 'enabled' | 'vision'>
+type ModelDraft = Pick<
+  ModelProfile,
+  'base_url' | 'context_window' | 'id' | 'max_output_tokens' | 'model' | 'name' | 'provider'
+>
 type ModelTarget = { profile?: string; provider?: string }
 
 const PROVIDER_ICON_URLS: Readonly<Record<string, string>> = {
@@ -3197,19 +3119,6 @@ const SETTINGS_SECTIONS: ReadonlyArray<{ hintKey: string; id: SettingsSection; l
   { hintKey: 'settings.plugins.hint', id: 'plugins', labelKey: 'settings.plugins' }
 ]
 
-type PluginInfo = {
-  capabilities?: string[]
-  description: string
-  disabled: boolean
-  errors: string[]
-  name: string
-  required: boolean
-  scope: string
-  source: string
-  tools: string[]
-  version: string
-}
-
 function pluginContribution(plugin: PluginInfo): string {
   const values = plugin.tools.length ? [t('plugins.tools', { tools: plugin.tools.join(', ') })] : []
   if (plugin.capabilities?.includes('prompt')) values.push(t('plugins.prompt'))
@@ -3273,15 +3182,12 @@ function PluginsSettings({
             </span>
             {plugin.errors.length ? <span className="plugin-error">{t('plugins.error', { error: plugin.errors[0]! })}</span> : null}
           </div>
-          <label className="settings-switch" title={plugin.disabled ? t('plugins.off') : t('plugins.on')}>
-            <input
-              checked={!plugin.disabled}
-              disabled={plugin.required || form.pending === plugin.name}
-              onChange={event => toggle(plugin, event.target.checked)}
-              type="checkbox"
-            />
-            <span aria-hidden="true" />
-          </label>
+          <SettingsSwitch
+            checked={!plugin.disabled}
+            disabled={plugin.required || form.pending === plugin.name}
+            label={`${plugin.name}: ${plugin.disabled ? t('plugins.off') : t('plugins.on')}`}
+            onChange={enabled => toggle(plugin, enabled)}
+          />
         </div>
       ))}
       <p className="settings-note">{t('plugins.external')}</p>
@@ -3434,15 +3340,12 @@ function ModelCredentialRow({
             title={t('models.removeKey')}
             type="button"
           ><TrashIcon /></button>
-          <label className="settings-switch" title={enabled ? t('models.disable') : t('models.enable')}>
-            <input
-              checked={enabled}
-              disabled={busy}
-              onChange={event => toggle(event.target.checked)}
-              type="checkbox"
-            />
-            <span aria-hidden="true" />
-          </label>
+          <SettingsSwitch
+            checked={enabled}
+            disabled={busy}
+            label={`${label}: ${enabled ? t('models.disable') : t('models.enable')}`}
+            onChange={toggle}
+          />
         </div>
       </form>
       <div className="model-provider-meta">
@@ -3836,52 +3739,76 @@ function CompactionSettingsForm({
     result => result.text,
     'compact'
   )
+  const moveThreshold = (amount: number) => setDraft(current => ({
+    ...current,
+    threshold_percent: Math.min(95, Math.max(50, current.threshold_percent + amount))
+  }))
 
   return (
     <form className="compaction-settings settings-form" onSubmit={save}>
-      <div className="compaction-toggle">
-        <span>
-          <strong>{t('compaction.automatic')}</strong>
-          <small>{t('compaction.automaticNote')}</small>
-        </span>
-        <label className="settings-switch" title={draft.automatic ? t('plugins.on') : t('plugins.off')}>
-          <input
+      <div className="compaction-controls">
+        <div className="compaction-control">
+          <span className="compaction-copy">
+            <strong>{t('compaction.automatic')}</strong>
+            <small>{t('compaction.automaticNote')}</small>
+          </span>
+          <SettingsSwitch
             checked={draft.automatic}
-            onChange={event => setDraft(current => ({ ...current, automatic: event.target.checked }))}
-            type="checkbox"
+            label={t('compaction.automatic')}
+            onChange={automatic => setDraft(current => ({ ...current, automatic }))}
           />
-          <span aria-hidden="true" />
-        </label>
+        </div>
+        <div className="compaction-control">
+          <span className="compaction-copy">
+            <strong>{t('compaction.threshold')}</strong>
+            <small>{t('compaction.thresholdNote')}</small>
+          </span>
+          <div className="threshold-stepper">
+            <button
+              aria-label={t('compaction.decreaseThreshold')}
+              disabled={draft.threshold_percent <= 50}
+              onClick={() => moveThreshold(-1)}
+              type="button"
+            >
+              <MinusIcon />
+            </button>
+            <output aria-live="polite">{draft.threshold_percent}<small>%</small></output>
+            <button
+              aria-label={t('compaction.increaseThreshold')}
+              disabled={draft.threshold_percent >= 95}
+              onClick={() => moveThreshold(1)}
+              type="button"
+            >
+              <PlusIcon />
+            </button>
+          </div>
+        </div>
+        <div className="compaction-control compaction-strategy">
+          <span className="compaction-copy">
+            <strong>{t('compaction.strategy')}</strong>
+            <small>{t('compaction.strategyNote')}</small>
+          </span>
+          <div className="compaction-strategy-choice">
+            <div aria-label={t('compaction.strategy')} className="language-options" role="radiogroup">
+              {(['insert', 'two-stage'] as const).map(strategy => (
+                <button
+                  aria-checked={draft.strategy === strategy}
+                  className={`language-option ${draft.strategy === strategy ? 'active' : ''}`}
+                  key={strategy}
+                  onClick={() => setDraft(current => ({ ...current, strategy }))}
+                  role="radio"
+                  type="button"
+                >
+                  {t(strategy === 'insert' ? 'compaction.insert' : 'compaction.twoStage')}
+                </button>
+              ))}
+            </div>
+            <small className="compaction-strategy-note">
+              {t(draft.strategy === 'insert' ? 'compaction.insertNote' : 'compaction.twoStageNote')}
+            </small>
+          </div>
+        </div>
       </div>
-      <label className="line-field">
-        <span>{t('compaction.threshold')}</span>
-        <span className="field-line">
-          <input
-            max={95}
-            min={50}
-            onChange={event => setDraft(current => ({ ...current, threshold_percent: Number(event.target.value) }))}
-            required
-            type="number"
-            value={draft.threshold_percent}
-          />
-          <small>%</small>
-        </span>
-      </label>
-      <label className="line-field">
-        <span>{t('compaction.strategy')}</span>
-        <span className="field-line">
-          <select
-            onChange={event => setDraft(current => ({
-              ...current,
-              strategy: event.target.value as CompactionSettings['strategy']
-            }))}
-            value={draft.strategy}
-          >
-            <option value="insert">{t('compaction.insert')}</option>
-            <option value="two-stage">{t('compaction.twoStage')}</option>
-          </select>
-        </span>
-      </label>
       <p className="settings-note">{t('compaction.manualNote')}</p>
       <SettingsMessage failed={form.failed} message={form.message} />
       <footer>

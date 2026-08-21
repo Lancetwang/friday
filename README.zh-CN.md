@@ -135,6 +135,7 @@ flowchart TB
 
 - `packages/core` 包含公开的 `Agent`、`RunContext`、供应商适配器、工具执行、事件、用量、取消与预检契约。
 - `packages/harness` 构成 Friday 产品层，负责插件、提示词、工具、模型配置、会话、权限、压缩、记忆、Skill、检查点、Trace 和验证。
+- `packages/protocol` 是 Harness 与两个 UI 共用的纯类型通信契约；它没有运行时代码，也不导入 Core 或 Harness。
 - `ui-tui` 与 `ui-desktop` 是协议客户端，不包含第二套 Agent Loop。
 - `integrations/harbor` 是 Harbor Python 自定义 Agent 协议的薄适配器，实际安装并调用 TypeScript 包。
 
@@ -151,6 +152,7 @@ Friday 提供进程级评测契约，不将 Core 绑定到某个 Benchmark。`fr
 ```text
 packages/core/          可复用的 Agent Loop 与供应商适配器
 packages/harness/       Friday Runtime、状态、工具与 Gateway
+packages/protocol/      Harness/UI 共用的纯类型通信契约
 ui-tui/                 终端 UI 与跨平台 CLI
 ui-desktop/             React + Tauri 桌面应用
 integrations/harbor/    Terminal-Bench / Harbor 适配器
