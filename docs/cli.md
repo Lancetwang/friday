@@ -50,6 +50,7 @@ TUI slash commands:
 /search
 /memory [add|update|status|search|consolidate ...]
 /plugins
+/compaction [auto on|off | threshold 50..95 | strategy insert|two-stage]
 /context
 /trace [on|off]
 /compact
@@ -75,11 +76,17 @@ after confirmation. With arguments it stays a command - `/memory add user
 prefers pnpm`, `/memory status`, `/memory consolidate`.
 
 `/plugins` lists every plugin - the built-in capabilities (workspace, web,
-memory, skills) and external ones - with its on/off state, tools, and
-description. `Enter` switches the selected plugin on or off; the change
+memory, skills, compaction) and external ones - with its on/off state,
+capabilities, tools, and description. `Enter` switches the selected plugin on or off; the change
 persists in `disabled_plugins` and reloads the active session. Plugin changes
 are rejected while a request in that gateway is running. The required
 `workspace` pack stays on.
+
+`/compaction` reports the effective Harness policy. Its arguments toggle
+automatic compaction, set its occupancy threshold, or choose direct semantic
+`insert` versus `two-stage` tool-result receipts followed by semantic
+compaction. Turning automatic mode off retains manual `/compact`; disabling the
+compaction plugin removes both paths.
 
 `/branches` opens the fork map: the conversation tree drawn with guide lines,
 the current branch marked `◉`, each fork labeled with the message index it

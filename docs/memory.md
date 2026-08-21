@@ -1,7 +1,9 @@
 # Memory
 
-Friday's memory system is file-based and owned by the Harness. Durable facts,
-episodic recall, resumable conversation, and live progress are separate stores.
+Friday's built-in memory provider is file-based and owned by the Harness.
+Durable facts, episodic recall, resumable conversation, and live progress are
+separate stores. The provider is replaceable through the Harness plugin
+registry; this page describes the built-in implementation.
 
 ## Storage
 
@@ -68,16 +70,29 @@ Unknown, unsupported, transient, or single notes remain untouched. Entries are
 ordinary Markdown bullets; hidden HTML comments carry ids, sources, timestamps,
 and episode counts, and are removed from the model-facing prefix.
 
-Disabling the `memory` capability removes the Memory tool and also stops
-automatic capture and recall for subsequent public turns.
+Disabling the built-in `memory` capability removes the Memory tool and its
+complete model-facing prompt contribution (`USER.md`, global memory, and
+project memory). It also stops automatic capture and recall for subsequent
+public turns and blocks model-backed consolidation. This switch is prospective:
+recall already embedded in a session's user-message history stays there, and
+the stored files are not deleted. Administrative list, edit, and remove
+operations remain available so disabling the Agent capability never traps the
+user's data.
+
+An external memory plugin can replace this behavior after the built-in pack is
+disabled. The Harness still invokes it at the same public-turn boundary,
+prepends returned recall to the same user message, emits capture receipts, and
+exposes optional consolidation through the same gateway. See
+[Plugins](plugins.md#memory-service-contract).
 
 ## Context lifecycle
 
-The system prompt contains `USER.md`, global memory, and project memory. Friday
-builds it when a session is created and refreshes it before a new user turn,
-before an approval continuation, when plugins or the model are reloaded, and
-before a manual `/compact`. Automatic compaction inside an already running tool
-loop preserves the current system prefix rather than rereading memory files.
+While the memory capability is enabled, its plugin-owned system-prompt section
+contains `USER.md`, global memory, and project memory. Friday builds the prompt
+when a session is created and refreshes it before a new user turn, before an
+approval continuation, when plugins or the model are reloaded, and before a
+manual `/compact`. Automatic compaction inside an already running tool loop
+preserves the current system prefix rather than rereading memory files.
 
 Compaction asks the summarizer for a `## Memory` section, removes that section
 from the live session summary, and reports its candidates in the compaction

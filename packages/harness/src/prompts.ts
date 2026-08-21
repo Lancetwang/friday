@@ -11,18 +11,13 @@ export function buildInstructions(
   extraSections: Array<[string, string]> = []
 ): string {
   const home = fridayHome()
-  const state = projectStateDir(workspace)
   const parts: Array<[string, string]> = [
     ['Soul', userFile(home, ['SOUL.md', 'soul.md']) || template('SOUL.md')],
     ['Security', template('SECURITY.md')],
     ['Runtime', template('RUNTIME.md')],
-    ['TypeScript Runtime', 'Use the Memory tool for durable-memory commands; do not invoke `friday memory` through Bash in this runtime.'],
     ['Tool Guidance', template('TOOL_GUIDANCE.md')],
     ['Global Rules', userFile(home, ['AGENTS.md']) || template('AGENTS.md')],
-    ['User Profile', userFile(home, ['USER.md', 'user.md'])],
-    ['Global Memory', userFile(home, ['MEMORY.md'])],
     ['Project Instructions', projectInstructions(workspace)],
-    ['Project Memory', userFile(state, ['MEMORY.md'])],
     // Capability and plugin sections (Skills routing included) sit between
     // the durable rules and the environment so they can guide tool choice
     // without outranking security or user rules.
@@ -30,6 +25,21 @@ export function buildInstructions(
     ['Environment', environment(workspace, config)]
   ]
   return parts.filter(([, body]) => body.trim()).map(([title, body]) => `## ${title}\n${body.trim()}`).join('\n\n')
+}
+
+/** Prompt contribution owned by the memory capability. */
+export function buildMemoryInstructions(workspace: string): string {
+  const home = fridayHome()
+  const state = projectStateDir(workspace)
+  const durable: Array<[string, string]> = [
+    ['User Profile', memoryPromptFile(home, ['USER.md', 'user.md'])],
+    ['Global Memory', memoryPromptFile(home, ['MEMORY.md'])],
+    ['Project Memory', memoryPromptFile(state, ['MEMORY.md'])]
+  ]
+  return [
+    template('MEMORY.md').trim(),
+    ...durable.filter(([, body]) => body.trim()).map(([title, body]) => `### ${title}\n${body.trim()}`)
+  ].join('\n\n')
 }
 
 export function promptTemplate(name: string): string {
@@ -43,6 +53,16 @@ const template = promptTemplate
 function userFile(root: string, names: string[]): string {
   const path = names.map(name => join(root, name)).find(existsSync)
   return path ? readFileSync(path, 'utf8').slice(0, 12_000) : ''
+}
+
+/** Keep storage bookkeeping out of the model-facing durable-memory prefix. */
+function memoryPromptFile(root: string, names: string[]): string {
+  const path = names.map(name => join(root, name)).find(existsSync)
+  if (!path) return ''
+  return readFileSync(path, 'utf8')
+    .replace(/^<!-- friday-memory \{.*\} -->\r?$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .slice(0, 12_000)
 }
 
 function projectInstructions(workspace: string): string {

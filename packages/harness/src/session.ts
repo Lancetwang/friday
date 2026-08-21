@@ -6,8 +6,24 @@ import {
   Agent, RunContext, type AgentEvent, type Message, type Tool, type ToolCall, type Usage
 } from 'friday-agent-core'
 
-import { disabledPlugins, loadModelConfig, projectStateDir, resolveWorkspace, type ModelConfig } from './config.js'
-import { compactIfNeeded, contextReport, observeContextUsage, tokenMeasurement } from './context.js'
+import {
+  disabledPlugins,
+  loadCompactionSettings,
+  loadModelConfig,
+  projectStateDir,
+  resolveWorkspace,
+  type ModelConfig
+} from './config.js'
+import {
+  contextReport,
+  observeContextUsage,
+  recordCompactionFailure,
+  restoreCompactedMessage,
+  tokenMeasurement,
+  type CompactionRequest,
+  type CompactionResult,
+  type ContextCompaction
+} from './context.js'
 import { beginCheckpoint, deleteSessionCheckpoints, finishCheckpoint, type Checkpoint } from './checkpoint.js'
 import { checkpointArtifacts, type ArtifactInfo } from './artifacts.js'
 import {
@@ -20,11 +36,21 @@ import {
   type PermissionMode
 } from './permissions.js'
 import { buildInstructions, promptTemplate } from './prompts.js'
-import { assembleTools, loadPlugins, markDisabled, pluginInfo, pluginSections, type LoadedPlugin } from './plugins.js'
+import {
+  assembleCompactor,
+  assembleMemoryProvider,
+  assembleTools,
+  loadPlugins,
+  markDisabled,
+  pluginInfo,
+  pluginSections,
+  type LoadedPlugin,
+  type RegisteredCompactor,
+  type RegisteredMemoryProvider
+} from './plugins.js'
 import { builtinPlugins, runShell, toolSpillDir } from './tools.js'
 import { writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
-import { consolidateMemory as applyMemoryConsolidation, captureUserMemory, relevantMemory } from './memory.js'
 import { modelFor } from './model.js'
 import {
   beginProgress,
@@ -121,6 +147,8 @@ export class FridaySession {
   private lastEvents: AgentEvent[] = []
   private readonly readAllow = new Set<string>()
   private plugins: LoadedPlugin[]
+  private memoryProvider: RegisteredMemoryProvider | undefined
+  private compactor: RegisteredCompactor | undefined
 
   private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext, external: LoadedPlugin[]) {
     this.workspace = resolveWorkspace(workspace)
@@ -146,11 +174,7 @@ export class FridaySession {
     }
   }
 
-  /**
-   * One registry holds everything outside the core loop: the built-in
-   * capability packs first, then external plugins. Assembly, prompt
-   * sections, and the /plugins report all read this single list.
-   */
+  /** One registry supplies the Harness's narrow extension seams. */
   private registerPlugins(external: LoadedPlugin[]): void {
     this.plugins = markDisabled([
       ...builtinPlugins(this.workspace, {
@@ -165,6 +189,8 @@ export class FridaySession {
       ...external
     ], disabledPlugins(this.workspace))
     this.tools = assembleTools(this.plugins, { workspace: this.workspace })
+    this.memoryProvider = assembleMemoryProvider(this.plugins)
+    this.compactor = assembleCompactor(this.plugins)
   }
 
   /**
@@ -265,13 +291,14 @@ export class FridaySession {
           thinkingEffort: session.thinking
         }
         beginProgress(session.context, text, mode, options.continueProgress === true)
-        // Unplugging the memory capability silences recall and capture too,
-        // not just the Memory tool: disabled means Friday does not remember.
-        const remember = !options.internal && session.pluginEnabled('memory')
-        const recalled = remember ? await relevantMemory(session.workspace, text) : ''
-        const captured = remember ? await captureUserMemory(session.workspace, text, session.sessionId) : undefined
+        const prepared = options.internal ? undefined : await session.memoryProvider?.memory.prepare({
+          workspace: session.workspace,
+          text,
+          sessionId: session.sessionId
+        })
+        const recalled = prepared?.recall || ''
         session.refreshInstructions()
-        if (captured) session.context.emit('memory.updated', 'memory', { capture: captured })
+        if (prepared?.capture) session.context.emit('memory.updated', 'memory', { capture: prepared.capture })
         for (const attachment of attachments) session.readAllow.add(attachment.path)
         // Recall rides inside the user message rather than as a separate
         // system message that the next turn removes: the conversation stays
@@ -372,11 +399,17 @@ export class FridaySession {
     return [
       ...this.archived,
       ...conversationBody(this.context.messages).filter(message => !message.friday_compaction_artifact)
-    ]
+    ].map(restoreCompactedMessage)
   }
 
   contextText(): string {
-    return contextReport(this.context, this.tools, this.config.contextWindow)
+    return contextReport(
+      this.context,
+      this.tools,
+      this.config.contextWindow,
+      loadCompactionSettings(this.workspace),
+      this.compactor?.name
+    )
   }
 
   progress(): ProgressState | Record<string, never> {
@@ -385,11 +418,13 @@ export class FridaySession {
 
   async compact(): Promise<string> {
     if (this.abort) throw new Error('Stop the running request before compacting this session.')
+    if (!this.compactor) throw new Error('No compaction plugin is enabled.')
     this.refreshInstructions()
-    const result = await compactIfNeeded({
+    const result = await this.invokeCompactor({
       context: this.context,
       tools: this.tools,
       config: this.config,
+      settings: loadCompactionSettings(this.workspace),
       model: modelFor(this.config, this.thinking),
       archive: messages => this.archived.push(...structuredClone(messages)),
       force: true
@@ -400,22 +435,32 @@ export class FridaySession {
 
   async consolidateMemory(days: number): Promise<Record<string, unknown>> {
     if (this.abort) throw new Error('This session already has a request in progress.')
+    if (!this.memoryProvider) throw new Error('Memory plugin is disabled.')
+    if (!this.memoryProvider.memory.consolidate) {
+      throw new Error(`Memory plugin '${this.memoryProvider.name}' does not support consolidation.`)
+    }
     this.abort = new AbortController()
+    const signal = this.abort.signal
     try {
-      const result = await applyMemoryConsolidation(this.workspace, days, async payload => {
-        if (!this.config.apiKey) throw new Error(`Model '${this.config.profileName}' has no API key. Configure it in Friday Settings.`)
-        const response = await modelFor(this.config, this.thinking, 4_000).complete({
-          messages: [
-            {
-              role: 'system',
-              content: `${promptTemplate('SECURITY.md').trim()}\n\n${promptTemplate('MEMORY_CONSOLIDATE.md').trim()}`
-            },
-            { role: 'user', content: JSON.stringify(payload) }
-          ],
-          signal: this.abort!.signal
-        })
-        this.context.recordUsage(response.usage)
-        return modelJson(response.content, 'Memory consolidation model returned invalid JSON.')
+      const result = await this.memoryProvider.memory.consolidate({
+        workspace: this.workspace,
+        days,
+        signal,
+        review: async payload => {
+          if (!this.config.apiKey) throw new Error(`Model '${this.config.profileName}' has no API key. Configure it in Friday Settings.`)
+          const response = await modelFor(this.config, this.thinking, 4_000).complete({
+            messages: [
+              {
+                role: 'system',
+                content: `${promptTemplate('SECURITY.md').trim()}\n\n${promptTemplate('MEMORY_CONSOLIDATE.md').trim()}`
+              },
+              { role: 'user', content: JSON.stringify(payload) }
+            ],
+            signal
+          })
+          this.context.recordUsage(response.usage)
+          return modelJson(response.content, 'Memory consolidation model returned invalid JSON.')
+        }
       })
       this.context.emit('memory.updated', 'memory', { consolidation: result })
       return result
@@ -583,6 +628,8 @@ export class FridaySession {
       running: !!this.abort,
       tools: this.tools.map(tool => tool.name),
       plugins: pluginInfo(this.plugins),
+      memory: { provider: this.memoryProvider?.name || '' },
+      compaction: { ...loadCompactionSettings(this.workspace), provider: this.compactor?.name || '' },
       approval: this.approval()
     }
   }
@@ -1010,10 +1057,6 @@ export class FridaySession {
     return buildInstructions(this.workspace, this.config, pluginSections(this.plugins, { workspace: this.workspace }))
   }
 
-  private pluginEnabled(name: string): boolean {
-    return this.plugins.some(plugin => plugin.name === name && !plugin.disabled)
-  }
-
   private refreshInstructions(): void {
     const system = this.context.messages.find(message => message.role === 'system')
     if (system) system.content = this.instructions()
@@ -1023,17 +1066,67 @@ export class FridaySession {
     this.context.messages.splice(0, this.context.messages.length, ...this.context.messages.filter(message => !message.agent_internal))
   }
 
+  /**
+   * Keep service observability consistent across built-in and external
+   * compactors. Returned measurements are receipts, not authority: the host
+   * replaces them with its own before/after projection before exposing them.
+   */
+  private async invokeCompactor(request: CompactionRequest): Promise<CompactionResult> {
+    if (!this.compactor) throw new Error('No compaction plugin is enabled.')
+    const before = Number(tokenMeasurement(this.context, this.tools).tokens)
+    const eventStart = this.context.events.length
+    const returned = await this.compactor.compact(request)
+    const result = returned && typeof returned === 'object' ? returned : {}
+    if (!result.record || typeof result.record !== 'object') return result
+    const record = {
+      ...result.record,
+      before_tokens: before,
+      after_tokens: Number(tokenMeasurement(this.context, this.tools).tokens),
+      window: this.config.contextWindow
+    } as ContextCompaction
+    if (!this.context.events.slice(eventStart).some(event => event.type === 'context.compacted')) {
+      this.context.emit('context.compacted', 'context', record)
+    }
+    return { ...result, record }
+  }
+
   private async compactBeforeStep(signal?: AbortSignal): Promise<void | { tools: false }> {
-    const result = await compactIfNeeded({
-      context: this.context,
-      tools: this.tools,
-      config: this.config,
-      model: modelFor(this.config, this.thinking),
-      archive: messages => this.archived.push(...structuredClone(messages)),
-      ...(signal ? { signal } : {})
-    })
-    const record = result.record
-    if (!record || record.after_tokens / this.config.contextWindow < 0.85) return
+    const settings = loadCompactionSettings(this.workspace)
+    const threshold = settings.threshold_percent / 100
+    const before = Number(tokenMeasurement(this.context, this.tools).tokens)
+    if (before / this.config.contextWindow < threshold) return
+    if (!settings.automatic || !this.compactor) {
+      this.context.emit('loop.guard', 'runtime', { reason: 'compaction_required' })
+      this.context.addMessage({
+        role: 'system',
+        content: this.compactor
+          ? 'Automatic context compaction is off and the configured threshold has been reached. Do not call more tools. Return a concise progress update and ask the user to compact the conversation manually before continuing.'
+          : 'The context threshold has been reached and no compaction plugin is enabled. Do not call more tools. Return a concise progress update and ask the user to enable a compaction plugin, then compact the conversation manually.',
+        agent_internal: true
+      })
+      return { tools: false }
+    }
+    try {
+      await this.invokeCompactor({
+        context: this.context,
+        tools: this.tools,
+        config: this.config,
+        settings,
+        model: modelFor(this.config, this.thinking),
+        archive: messages => this.archived.push(...structuredClone(messages)),
+        ...(signal ? { signal } : {})
+      })
+    } catch (error) {
+      if (signal?.aborted) throw error
+      recordCompactionFailure(this.context, before, this.config.contextWindow, error)
+      const owner = this.plugins.find(plugin => plugin.name === this.compactor?.name)
+      const message = `compact(): ${error instanceof Error ? error.message : String(error)}`
+      if (owner && !owner.errors.includes(message)) owner.errors.push(message)
+    }
+    // A plugin's record is observability, never authority. The Harness owns
+    // the hard context guard and measures the actual model projection itself.
+    const after = Number(tokenMeasurement(this.context, this.tools).tokens)
+    if (after / this.config.contextWindow < threshold) return
     this.context.emit('loop.guard', 'runtime', { reason: 'context_window' })
     this.context.addMessage({
       role: 'system',

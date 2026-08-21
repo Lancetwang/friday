@@ -96,8 +96,11 @@ tokens per main-agent call. They are configuration defaults, not a claim about
 every provider's actual limits. Set both to values the selected model supports
 and leave enough context headroom for the prompt and tool schemas.
 
-Context pressure triggers compaction at 85% occupancy. A normal Agent attempt
-has a 100-step guard, an independent verifier has 40 steps, and Goal mode can
-make at most six attempts. Provider usage is measured and reported but is not
-stopped by `run_token_budget`. See [Verification, Run Guards, and
-Compaction](verification.md) for the complete behavior.
+Context pressure is handled by the Harness compaction plugin. Its compatibility
+default is automatic insert-and-compact at 85% occupancy; Settings → Compaction
+or `/compaction` can change the threshold, disable automatic compaction while
+retaining manual compaction, or enable the two-stage tool-receipt strategy. A
+normal Agent attempt has a 100-step guard, an independent verifier has 40
+steps, and Goal mode can make at most six attempts. Provider usage is measured
+and reported but is not stopped by `run_token_budget`. See [Verification, Run
+Guards, and Compaction](verification.md) for the complete behavior.

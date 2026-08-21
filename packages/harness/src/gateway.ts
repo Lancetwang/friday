@@ -9,12 +9,14 @@ import {
   closeProject,
   deleteModelProfile,
   listProjects,
+  loadCompactionSettings,
   loadModelCatalog,
   readModelCredential,
   recordProject,
   refreshModelProfiles,
   resolveWorkspace,
   saveModelProfile,
+  saveCompactionSettings,
   selectModelProfile,
   setModelEnabled,
   setPluginEnabled,
@@ -162,6 +164,10 @@ export class Gateway {
         if (workspace) await closeProject(workspace)
         this.ok(id, { closed: !!workspace })
       } else if (method === 'settings.web.get') this.ok(id, loadWebSearchSettings())
+      else if (method === 'settings.compaction.get') this.ok(id, loadCompactionSettings(this.workspace))
+      else if (method === 'settings.compaction.save') {
+        this.ok(id, await this.runGlobal(() => saveCompactionSettings(this.workspace, params)))
+      }
       else if (method === 'settings.web.key.get') {
         this.ok(id, { api_key: readWebSearchCredential(String(params.provider || '')) })
       } else if (method === 'settings.web.save') {
@@ -180,6 +186,7 @@ export class Gateway {
         ])
         this.ok(id, {
           memory_files: { user, global },
+          compaction: loadCompactionSettings(this.workspace),
           web_search: loadWebSearchSettings(),
           user_profile: loadUserProfile()
         })

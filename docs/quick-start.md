@@ -62,6 +62,7 @@ Inside the TUI, use slash commands for session and runtime operations:
 /resume
 /memory status
 /context
+/compaction
 /compact
 /permission
 /fork

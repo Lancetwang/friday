@@ -62,6 +62,7 @@ friday run --trajectory C:\logs\trajectory.json -- "修复失败的测试"
 /resume
 /memory status
 /context
+/compaction
 /compact
 /permission
 /fork

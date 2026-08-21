@@ -95,7 +95,7 @@ Friday 将受保护的模型/工具 Loop 与文件读取、搜索、编辑、She
 
 ### 上下文、记忆与 Skill
 
-稳定指令位于动态状态之前，以利用供应商的 Prefix Cache。当模型上下文达到配置窗口的 85% 时，Friday 会用结构化摘要替换较早的对话，并在目标预算内重放尽可能大的完整近期尾部；即使目标无法满足，也会保留最小近期尾部。UI、Resume 和 Fork 仍保留完整会话。长期事实、项目知识、情景记忆和当前任务进度彼此分离；Skill 先通过精简元数据发现，只在选中后加载正文与引用资源。
+稳定指令位于动态状态之前，以利用供应商的 Prefix Cache。上下文压缩是 Harness 插件，可配置触发阈值及自动或手动策略。兼容默认值是在 85% 时自动执行 insert-and-compact：用结构化摘要替换较早对话，并在目标预算内重放尽可能大的完整近期尾部；即使无法满足目标预算，也会保留最小近期尾部。可选的两阶段策略会先把足够旧的工具结果换成确定性收据，同时为 UI、Resume 和 Fork 保留精确原文；如果释放空间不足，会先完整回滚，再做语义压缩。长期事实、项目知识、情景记忆和当前任务进度彼此分离；Skill 先通过精简元数据发现，只在选中后加载正文与引用资源。
 
 ### 验证与恢复
 
@@ -117,15 +117,16 @@ flowchart TB
     end
     Surfaces --> Gateway["Gateway — NDJSON JSON-RPC"]
     Gateway --> Session["会话 — 统一 Turn 框架：<br/>检查点 · 审批 · 压缩 · Goal 验证"]
-    subgraph Registry["能力注册表 — 工具与提示词片段"]
+    subgraph Registry["Harness 插件注册表 — 工具 · 提示 · 服务"]
         direction LR
         Workspace["workspace*<br/>文件 · Shell · 计划"]
         Web["web<br/>搜索 · 抓取"]
         Memory["memory<br/>召回 · 存储"]
         Skills["skills<br/>技能"]
+        Compaction["compaction<br/>上下文策略"]
         External["你的插件<br/>.friday/plugins"]
     end
-    Registry -- "工具 + 提示段" --> Session
+    Registry -- "窄类型接口" --> Session
     Session --> Core["Core — 可复用运行时：<br/>带守护的 模型 ⇄ 工具 循环"]
     Core --> Providers["模型供应商<br/>Anthropic · OpenAI · 兼容端点"]
 ```
@@ -133,7 +134,7 @@ flowchart TB
 `*` 为必需插件；其余每一个——内置或自建——都可在 TUI（`/plugins`）、桌面设置或 `disabled_plugins` 中关闭。
 
 - `packages/core` 包含公开的 `Agent`、`RunContext`、供应商适配器、工具执行、事件、用量、取消与预检契约。
-- `packages/harness` 构成 Friday 产品层，负责提示词、工具、模型配置、会话、权限、记忆、Skill、检查点、Trace 和验证。
+- `packages/harness` 构成 Friday 产品层，负责插件、提示词、工具、模型配置、会话、权限、压缩、记忆、Skill、检查点、Trace 和验证。
 - `ui-tui` 与 `ui-desktop` 是协议客户端，不包含第二套 Agent Loop。
 - `integrations/harbor` 是 Harbor Python 自定义 Agent 协议的薄适配器，实际安装并调用 TypeScript 包。
 

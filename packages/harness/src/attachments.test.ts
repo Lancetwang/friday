@@ -81,7 +81,10 @@ test('desktop images and selected local files reach the model and resumable hist
     if (previous === undefined) delete process.env.FRIDAY_HOME
     else process.env.FRIDAY_HOME = previous
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-    await rm(temporary, { recursive: true, force: true })
+    // Windows can briefly retain a directory handle after the gateway's last
+    // atomic session write. Let fs.rm retry that transient lock instead of
+    // turning a successful integration test into a CI flake.
+    await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 })
 

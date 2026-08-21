@@ -75,11 +75,30 @@ estimate. Cumulative input-token spend is never treated as current occupancy.
 
 ## Compaction
 
-The main Agent checks occupancy before every model step. At 85% of the
-configured window it compacts automatically; `/compact` forces the same path
-between turns. There is no separate tool-result compaction pass.
+The main Agent checks occupancy before every model step. The Harness compaction
+plugin defaults to automatic compaction at 85% of the configured window, but
+the user can choose any integer threshold from 50% through 95%, turn automatic
+compaction off, and choose `insert` or `two-stage`. `/compact` invokes the
+enabled provider between turns even when automatic compaction is off.
 
-Friday tries three summary strategies in order:
+With automatic compaction off, reaching the threshold disables tools for one
+final model step and asks the user to compact manually (`/compact` in the TUI or
+**Compact now** under Desktop Settings → Compaction). Disabling the compaction
+plugin is stronger: no automatic or manual provider remains, so the final step
+asks the user to enable one first.
+
+The `two-stage` strategy first considers complete old assistant tool-call and
+tool-result batches. It protects the latest three batches and replaces eligible
+old results with deterministic receipts when each replacement saves at least
+512 characters. A receipt contains the tool name, outcome, original character
+count, and content digest. Exact results stay in session data and are restored
+for UI history, resume, and forks. This edit commits only when it reduces
+occupancy to 15 percentage points below the configured threshold, with a 40%
+floor. Otherwise Friday restores every candidate result before the semantic
+stage reads the conversation. The `insert` strategy starts directly at that
+semantic stage.
+
+The semantic stage tries three summary strategies in order:
 
 1. **Insert.** When the current prompt, a 2,000-token allowance for the compact
    instruction, and the configured maximum output can fit together, Friday
@@ -104,9 +123,11 @@ many recent assistant/tool cycles as fit. Otherwise it tries recent tails of
 
 Messages removed from the model prompt are archived in the session. The UI,
 resume, and fork history therefore retain the original conversation even though
-the model reads the compacted state. If the rebuilt prompt is still at or above
-85%, the main Agent receives one final step with tools disabled and must report
-the best supported result and unresolved items.
+the model reads the compacted state. Tool receipts likewise retain their exact
+original content in durable message metadata; this deliberately saves model
+context rather than disk space. If the rebuilt prompt is still at or above the
+configured threshold, the main Agent receives one final step with tools
+disabled and must report the best supported result and unresolved items.
 
 The verifier uses its own fresh bounded run and does not share the main
 session's compaction state.

@@ -210,6 +210,12 @@ type WebSearchSettings = {
   tavily_configured: boolean
 }
 
+type CompactionSettings = {
+  automatic: boolean
+  threshold_percent: number
+  strategy: 'insert' | 'two-stage'
+}
+
 type UserProfileSettings = {
   habits: string
   preferred_language: string
@@ -229,6 +235,7 @@ type MemoryFileDetail = MemoryFileInfo & {
 type MemoryFileScope = 'global' | 'user'
 
 type AppSettings = {
+  compaction: CompactionSettings
   memory_files: Record<MemoryFileScope, MemoryFileInfo>
   user_profile: UserProfileSettings
   web_search: WebSearchSettings
@@ -489,6 +496,13 @@ function stopReasonText(status: unknown) {
 function compactionText(payload: ContextCompaction) {
   if (payload.ok === false) {
     return t('context.compactFailed', { reason: payload.reason || '—' })
+  }
+  if (payload.kind === 'tool_results') {
+    return t('context.toolsCompacted', {
+      after: shortTokens(payload.after_tokens || 0),
+      before: shortTokens(payload.before_tokens || 0),
+      count: payload.tool_results || 0
+    })
   }
   const measured = Boolean(payload.before_tokens && payload.after_tokens && payload.kept_turns)
   const main = measured
@@ -1674,6 +1688,10 @@ function App() {
   const loadSettings = () => sendGateway<AppSettings>(settingsWorkspace, 'settings.get')
   const saveWebSettings = (value: Record<string, unknown>) =>
     sendGateway<WebSearchSettings>(settingsWorkspace, 'settings.web.save', value)
+  const saveCompactionSettings = (value: CompactionSettings) =>
+    sendGateway<CompactionSettings>(settingsWorkspace, 'settings.compaction.save', value)
+  const compactConversation = () =>
+    sendGateway<{ text: string }>(settingsWorkspace, 'session.compact')
   const revealWebKey = (provider: string) => sendGateway<{ api_key: string }>(
     settingsWorkspace,
     'settings.web.key.get',
@@ -2454,6 +2472,7 @@ function App() {
             catalog={models}
             initialSection={settingsSection}
             language={language}
+            onCompact={compactConversation}
             onClose={() => setPage('chat')}
             onClearKey={clearModelKey}
             onEnable={setProviderEnabled}
@@ -2466,6 +2485,7 @@ function App() {
             onRevealWebKey={revealWebKey}
             onDelete={deleteModel}
             onSave={saveModel}
+            onSaveCompaction={saveCompactionSettings}
             onSaveMemory={saveMemoryFileContent}
             onSaveProfile={saveUserProfile}
             onSaveWeb={saveWebSettings}
@@ -3166,17 +3186,19 @@ function MoonIcon() {
   )
 }
 
-type SettingsSection = 'general' | 'models' | 'web' | 'memory' | 'plugins'
+type SettingsSection = 'general' | 'models' | 'web' | 'memory' | 'compaction' | 'plugins'
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ hintKey: string; id: SettingsSection; labelKey: string }> = [
   { hintKey: 'settings.general.hint', id: 'general', labelKey: 'settings.general' },
   { hintKey: 'settings.models.hint', id: 'models', labelKey: 'settings.models' },
   { hintKey: 'settings.web.hint', id: 'web', labelKey: 'settings.web' },
   { hintKey: 'settings.memory.hint', id: 'memory', labelKey: 'settings.memory' },
+  { hintKey: 'settings.compaction.hint', id: 'compaction', labelKey: 'settings.compaction' },
   { hintKey: 'settings.plugins.hint', id: 'plugins', labelKey: 'settings.plugins' }
 ]
 
 type PluginInfo = {
+  capabilities?: string[]
   description: string
   disabled: boolean
   errors: string[]
@@ -3186,6 +3208,15 @@ type PluginInfo = {
   source: string
   tools: string[]
   version: string
+}
+
+function pluginContribution(plugin: PluginInfo): string {
+  const values = plugin.tools.length ? [t('plugins.tools', { tools: plugin.tools.join(', ') })] : []
+  if (plugin.capabilities?.includes('prompt')) values.push(t('plugins.prompt'))
+  if (plugin.capabilities?.includes('tool-wrapper')) values.push(t('plugins.wrapper'))
+  if (plugin.capabilities?.includes('memory')) values.push(t('plugins.memory'))
+  if (plugin.capabilities?.includes('compaction')) values.push(t('plugins.compaction'))
+  return values.join(' · ') || t('plugins.noTools')
 }
 
 /**
@@ -3238,7 +3269,7 @@ function PluginsSettings({
           <div className="model-provider-meta">
             <span>
               {plugin.required ? `${t('plugins.required')} · ` : ''}
-              {plugin.scope} · {plugin.tools.length ? t('plugins.tools', { tools: plugin.tools.join(', ') }) : t('plugins.noTools')}
+              {plugin.scope} · {pluginContribution(plugin)}
             </span>
             {plugin.errors.length ? <span className="plugin-error">{t('plugins.error', { error: plugin.errors[0]! })}</span> : null}
           </div>
@@ -3428,6 +3459,7 @@ function SettingsPage({
   language,
   onClearKey,
   onClose,
+  onCompact,
   onDelete,
   onEnable,
   onLanguageChange,
@@ -3438,6 +3470,7 @@ function SettingsPage({
   onRevealKey,
   onRevealWebKey,
   onSave,
+  onSaveCompaction,
   onSaveMemory,
   onSaveProfile,
   onSaveWeb,
@@ -3448,6 +3481,7 @@ function SettingsPage({
   language: Language
   onClearKey: (target: ModelTarget) => Promise<ModelCatalog>
   onClose: () => void
+  onCompact: () => Promise<{ text: string }>
   onDelete: (profileId: string) => Promise<ModelCatalog>
   onEnable: (target: ModelTarget, enabled: boolean) => Promise<ModelCatalog>
   onLanguageChange: (language: Language) => void
@@ -3458,6 +3492,7 @@ function SettingsPage({
   onRevealKey: (target: ModelTarget) => Promise<string>
   onRevealWebKey: (provider: string) => Promise<string>
   onSave: (profile: ModelDraft, apiKey: string) => Promise<ModelCatalog>
+  onSaveCompaction: (value: CompactionSettings) => Promise<CompactionSettings>
   onSaveMemory: (file: MemoryFileScope, content: string) => Promise<MemoryFileInfo>
   onSaveProfile: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
   onSaveWeb: (value: Record<string, unknown>) => Promise<WebSearchSettings>
@@ -3532,6 +3567,11 @@ function SettingsPage({
   const persistProfile = (profile: Partial<UserProfileSettings>) => onSaveProfile(profile).then(userProfile => {
     setSettings(current => current ? { ...current, user_profile: userProfile } : current)
     return userProfile
+  })
+
+  const persistCompaction = (value: CompactionSettings) => onSaveCompaction(value).then(compaction => {
+    setSettings(current => current ? { ...current, compaction } : current)
+    return compaction
   })
 
   return (
@@ -3746,6 +3786,17 @@ function SettingsPage({
               )}
             </div>
           )}
+          {section === 'compaction' && (
+            <div className="settings-section-wrap">
+              <header className="settings-head">
+                <h2>{t('compaction.title')}</h2>
+                <p>{t('compaction.desc')}</p>
+              </header>
+              {settings
+                ? <CompactionSettingsForm initial={settings.compaction} onCompact={onCompact} onSave={persistCompaction} />
+                : <SettingsLoading error={settingsError} />}
+            </div>
+          )}
           {section === 'plugins' && (
             <div className="settings-section-wrap">
               <header className="settings-head">
@@ -3757,6 +3808,91 @@ function SettingsPage({
           )}
       </section>
     </div>
+  )
+}
+
+function CompactionSettingsForm({
+  initial,
+  onCompact,
+  onSave
+}: {
+  initial: CompactionSettings
+  onCompact: () => Promise<{ text: string }>
+  onSave: (value: CompactionSettings) => Promise<CompactionSettings>
+}) {
+  const [draft, setDraft] = useState(initial)
+  const form = useSettingsSave()
+  useEffect(() => setDraft(initial), [initial])
+  const save = (event: FormEvent) => {
+    event.preventDefault()
+    if (form.pending) return
+    form.submit(onSave(draft).then(value => setDraft(value)), () => t('settings.saved'))
+  }
+  const compact = () => form.submit(
+    onSave(draft).then(value => {
+      setDraft(value)
+      return onCompact()
+    }),
+    result => result.text,
+    'compact'
+  )
+
+  return (
+    <form className="compaction-settings settings-form" onSubmit={save}>
+      <div className="compaction-toggle">
+        <span>
+          <strong>{t('compaction.automatic')}</strong>
+          <small>{t('compaction.automaticNote')}</small>
+        </span>
+        <label className="settings-switch" title={draft.automatic ? t('plugins.on') : t('plugins.off')}>
+          <input
+            checked={draft.automatic}
+            onChange={event => setDraft(current => ({ ...current, automatic: event.target.checked }))}
+            type="checkbox"
+          />
+          <span aria-hidden="true" />
+        </label>
+      </div>
+      <label className="line-field">
+        <span>{t('compaction.threshold')}</span>
+        <span className="field-line">
+          <input
+            max={95}
+            min={50}
+            onChange={event => setDraft(current => ({ ...current, threshold_percent: Number(event.target.value) }))}
+            required
+            type="number"
+            value={draft.threshold_percent}
+          />
+          <small>%</small>
+        </span>
+      </label>
+      <label className="line-field">
+        <span>{t('compaction.strategy')}</span>
+        <span className="field-line">
+          <select
+            onChange={event => setDraft(current => ({
+              ...current,
+              strategy: event.target.value as CompactionSettings['strategy']
+            }))}
+            value={draft.strategy}
+          >
+            <option value="insert">{t('compaction.insert')}</option>
+            <option value="two-stage">{t('compaction.twoStage')}</option>
+          </select>
+        </span>
+      </label>
+      <p className="settings-note">{t('compaction.manualNote')}</p>
+      <SettingsMessage failed={form.failed} message={form.message} />
+      <footer>
+        <button className="line-action" disabled={Boolean(form.pending)} onClick={compact} type="button">
+          {form.pending === 'compact' ? t('compaction.compacting') : t('compaction.compactNow')}
+        </button>
+        <button className="save-model" disabled={Boolean(form.pending)} type="submit">
+          {form.pending === 'save' ? t('settings.saving') : t('settings.save')}
+        </button>
+      </footer>
+    </form>
   )
 }
 

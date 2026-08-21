@@ -16,6 +16,7 @@ import {
   loadModelConfig,
   projectStateDir,
   readModelCredential,
+  saveCompactionSettings,
   saveModelProfile,
   selectModelProfile,
   setModelEnabled
@@ -657,30 +658,44 @@ test('settings RPCs store secrets privately and expose only configuration status
     const gateway = new Gateway(workspace, value => output.push(value))
     await gateway.start()
     output.length = 0
+    await gateway.handle({ id: 'compaction-default', method: 'settings.compaction.get' })
+    assert.deepEqual(responseResult(output, 'compaction-default'), {
+      automatic: true, threshold_percent: 85, strategy: 'insert'
+    })
     await gateway.handle({ id: 'web', method: 'settings.web.save', params: { tavily_api_key: 'tvly-private-value' } })
     await gateway.handle({
       id: 'profile', method: 'settings.user.save',
       params: { profile: { preferred_name: 'Kai', preferred_language: 'Chinese', habits: 'Concise answers.' } }
     })
     await gateway.handle({ id: 'memory', method: 'settings.memory.save', params: { file: 'global', content: '# Durable memory\n' } })
+    await gateway.handle({
+      id: 'compaction', method: 'settings.compaction.save',
+      params: { automatic: false, threshold_percent: 75, strategy: 'two-stage' }
+    })
     await gateway.handle({ id: 'settings', method: 'settings.get' })
 
     const settings = responseResult(output, 'settings') as {
       web_search: { tavily_configured: boolean }
       user_profile: { preferred_name: string }
       memory_files: { global: { chars: number; limit: number } }
+      compaction: { automatic: boolean; threshold_percent: number; strategy: string }
     }
     assert.equal(settings.web_search.tavily_configured, true)
     assert.equal(settings.user_profile.preferred_name, 'Kai')
     assert.equal(settings.memory_files.global.chars, '# Durable memory\n'.length)
+    assert.deepEqual(settings.compaction, { automatic: false, threshold_percent: 75, strategy: 'two-stage' })
     assert(!JSON.stringify(settings).includes('private'))
     assert((await readFile(join(home, 'web-credentials.json'), 'utf8')).includes('tvly-private-value'))
     assert((await readFile(join(home, 'USER.md'), 'utf8')).includes('<!-- friday-profile:start -->'))
     assert.equal((responseResult(output, 'web') as { tavily_configured: boolean }).tavily_configured, true)
+    assert.deepEqual(responseResult(output, 'compaction'), settings.compaction)
 
     output.length = 0
     await gateway.handle({ id: 'reject-secret', method: 'settings.memory.save', params: { file: 'global', content: 'api_key=sk-not-for-memory' } })
     assert.match(String((output[0] as { error?: { message?: unknown } }).error?.message), /secret or credential/)
+    output.length = 0
+    await gateway.handle({ id: 'reject-threshold', method: 'settings.compaction.save', params: { threshold_percent: 99 } })
+    assert.match(String((output[0] as { error?: { message?: unknown } }).error?.message), /50 to 95/)
   } finally {
     if (previousHome === undefined) delete process.env.FRIDAY_HOME
     else process.env.FRIDAY_HOME = previousHome
@@ -747,6 +762,260 @@ test('compaction shrinks the model prompt without shrinking resumable UI history
     assert.deepEqual(sessionHistory(forked).map(item => [item.kind, item.text]), [
       ['user', 'first question'], ['assistant', 'first answer']
     ])
+  } finally {
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await rm(temporary, { recursive: true, force: true })
+  }
+})
+
+test('tool-result tombstones preserve full UI and resumable history', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-tool-compaction-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'local', profiles: [{
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock',
+        base_url: 'http://127.0.0.1:9', context_window: 100_000, max_output_tokens: 1_000
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
+    await saveCompactionSettings(workspace, { strategy: 'two-stage' })
+    const session = await FridaySession.create(workspace, 'tool-compact-session')
+    session.context.addMessage({ role: 'user', content: 'Inspect four files.' })
+    for (let index = 0; index < 4; index += 1) {
+      const id = `read-${index}`
+      session.context.addMessage({
+        role: 'assistant', content: '',
+        tool_calls: [{ id, type: 'function', function: { name: 'Read', arguments: JSON.stringify({ path: `file-${index}.ts` }) } }]
+      })
+      session.context.addMessage({
+        role: 'tool', tool_call_id: id,
+        content: index ? `recent result ${index}` : 'old exact result\n'.repeat(6_000)
+      })
+    }
+    session.context.addMessage({ role: 'assistant', content: 'I inspected all four files.' })
+    const before = sessionHistory(session)
+
+    assert.match(await session.compact(), /tool results compacted/)
+    assert.deepEqual(sessionHistory(session), before)
+    const projected = session.context.messages.find(message => message.tool_call_id === 'read-0')!
+    assert.match(String(projected.content), /"compacted":true/)
+    assert.match(String(projected.friday_original_tool_content), /old exact result/)
+
+    const resumed = await FridaySession.create(workspace, 'tool-compact-session')
+    assert.deepEqual(sessionHistory(resumed), before)
+    assert.match(String(resumed.context.messages.find(message => message.tool_call_id === 'read-0')?.content), /"compacted":true/)
+  } finally {
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await rm(temporary, { recursive: true, force: true })
+  }
+})
+
+test('automatic compaction off stops safely and asks for manual compact', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-manual-compaction-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  const requests: Array<Record<string, unknown>> = []
+  const server = createServer((request, response) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', chunk => { body += chunk })
+    request.on('end', () => {
+      requests.push(JSON.parse(body) as Record<string, unknown>)
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      sse(response, { choices: [{ delta: { content: 'Please run /compact, then continue.' } }] })
+      sse(response, { choices: [], usage: { prompt_tokens: 2_600, completion_tokens: 10 } })
+      response.end('data: [DONE]\n\n')
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'local', profiles: [{
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock',
+        base_url: `http://127.0.0.1:${address.port}`, context_window: 4_000, max_output_tokens: 500
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
+    await saveCompactionSettings(workspace, { automatic: false, threshold_percent: 50 })
+    const session = await FridaySession.create(workspace, 'manual-compact-session')
+    session.context.addMessage({ role: 'user', content: 'Earlier request' })
+    session.context.addMessage({ role: 'assistant', content: 'large history '.repeat(900) })
+
+    const result = await session.chat('Continue the work.')
+
+    assert.match(result.text, /\/compact/)
+    assert.equal(requests.length, 1)
+    const requestMessages = requests[0]!.messages as Array<{ role?: unknown; content?: unknown }>
+    assert.equal(requestMessages.some(message => String(message.content).includes('Automatic context compaction is off')), true)
+    assert.equal(Array.isArray(requests[0]!.tools), false)
+  } finally {
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await rm(temporary, { recursive: true, force: true })
+  }
+})
+
+test('an external compactor is replaceable but cannot bypass the Harness context guard', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-custom-compaction-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  const pluginRoot = join(workspace, '.friday', 'plugins')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  const state = projectStateDir(workspace)
+  await mkdir(pluginRoot, { recursive: true })
+  await mkdir(state, { recursive: true })
+  const requests: Array<Record<string, unknown>> = []
+  const server = createServer((request, response) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', chunk => { body += chunk })
+    request.on('end', () => {
+      requests.push(JSON.parse(body) as Record<string, unknown>)
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      sse(response, { choices: [{ delta: { content: 'The context guard stopped safely.' } }] })
+      response.end('data: [DONE]\n\n')
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'local', profiles: [{
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock',
+        base_url: `http://127.0.0.1:${address.port}`, context_window: 4_000, max_output_tokens: 500
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
+    await writeFile(join(state, 'config.json'), JSON.stringify({
+      disabled_plugins: ['compaction'],
+      compaction: { automatic: true, threshold_percent: 50, strategy: 'insert' }
+    }))
+    await writeFile(join(pluginRoot, 'custom-compactor.mjs'), `export default {
+      name: 'custom-compactor',
+      async compact({ context }) {
+        context.metadata.custom_compactor_runs = Number(context.metadata.custom_compactor_runs || 0) + 1
+        return { summary: 'custom compactor ran', record: { after_tokens: 1 } }
+      }
+    }`)
+    const session = await FridaySession.create(workspace, 'custom-compact-session')
+    const compaction = session.info().compaction as Record<string, unknown>
+    assert.equal(compaction.provider, 'custom-compactor')
+    const guards: string[] = []
+    const compactions: Array<Record<string, unknown>> = []
+    session.onEvent = event => {
+      if (event.type === 'loop.guard') guards.push(String(event.data.reason || ''))
+      if (event.type === 'context.compacted') compactions.push(event.data)
+    }
+    session.context.addMessage({ role: 'user', content: 'Earlier request' })
+    session.context.addMessage({ role: 'assistant', content: 'large history '.repeat(900) })
+
+    const result = await session.chat('Continue safely.')
+
+    assert.equal(session.context.metadata.custom_compactor_runs, 1)
+    assert.equal(result.text, 'The context guard stopped safely.')
+    assert(guards.includes('context_window'))
+    assert.equal(compactions.length, 1)
+    assert.notEqual(compactions[0]!.after_tokens, 1)
+    assert.equal(compactions[0]!.before_tokens, compactions[0]!.after_tokens)
+    assert.equal(requests.length, 1)
+    assert.equal(Array.isArray(requests[0]!.tools), false)
+  } finally {
+    if (previousHome === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previousHome
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await rm(temporary, { recursive: true, force: true })
+  }
+})
+
+test('an external memory provider replaces built-in recall and capture without changing the turn contract', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-custom-memory-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  const pluginRoot = join(workspace, '.friday', 'plugins')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previousHome = process.env.FRIDAY_HOME
+  process.env.FRIDAY_HOME = home
+  const state = projectStateDir(workspace)
+  await mkdir(pluginRoot, { recursive: true })
+  await mkdir(state, { recursive: true })
+  const requests: Array<Record<string, unknown>> = []
+  const server = createServer((request, response) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', chunk => { body += chunk })
+    request.on('end', () => {
+      requests.push(JSON.parse(body) as Record<string, unknown>)
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      sse(response, { choices: [{ delta: { content: 'Custom memory was available.' } }] })
+      response.end('data: [DONE]\n\n')
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert(address && typeof address === 'object')
+  try {
+    await writeFile(join(home, 'models.json'), JSON.stringify({
+      active: 'local', profiles: [{
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock',
+        base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000, max_output_tokens: 500
+      }]
+    }))
+    await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
+    await writeFile(join(state, 'config.json'), JSON.stringify({ disabled_plugins: ['memory'] }))
+    await writeFile(join(pluginRoot, 'custom-memory.mjs'), `export default {
+      name: 'custom-memory',
+      memory: {
+        async prepare({ text, sessionId }) {
+          return {
+            recall: '## Relevant Memory\\n- CUSTOM_PROVIDER_RECALL',
+            capture: { provider: 'custom-memory', text, session_id: sessionId }
+          }
+        }
+      }
+    }`)
+    const session = await FridaySession.create(workspace, 'custom-memory-session')
+    const info = session.info()
+    assert.equal((info.memory as Record<string, unknown>).provider, 'custom-memory')
+    assert.equal((info.tools as string[]).includes('Memory'), false)
+    const plugins = info.plugins as Array<Record<string, unknown>>
+    assert.deepEqual(plugins.find(plugin => plugin.name === 'custom-memory')!.capabilities, ['memory'])
+    const updates: Array<Record<string, unknown>> = []
+    session.onEvent = event => {
+      if (event.type === 'memory.updated') updates.push(event.data)
+    }
+
+    const result = await session.chat('Use the custom provider.')
+
+    assert.equal(result.text, 'Custom memory was available.')
+    assert.equal(requests.length, 1)
+    const messages = requests[0]!.messages as Array<{ role?: unknown; content?: unknown }>
+    const user = messages.find(message => message.role === 'user')!
+    assert.match(String(user.content), /CUSTOM_PROVIDER_RECALL/)
+    assert.match(String(user.content), /Use the custom provider\./)
+    assert.deepEqual(updates[0]?.capture, {
+      provider: 'custom-memory', text: 'Use the custom provider.', session_id: 'custom-memory-session'
+    })
   } finally {
     if (previousHome === undefined) delete process.env.FRIDAY_HOME
     else process.env.FRIDAY_HOME = previousHome

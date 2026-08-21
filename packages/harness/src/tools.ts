@@ -13,7 +13,15 @@ import { assembleTools, builtinPlugin, markDisabled, type LoadedPlugin } from '.
 import { writeTextAtomic } from './storage.js'
 import { buildSkillTool, skillRouting } from './skills.js'
 import { buildWebTools } from './web.js'
-import { formatMemoryResult, runMemoryCommand } from './memory.js'
+import {
+  captureUserMemory,
+  consolidateMemory,
+  formatMemoryResult,
+  relevantMemory,
+  runMemoryCommand
+} from './memory.js'
+import { buildMemoryInstructions } from './prompts.js'
+import { compactIfNeeded } from './context.js'
 
 const MAX_OUTPUT_CHARS = 50_000
 const MAX_OUTPUT_LINES = 2_000
@@ -47,8 +55,8 @@ const fileLocks = new Map<string, Promise<void>>()
 
 /**
  * Friday's built-in capabilities, registered as plugins. The workspace pack
- * is the required core; web, memory, and skills are unpluggable by listing
- * them in `disabled_plugins` - the same switch external plugins get.
+ * is required; web, memory, skills, and compaction use the same disable switch
+ * as external plugins.
  */
 export function builtinPlugins(workspace: string, options: ToolOptions = {}): LoadedPlugin[] {
   const root = realpathSync.native(resolve(workspace))
@@ -69,7 +77,20 @@ export function builtinPlugins(workspace: string, options: ToolOptions = {}): Lo
     builtinPlugin({
       name: 'memory',
       description: 'Durable cross-session memory.',
-      tools: () => [memoryTool(root)]
+      tools: () => [memoryTool(root)],
+      // The switch owns the complete model-facing memory contract: both the
+      // tool and every durable-memory prompt source disappear together.
+      instructions: () => buildMemoryInstructions(root),
+      memory: {
+        async prepare({ workspace, text, sessionId }) {
+          // Preserve the existing order: recall observes the prior memory set;
+          // capture writes the current public message only afterwards.
+          const recall = await relevantMemory(workspace, text)
+          const capture = await captureUserMemory(workspace, text, sessionId)
+          return { recall, ...(capture ? { capture } : {}) }
+        },
+        consolidate: ({ workspace, days, review }) => consolidateMemory(workspace, days, review)
+      }
     }),
     builtinPlugin({
       name: 'skills',
@@ -78,6 +99,11 @@ export function builtinPlugins(workspace: string, options: ToolOptions = {}): Lo
       tools: () => [buildSkillTool(root)],
       // Re-evaluated on every prompt rebuild so new skills appear mid-session.
       instructions: () => skillRouting(root)
+    }),
+    builtinPlugin({
+      name: 'compaction',
+      description: 'Automatic and manual model-context compaction.',
+      compact: compactIfNeeded
     })
   ]
 }

@@ -6,8 +6,17 @@ import { test } from 'node:test'
 
 import type { Tool } from 'friday-agent-core'
 
-import { disabledPlugins, setPluginEnabled } from './config.js'
-import { assembleTools, builtinPlugin, loadPlugins, markDisabled, pluginInfo, pluginSections } from './plugins.js'
+import { disabledPlugins, projectStateDir, setPluginEnabled } from './config.js'
+import {
+  assembleCompactor,
+  assembleMemoryProvider,
+  assembleTools,
+  builtinPlugin,
+  loadPlugins,
+  markDisabled,
+  pluginInfo,
+  pluginSections
+} from './plugins.js'
 import { buildVerifierTools } from './tools.js'
 import { FridaySession } from './session.js'
 
@@ -154,6 +163,43 @@ test('disabling unplugs a capability everywhere, and required packs refuse', asy
   }
 })
 
+test('one enabled plugin owns the Harness compaction service', async () => {
+  const { workspace, restore } = await makeWorkspace()
+  try {
+    const compact = async () => ({})
+    const builtin = pack('compaction', [], { compact })
+    const custom = pack('custom-compaction', [], { compact })
+    const selected = assembleCompactor([builtin, custom])
+    assert.equal(selected?.name, 'compaction')
+    assert.match(custom.errors[0] || '', /already registered by compaction/)
+
+    builtin.disabled = true
+    custom.errors.length = 0
+    assert.equal(assembleCompactor([builtin, custom])?.name, 'custom-compaction')
+    assert.deepEqual(pluginInfo([builtin, custom])[1]!.capabilities, ['tools', 'compaction'])
+  } finally {
+    restore()
+  }
+})
+
+test('one enabled plugin owns the Harness memory service', async () => {
+  const { restore } = await makeWorkspace()
+  try {
+    const memory = { async prepare() { return {} } }
+    const builtin = pack('memory', [], { memory })
+    const custom = pack('custom-memory', [], { memory })
+    assert.equal(assembleMemoryProvider([builtin, custom])?.name, 'memory')
+    assert.match(custom.errors[0] || '', /already registered by memory/)
+
+    builtin.disabled = true
+    custom.errors.length = 0
+    assert.equal(assembleMemoryProvider([builtin, custom])?.name, 'custom-memory')
+    assert.deepEqual(pluginInfo([builtin, custom])[1]!.capabilities, ['tools', 'memory'])
+  } finally {
+    restore()
+  }
+})
+
 test('the verifier assembles from built-in read-only declarations and honors disabling', async () => {
   const { workspace, restore } = await makeWorkspace()
   try {
@@ -200,6 +246,18 @@ test('a conversation names itself from its first message and never renames', asy
 test('a session registers built-ins and external plugins in one registry', async () => {
   const { home, workspace, restore } = await makeWorkspace()
   try {
+    const projectState = projectStateDir(workspace)
+    const profileMarker = 'PROFILE_ONLY_WHEN_MEMORY_IS_ENABLED'
+    const globalMarker = 'GLOBAL_ONLY_WHEN_MEMORY_IS_ENABLED'
+    const projectMarker = 'PROJECT_ONLY_WHEN_MEMORY_IS_ENABLED'
+    const hiddenMetadataMarker = 'HIDDEN_MEMORY_METADATA'
+    await mkdir(projectState, { recursive: true })
+    await writeFile(join(home, 'USER.md'), `# User Profile\n\n- ${profileMarker}\n`)
+    await writeFile(join(home, 'MEMORY.md'), [
+      '# Global Memory', '', `- ${globalMarker}`,
+      `<!-- friday-memory {"id":"${hiddenMetadataMarker}","source":"test"} -->`, ''
+    ].join('\n'))
+    await writeFile(join(projectState, 'MEMORY.md'), `# Project Memory\n\n- ${projectMarker}\n`)
     await writeFile(join(home, 'models.json'), JSON.stringify({
       active: 'local',
       profiles: [{
@@ -217,13 +275,20 @@ test('a session registers built-ins and external plugins in one registry', async
     assert.equal(tools.includes('Greet'), true)
     assert.equal(tools.includes('Memory'), true)
     const plugins = info.plugins as Array<Record<string, unknown>>
-    assert.deepEqual(plugins.map(plugin => plugin.name), ['workspace', 'web', 'memory', 'skills', 'greeter'])
+    assert.deepEqual(plugins.map(plugin => plugin.name), ['workspace', 'web', 'memory', 'skills', 'compaction', 'greeter'])
     assert.deepEqual(plugins.find(plugin => plugin.name === 'greeter')!.tools, ['Greet'])
+    assert.deepEqual(plugins.find(plugin => plugin.name === 'compaction')!.capabilities, ['compaction'])
 
     const system = session.context.messages.find(message => message.role === 'system')!
     assert.equal(String(system.content).includes('## Plugin: greeter'), true)
+    assert.equal(String(system.content).includes('## Memory'), true)
+    assert.equal(String(system.content).includes(profileMarker), true)
+    assert.equal(String(system.content).includes(globalMarker), true)
+    assert.equal(String(system.content).includes(projectMarker), true)
+    assert.equal(String(system.content).includes(hiddenMetadataMarker), false)
 
-    // Unplugging memory removes the tool, the recall path, and nothing else.
+    // Unplugging memory removes the tool, durable prompt sources, recall/capture
+    // path, and consolidation while leaving unrelated capabilities intact.
     process.env.FRIDAY_DISABLED_PLUGINS = 'memory'
     try {
       const trimmed = await FridaySession.create(workspace, 'plugin-session-trimmed')
@@ -233,6 +298,12 @@ test('a session registers built-ins and external plugins in one registry', async
       assert.equal(trimmedTools.includes('Greet'), true)
       const report = trimmed.info().plugins as Array<Record<string, unknown>>
       assert.equal(report.find(plugin => plugin.name === 'memory')!.disabled, true)
+      const trimmedSystem = trimmed.context.messages.find(message => message.role === 'system')!
+      assert.equal(String(trimmedSystem.content).includes('## Memory'), false)
+      assert.equal(String(trimmedSystem.content).includes(profileMarker), false)
+      assert.equal(String(trimmedSystem.content).includes(globalMarker), false)
+      assert.equal(String(trimmedSystem.content).includes(projectMarker), false)
+      await assert.rejects(trimmed.consolidateMemory(2), /Memory plugin is disabled/)
     } finally {
       delete process.env.FRIDAY_DISABLED_PLUGINS
     }
@@ -248,15 +319,32 @@ test('a session registers built-ins and external plugins in one registry', async
       delete process.env.FRIDAY_DISABLE_PLUGINS
     }
 
-    // The persisted toggle unplugs a live session on reload and back.
+    // Plan A is prospective: a persisted toggle rebuilds the live prompt and
+    // future hooks, but never rewrites recall already embedded in history.
+    const priorRecall = 'RECALL_ALREADY_IN_THE_CONVERSATION'
+    session.context.addMessage({
+      role: 'user',
+      content: `## Relevant Memory\n- ${priorRecall}\n\nCurrent question`,
+      friday_display_text: 'Current question'
+    })
     await setPluginEnabled(workspace, 'memory', false)
     assert.equal(disabledPlugins(workspace).has('memory'), true)
     await session.reloadPlugins()
     assert.equal((session.info().tools as string[]).includes('Memory'), false)
+    const disabledSystem = session.context.messages.find(message => message.role === 'system')!
+    assert.equal(String(disabledSystem.content).includes('## Memory'), false)
+    assert.equal(String(disabledSystem.content).includes(profileMarker), false)
+    assert.equal(session.context.messages.some(message => String(message.content).includes(priorRecall)), true)
+    await assert.rejects(session.consolidateMemory(2), /Memory plugin is disabled/)
     await setPluginEnabled(workspace, 'memory', true)
     assert.equal(disabledPlugins(workspace).has('memory'), false)
     await session.reloadPlugins()
     assert.equal((session.info().tools as string[]).includes('Memory'), true)
+    const restoredSystem = session.context.messages.find(message => message.role === 'system')!
+    assert.equal(String(restoredSystem.content).includes('## Memory'), true)
+    assert.equal(String(restoredSystem.content).includes(profileMarker), true)
+    assert.equal(String(restoredSystem.content).includes(hiddenMetadataMarker), false)
+    assert.equal(session.context.messages.some(message => String(message.content).includes(priorRecall)), true)
   } finally {
     restore()
   }

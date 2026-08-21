@@ -2,18 +2,20 @@ import { readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import type { Tool } from 'friday-agent-core'
+import type { JsonObject, Tool } from 'friday-agent-core'
 
 import { fridayHome } from './config.js'
+import type { ContextCompactor } from './context.js'
 
 /**
- * In Friday, everything outside the core model/tool loop is a plugin. The
- * built-in capabilities - workspace tools, web access, memory, skills - are
- * plugins Friday ships with; external plugins are the same shape loaded from
- * disk. Both reach the agent through the only two seams that exist: the tool
- * list the loop receives and the system prompt the session composes. The
- * difference between "shipped with Friday" and "added by you" is packaging,
- * not architecture.
+ * Friday's extensible Harness capabilities share one registry. The built-in
+ * capabilities - workspace tools, web access, memory, skills, and context
+ * compaction - are plugins Friday ships with; external plugins use the same
+ * shape loaded from disk. Plugins contribute through narrow typed seams:
+ * tools, prompt sections, transparent tool wrappers, and singleton memory and
+ * compaction services.
+ * The difference between "shipped with Friday" and "added by you" is
+ * packaging, not architecture.
  *
  * An external plugin is one ES module whose default export is this shape:
  *
@@ -23,7 +25,8 @@ import { fridayHome } from './config.js'
  *     description: 'Looks tickets up in the local tracker.',
  *     instructions: 'Use the Ticket tool when the user names a ticket id.',
  *     tools({ workspace }) { return [{ name: 'Ticket', ... }] },
- *     wrapTool({ workspace }, tool) { return { ...tool, execute: ... } }
+ *     wrapTool({ workspace }, tool) { return { ...tool, execute: ... } },
+ *     compact(request) { return customCompaction(request) }
  *   }
  *
  * Plugins are local code executed with Friday's own privileges, exactly like
@@ -34,6 +37,18 @@ import { fridayHome } from './config.js'
  */
 export type PluginApi = {
   workspace: string
+}
+
+export type MemoryPreparation = { recall?: string; capture?: JsonObject }
+
+export type MemoryProvider = {
+  prepare(request: { workspace: string; sessionId: string; text: string }): Promise<MemoryPreparation>
+  consolidate?(request: {
+    workspace: string
+    days: number
+    signal: AbortSignal
+    review(payload: JsonObject): Promise<unknown>
+  }): Promise<Record<string, unknown>>
 }
 
 export type FridayPluginModule = {
@@ -54,6 +69,10 @@ export type FridayPluginModule = {
    * recorded as a plugin error.
    */
   wrapTool?: (api: PluginApi, tool: Tool) => Tool
+  /** Optional singleton service for per-turn recall/capture and consolidation. */
+  memory?: MemoryProvider
+  /** Optional singleton Harness service for model-context compaction. */
+  compact?: ContextCompactor
   /** Built-in only: the plugin cannot be disabled (the workspace tools). */
   required?: boolean
   /** Built-in only: tool names safe for the read-only Goal verifier. */
@@ -145,6 +164,12 @@ async function loadPlugin(source: string, scope: 'project' | 'user'): Promise<Lo
     if (typeof plugin.name !== 'string' || !plugin.name.trim()) throw new Error('plugin.name must be a non-empty string')
     if (plugin.tools !== undefined && typeof plugin.tools !== 'function') throw new Error('plugin.tools must be a function returning tools')
     if (plugin.wrapTool !== undefined && typeof plugin.wrapTool !== 'function') throw new Error('plugin.wrapTool must be a function')
+    if (plugin.memory !== undefined && (
+      !plugin.memory || typeof plugin.memory !== 'object'
+      || typeof plugin.memory.prepare !== 'function'
+      || (plugin.memory.consolidate !== undefined && typeof plugin.memory.consolidate !== 'function')
+    )) throw new Error('plugin.memory must provide prepare() and an optional consolidate()')
+    if (plugin.compact !== undefined && typeof plugin.compact !== 'function') throw new Error('plugin.compact must be a function')
     if (plugin.instructions !== undefined && typeof plugin.instructions !== 'string' && typeof plugin.instructions !== 'function') {
       throw new Error('plugin.instructions must be a string or a function')
     }
@@ -257,6 +282,41 @@ export function pluginSections(plugins: LoadedPlugin[], api: PluginApi): Array<[
   })
 }
 
+export type RegisteredCompactor = { name: string; compact: ContextCompactor }
+export type RegisteredMemoryProvider = { name: string; memory: MemoryProvider }
+
+/** Select the first enabled singleton memory provider; later claims are visible errors. */
+export function assembleMemoryProvider(plugins: LoadedPlugin[]): RegisteredMemoryProvider | undefined {
+  let selected: RegisteredMemoryProvider | undefined
+  for (const plugin of plugins) {
+    const memory = plugin.module?.memory
+    if (plugin.disabled || !memory) continue
+    if (!selected) {
+      selected = { name: plugin.name, memory }
+      continue
+    }
+    const error = `memory: provider already registered by ${selected.name}`
+    if (!plugin.errors.includes(error)) plugin.errors.push(error)
+  }
+  return selected
+}
+
+/** Select the first enabled singleton compactor; later claims are visible errors. */
+export function assembleCompactor(plugins: LoadedPlugin[]): RegisteredCompactor | undefined {
+  let selected: RegisteredCompactor | undefined
+  for (const plugin of plugins) {
+    const compact = plugin.module?.compact
+    if (plugin.disabled || !compact) continue
+    if (!selected) {
+      selected = { name: plugin.name, compact }
+      continue
+    }
+    const error = `compact(): compactor already registered by ${selected.name}`
+    if (!plugin.errors.includes(error)) plugin.errors.push(error)
+  }
+  return selected
+}
+
 /** Metadata for the gateway and UIs; the live module stays private. */
 export function pluginInfo(plugins: LoadedPlugin[]): Array<Record<string, unknown>> {
   return plugins.map(plugin => ({
@@ -269,6 +329,13 @@ export function pluginInfo(plugins: LoadedPlugin[]): Array<Record<string, unknow
     required: plugin.module?.required === true,
     tools: [...plugin.toolNames],
     has_instructions: plugin.module?.instructions !== undefined,
+    capabilities: [
+      ...(plugin.module?.tools ? ['tools'] : []),
+      ...(plugin.module?.instructions !== undefined ? ['prompt'] : []),
+      ...(plugin.module?.wrapTool ? ['tool-wrapper'] : []),
+      ...(plugin.module?.memory ? ['memory'] : []),
+      ...(plugin.module?.compact ? ['compaction'] : [])
+    ],
     errors: [...plugin.errors]
   }))
 }

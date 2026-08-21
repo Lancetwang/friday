@@ -12,6 +12,7 @@ export const COMMANDS = [
   { name: '/search', detail: 'Configure a Web Search provider API key' },
   { name: '/memory', detail: 'Browse, view, and delete stored memories' },
   { name: '/plugins', detail: 'Switch plugins on or off' },
+  { name: '/compaction', detail: 'Configure automatic context compaction' },
   { name: '/context', detail: 'Show current context usage' },
   { name: '/trace', detail: 'Toggle the Trace Workbench' },
   { name: '/compact', detail: 'Compact the current conversation' },

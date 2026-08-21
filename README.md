@@ -95,7 +95,7 @@ Friday combines a guarded model/tool loop with workspace tools for reading, sear
 
 ### Context, memory, and skills
 
-Stable instructions precede volatile state for provider prefix caching. When the model context reaches 85% of its configured window, Friday replaces older dialogue with a structured summary and replays the largest complete recent tail within its target, retaining a minimum tail even if the target cannot be met; the full conversation remains available to the UI, resume, and forks. Durable facts, project knowledge, episodic recall, and live task progress are stored separately. Skills are discovered from compact metadata and loaded only when selected.
+Stable instructions precede volatile state for provider prefix caching. Context compaction is a Harness plugin with a configurable threshold and automatic/manual policy. Its compatibility default is automatic insert-and-compact at 85%: Friday replaces older dialogue with a structured summary and replays the largest complete recent tail within its target, retaining a minimum tail even when that target cannot be met. An optional two-stage strategy first replaces sufficiently old tool results with deterministic receipts, while retaining the exact results for the UI, resume, and forks; if that cannot free enough room, it rolls back before semantic compaction. Durable facts, project knowledge, episodic recall, and live task progress are stored separately. Skills are discovered from compact metadata and loaded only when selected.
 
 ### Verification and recovery
 
@@ -117,15 +117,16 @@ flowchart TB
     end
     Surfaces --> Gateway["Gateway — NDJSON JSON-RPC"]
     Gateway --> Session["Session — one turn frame:<br/>checkpoints · approvals · compaction · goal verification"]
-    subgraph Registry["Capability registry — tools and prompt sections"]
+    subgraph Registry["Harness plugin registry — tools · prompts · services"]
         direction LR
         Workspace["workspace*<br/>files · shell · plan"]
         Web["web<br/>search · fetch"]
         Memory["memory<br/>recall · store"]
         Skills["skills<br/>procedures"]
+        Compaction["compaction<br/>context policy"]
         External["your plugins<br/>.friday/plugins"]
     end
-    Registry -- "tools + prompt sections" --> Session
+    Registry -- "narrow typed seams" --> Session
     Session --> Core["Core — reusable runtime:<br/>guarded model ⇄ tools loop"]
     Core --> Providers["Model providers<br/>Anthropic · OpenAI · compatible"]
 ```
@@ -134,7 +135,7 @@ flowchart TB
 the TUI (`/plugins`), desktop Settings, or `disabled_plugins`.
 
 - `packages/core` contains the public `Agent`, `RunContext`, provider adapters, tool execution, events, usage, cancellation, and preflight contracts.
-- `packages/harness` owns the Friday product: prompts, tools, model profiles, sessions, permissions, memory, skills, checkpoints, traces, and verification.
+- `packages/harness` owns the Friday product: plugins, prompts, tools, model profiles, sessions, permissions, compaction, memory, skills, checkpoints, traces, and verification.
 - `ui-tui` and `ui-desktop` are protocol clients. They do not contain another agent loop.
 - `integrations/harbor` is a thin adapter for Harbor's Python custom-agent protocol; it installs and invokes the TypeScript package.
 

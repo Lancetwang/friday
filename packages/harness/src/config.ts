@@ -18,6 +18,12 @@ export type ModelConfig = {
   apiKey: string
 }
 
+export type CompactionSettings = {
+  automatic: boolean
+  threshold_percent: number
+  strategy: 'insert' | 'two-stage'
+}
+
 type StoredProfile = {
   id?: unknown
   name?: unknown
@@ -100,6 +106,11 @@ const PROVIDERS: readonly ProviderDefinition[] = [
 const DEFAULTS = {
   provider: 'deepseek', model: 'deepseek-v4-flash', base_url: 'https://api.deepseek.com',
   context_window: 1_000_000, max_output_tokens: 65_536, run_token_budget: 40_000_000
+}
+const DEFAULT_COMPACTION: CompactionSettings = {
+  automatic: true,
+  threshold_percent: 85,
+  strategy: 'insert'
 }
 const modelWrites = new Map<string, Promise<void>>()
 
@@ -431,7 +442,7 @@ export function resolveWorkspace(workspace: string): string {
 /**
  * Plugins the user turned off, by name: `disabled_plugins` in the global or
  * project config.json plus the FRIDAY_DISABLED_PLUGINS environment list.
- * Built-in capabilities (web, memory, skills) and external plugins share
+ * Built-in capabilities (web, memory, skills, compaction) and external plugins share
  * this one switch; the required workspace pack ignores it.
  */
 export function disabledPlugins(workspace: string): Set<string> {
@@ -467,6 +478,30 @@ export async function setPluginEnabled(workspace: string, name: string, enabled:
     await writeJsonAtomic(path, { ...config, disabled_plugins: next })
   }
   return disabledPlugins(workspace)
+}
+
+/** Effective Harness compaction policy: global defaults, then project overrides. */
+export function loadCompactionSettings(workspace: string): CompactionSettings {
+  let settings = { ...DEFAULT_COMPACTION }
+  for (const path of [join(fridayHome(), 'config.json'), join(projectStateDir(workspace), 'config.json')]) {
+    const config = readObject(path)
+    if (config.compaction === undefined) continue
+    if (!isObject(config.compaction)) throw new Error(`Friday compaction settings must be an object in ${path}.`)
+    settings = compactionSettings(config.compaction, settings)
+  }
+  return settings
+}
+
+/** Persist a workspace policy while retaining global values as its defaults. */
+export async function saveCompactionSettings(
+  workspace: string,
+  value: Record<string, unknown>
+): Promise<CompactionSettings> {
+  const settings = compactionSettings(value, loadCompactionSettings(workspace))
+  const path = join(projectStateDir(workspace), 'config.json')
+  const config = readObject(path)
+  await writeJsonAtomic(path, { ...config, compaction: settings })
+  return settings
 }
 
 function baseConfig(workspace: string): typeof DEFAULTS {
@@ -681,4 +716,18 @@ function text(value: unknown, fallback = ''): string {
 
 function positive(value: unknown, fallback: number): number {
   return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : fallback
+}
+
+function compactionSettings(value: Record<string, unknown>, base: CompactionSettings): CompactionSettings {
+  const automatic = value.automatic === undefined ? base.automatic : value.automatic
+  if (typeof automatic !== 'boolean') throw new Error('Compaction automatic must be true or false.')
+  const threshold = value.threshold_percent === undefined ? base.threshold_percent : value.threshold_percent
+  if (!Number.isSafeInteger(threshold) || (threshold as number) < 50 || (threshold as number) > 95) {
+    throw new Error('Compaction threshold_percent must be an integer from 50 to 95.')
+  }
+  const strategy = value.strategy === undefined ? base.strategy : value.strategy
+  if (strategy !== 'insert' && strategy !== 'two-stage') {
+    throw new Error("Compaction strategy must be 'insert' or 'two-stage'.")
+  }
+  return { automatic, threshold_percent: threshold as number, strategy }
 }

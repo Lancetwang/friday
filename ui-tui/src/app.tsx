@@ -81,6 +81,12 @@ type WebSearchSettings = {
   tavily_configured: boolean
 }
 
+type CompactionSettings = {
+  automatic: boolean
+  threshold_percent: number
+  strategy: 'insert' | 'two-stage'
+}
+
 type HistoryItem = {
   arguments?: unknown
   kind: 'assistant' | 'tool' | 'user'
@@ -114,6 +120,7 @@ type BranchNode = {
 }
 
 type PluginInfo = {
+  capabilities?: string[]
   description: string
   disabled?: boolean
   errors: string[]
@@ -778,6 +785,7 @@ export function App({ gateway }: { gateway: GatewayClient }) {
           plugin.disabled ? 'off' : 'on',
           plugin.required ? 'required' : plugin.scope,
           plugin.tools.length ? plugin.tools.join(', ') : '',
+          plugin.capabilities?.filter(capability => capability !== 'tools').join(', ') || '',
           plugin.description,
           plugin.errors.length ? `error: ${plugin.errors[0]}` : ''
         ].filter(Boolean).join(' · '),
@@ -1083,6 +1091,30 @@ export function App({ gateway }: { gateway: GatewayClient }) {
       }
     } else if (command === '/context') {
       void gateway.request<{ text: string }>('context.get').then(result => appendSystem(result.text)).catch(requestError)
+    } else if (command === '/compaction') {
+      const words = argument.toLowerCase().split(/\s+/).filter(Boolean)
+      let update: Record<string, unknown> | undefined
+      if (words.length) {
+        if (words[0] === 'auto' && ['on', 'off'].includes(words[1] || '')) {
+          update = { automatic: words[1] === 'on' }
+        } else if (words[0] === 'threshold' && /^\d+$/.test(words[1] || '')) {
+          update = { threshold_percent: Number(words[1]) }
+        } else if (words[0] === 'strategy' && ['insert', 'two-stage'].includes(words[1] || '')) {
+          update = { strategy: words[1] }
+        } else {
+          appendSystem('Usage: /compaction [auto on|off | threshold 50..95 | strategy insert|two-stage]')
+          return true
+        }
+      }
+      const method = update ? 'settings.compaction.save' : 'settings.compaction.get'
+      void gateway.request<CompactionSettings>(method, update).then(settings => appendSystem([
+        '**Context compaction**',
+        `- automatic: ${settings.automatic ? 'on' : 'off'}`,
+        `- threshold: ${settings.threshold_percent}%`,
+        `- strategy: ${settings.strategy}`,
+        '',
+        'Manual `/compact` remains available while a compaction plugin is enabled.'
+      ].join('\n'))).catch(requestError)
     } else if (command === '/trace') {
       const mode = argument.toLowerCase()
       const start = () => gateway.request<{ url: string }>('trace.serve').then(result => {
@@ -1754,6 +1786,10 @@ function compactionLine(payload: ContextCompaction) {
   const saved = payload.before_tokens && payload.after_tokens
     ? ` (~${shortTokens(payload.before_tokens)} to ~${shortTokens(payload.after_tokens)} tokens)`
     : ''
+  if (payload.kind === 'tool_results') {
+    const count = payload.tool_results ? ` ${payload.tool_results}` : ''
+    return `Context compacted${saved}: replaced${count} old tool results with receipts. Exact outputs remain in conversation history.`
+  }
   const kept = payload.kept_turns ? `, plus the last ${payload.kept_turns} steps verbatim` : ''
   const written = payload.fallback ? ' Friday wrote the summary locally because the model could not.' : ''
   return `Context compacted${saved}: the model now reads a summary of the earlier work${kept}. Everything above stays in this conversation.${written}`

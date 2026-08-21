@@ -16,8 +16,9 @@ The built-in capability packs expose this tool surface:
 | `Memory` | Inspect and change Friday's file-based durable memory. |
 | `Skill` | Read one discovered Skill or a resource inside that Skill. |
 
-`workspace` is required. `web`, `memory`, and `skills` can be disabled; doing
-so removes their tools and any Harness hooks described in [Plugins](plugins.md).
+`workspace` is required. `web`, `memory`, `skills`, and `compaction` can be
+disabled; doing so removes their tools, prompt sections, or Harness services as
+described in [Plugins](plugins.md).
 
 ## File tools
 

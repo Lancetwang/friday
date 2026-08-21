@@ -10,25 +10,42 @@ import { buildVerifierTools } from './tools.js'
 import { parseVerification } from './verification.js'
 
 test('verification JSON is strict and verifier shell access is read-only', async () => {
-  assert.deepEqual(parseVerification('{"verdict":"pass","evidence":["test -> boundary -> passed"],"feedback":"","next_check":""}'), {
-    verdict: 'pass', passed: true, blocked: false,
-    evidence: ['test -> boundary -> passed'], feedback: '', next_check: ''
-  })
-  assert.equal(parseVerification('looks good').verdict, 'inconclusive')
+  const temporary = await mkdtemp(join(tmpdir(), 'friday-verifier-tools-'))
+  const home = join(temporary, 'home')
+  const workspace = join(temporary, 'workspace')
+  await mkdir(home)
+  await mkdir(workspace)
+  const previous = process.env.FRIDAY_HOME
+  const previousDisabled = process.env.FRIDAY_DISABLED_PLUGINS
+  process.env.FRIDAY_HOME = home
+  delete process.env.FRIDAY_DISABLED_PLUGINS
+  try {
+    assert.deepEqual(parseVerification('{"verdict":"pass","evidence":["test -> boundary -> passed"],"feedback":"","next_check":""}'), {
+      verdict: 'pass', passed: true, blocked: false,
+      evidence: ['test -> boundary -> passed'], feedback: '', next_check: ''
+    })
+    assert.equal(parseVerification('looks good').verdict, 'inconclusive')
 
-  const bash = buildVerifierTools(process.cwd()).find(tool => tool.name === 'Bash')
-  assert(bash?.preflight)
-  const denied = await bash.preflight({
-    id: 'write', type: 'function', function: { name: 'Bash', arguments: JSON.stringify({ command: "Set-Content x.txt 'x'" }) }
-  })
-  const allowed = await bash.preflight({
-    id: 'test', type: 'function', function: { name: 'Bash', arguments: JSON.stringify({ command: 'npm test' }) }
-  })
-  assert.equal(denied.action, 'deny')
-  assert.equal(allowed.action, 'allow')
-  assert.deepEqual(buildVerifierTools(process.cwd()).map(tool => tool.name), [
-    'Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch', 'Skill'
-  ])
+    const bash = buildVerifierTools(workspace).find(tool => tool.name === 'Bash')
+    assert(bash?.preflight)
+    const denied = await bash.preflight({
+      id: 'write', type: 'function', function: { name: 'Bash', arguments: JSON.stringify({ command: "Set-Content x.txt 'x'" }) }
+    })
+    const allowed = await bash.preflight({
+      id: 'test', type: 'function', function: { name: 'Bash', arguments: JSON.stringify({ command: 'npm test' }) }
+    })
+    assert.equal(denied.action, 'deny')
+    assert.equal(allowed.action, 'allow')
+    assert.deepEqual(buildVerifierTools(workspace).map(tool => tool.name), [
+      'Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch', 'Skill'
+    ])
+  } finally {
+    if (previous === undefined) delete process.env.FRIDAY_HOME
+    else process.env.FRIDAY_HOME = previous
+    if (previousDisabled === undefined) delete process.env.FRIDAY_DISABLED_PLUGINS
+    else process.env.FRIDAY_DISABLED_PLUGINS = previousDisabled
+    await rm(temporary, { recursive: true, force: true })
+  }
 })
 
 test('goal mode repairs once, passes independent verification, and reports both attempts', async () => {

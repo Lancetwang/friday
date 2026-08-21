@@ -24,7 +24,7 @@ shape, and ordinary async control flow keeps it small and inspectable.
 
 `packages/harness` turns Core into the Friday product. It owns:
 
-- prompt composition and context compaction;
+- prompt composition and pluggable context compaction policy;
 - model profiles and provider selection;
 - workspace, shell, web, memory, skill, and plan tools;
 - permissions, approvals, and hard command denials;
@@ -40,18 +40,22 @@ mutate a running `Agent` directly.
 
 ## Capability registry
 
-Tools and capability-specific prompt sections are assembled through one plugin
-registry ([details](plugins.md)). Friday ships four built-in packs: the required
-`workspace` pack plus optional `web`, `memory`, and `skills` packs. External
-plugins use the same tool, prompt-section, and transparent wrapper contracts.
-Built-in packs may additionally declare which of their tools the Goal verifier
-can receive; external plugins cannot extend the verifier.
+Tools, capability-specific prompt sections, transparent tool wrappers, and the
+singleton memory and context-compaction services are assembled through one
+Harness plugin registry ([details](plugins.md)). Friday ships five built-in
+packs: the required `workspace` pack plus optional `web`, `memory`, `skills`,
+and `compaction` packs. Built-in packs may additionally declare which of their
+tools the Goal verifier can receive; external plugins cannot extend the
+verifier.
 
-The registry is a capability boundary, not the whole Harness. Session
-lifecycle, compaction, checkpoints, traces, approvals, and the verification
-loop remain ordinary Harness code. Disabling `memory` also disables the
-Harness's per-turn capture and recall hook, while disabling `web` or `skills`
-removes their tools and prompt sections.
+The registry is a capability boundary, not a generic lifecycle bus. Sessions,
+checkpoints, traces, approvals, and the verification loop remain ordinary
+Harness code. The `memory` pack gates the Harness's per-turn capture and recall
+hooks through a selected memory provider; the `compaction` pack owns automatic
+and manual model-context rewriting through a selected compactor. The Harness
+retains timing, message placement, session persistence, and safety guards. This
+keeps product policy replaceable without adding memory, persistence, or Friday
+settings to Core.
 
 ## Surfaces
 

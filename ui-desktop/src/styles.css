@@ -4338,6 +4338,48 @@ input[type="checkbox"] {
   font-size: var(--text-caption);
 }
 
+.compaction-settings {
+  max-width: 560px;
+}
+
+.compaction-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.compaction-toggle > span {
+  display: grid;
+  gap: 3px;
+}
+
+.compaction-toggle strong {
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+}
+
+.compaction-toggle small,
+.field-line small {
+  color: var(--faint);
+  font-size: var(--text-caption);
+}
+
+.field-line select {
+  min-width: 0;
+  flex: 1;
+  height: 32px;
+  padding: 0 2px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: var(--text-control);
+}
+
 .plugin-list {
   display: flex;
   flex-direction: column;

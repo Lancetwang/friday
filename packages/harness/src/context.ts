@@ -1,10 +1,23 @@
-import { toolSchema, type AgentEvent, type ChatModel, type JsonObject, type Message, type RunContext, type Tool } from 'friday-agent-core'
+import { createHash } from 'node:crypto'
 
-import type { ModelConfig } from './config.js'
+import {
+  toolSchema,
+  type AgentEvent,
+  type ChatModel,
+  type JsonObject,
+  type Message,
+  type RunContext,
+  type Tool,
+  type ToolCall
+} from 'friday-agent-core'
+
+import type { CompactionSettings, ModelConfig } from './config.js'
 import { promptTemplate } from './prompts.js'
 
-const COMPACT_AT = 0.85
 const COMPACT_TARGET = 0.55
+const TOOL_RESULT_TARGET_DELTA = 0.15
+const PROTECTED_TOOL_BATCHES = 3
+const MIN_TOMBSTONE_SAVINGS = 512
 const SUMMARY_MAX_CHARS = 120_000
 const MESSAGE_MAX_CHARS = 2_000
 const USER_MESSAGE_MAX_CHARS = 8_000
@@ -22,7 +35,7 @@ export type ContextCompaction = {
   ok: boolean
   fallback: boolean
   /** How the summary was produced: full-fidelity in-place read, bounded transcript, or offline. */
-  strategy: 'insert' | 'transcript' | 'offline' | 'none'
+  strategy: 'tombstone' | 'insert' | 'transcript' | 'offline' | 'none'
   reason: string
   before_tokens: number
   after_tokens: number
@@ -32,6 +45,22 @@ export type ContextCompaction = {
   memories: string[]
   notice: string
 }
+
+export type CompactionResult = { record?: ContextCompaction; summary?: string }
+
+export type CompactionRequest = {
+  context: RunContext
+  tools: readonly Tool[]
+  config: ModelConfig
+  settings: CompactionSettings
+  model: ChatModel
+  archive(messages: Message[]): void
+  force?: boolean
+  signal?: AbortSignal
+}
+
+/** Harness plugin seam: Core knows only that beforeStep returned control. */
+export type ContextCompactor = (request: CompactionRequest) => Promise<CompactionResult>
 
 export function observeContextUsage(context: RunContext, event: AgentEvent): void {
   if (event.type === 'model.request.payload') {
@@ -68,7 +97,13 @@ export function tokenMeasurement(context: RunContext, tools: readonly Tool[]): R
   return { tokens: estimatedTokens(chars), provider_tokens: null, delta_tokens: null, chars, source: 'local' }
 }
 
-export function contextReport(context: RunContext, tools: readonly Tool[], window: number): string {
+export function contextReport(
+  context: RunContext,
+  tools: readonly Tool[],
+  window: number,
+  settings: CompactionSettings,
+  provider = ''
+): string {
   const measurement = tokenMeasurement(context, tools)
   const tokens = Number(measurement.tokens)
   const chars = Number(measurement.chars)
@@ -77,11 +112,15 @@ export function contextReport(context: RunContext, tools: readonly Tool[], windo
   const ordinary = context.messages.filter(message => message.role === 'user' || message.role === 'assistant').map(message => messageText(message.content)).join('\n')
   const results = context.messages.filter(message => message.role === 'tool').map(message => messageText(message.content)).join('\n')
   const schemas = JSON.stringify(tools.map(toolSchema))
+  const automatic = !provider
+    ? 'unavailable (no plugin)'
+    : settings.automatic ? `at ${settings.threshold_percent}% using ${settings.strategy}` : 'off (use /compact)'
   return [
     '# Context',
     `- window: ${window} tokens`,
     `- in the window now: ${source === 'provider' ? '' : '~'}${tokens} tokens / ${chars} chars / ${(tokens / window * 100).toFixed(1)}% (${source})`,
-    `- compaction starts at: ${Math.floor(window * COMPACT_AT)} tokens (${Math.round(COMPACT_AT * 100)}%)`,
+    `- compaction plugin: ${provider || 'none'}`,
+    `- automatic compaction: ${automatic}`,
     '',
     '| Part | Local est. tokens | Exact chars |',
     '| --- | ---: | ---: |',
@@ -91,30 +130,147 @@ export function contextReport(context: RunContext, tools: readonly Tool[], windo
   ].join('\n')
 }
 
-export async function compactIfNeeded(options: {
-  context: RunContext
-  tools: readonly Tool[]
-  config: ModelConfig
-  model: ChatModel
-  archive(messages: Message[]): void
-  force?: boolean
-  signal?: AbortSignal
-}): Promise<{ record?: ContextCompaction; summary?: string }> {
+export const compactIfNeeded: ContextCompactor = async options => {
   const before = Number(tokenMeasurement(options.context, options.tools).tokens)
   const window = options.config.contextWindow
-  if (!options.force && before / window < COMPACT_AT) return {}
+  const threshold = options.settings.threshold_percent / 100
+  if (!options.force && (!options.settings.automatic || before / window < threshold)) return {}
   try {
+    if (options.settings.strategy === 'two-stage') {
+      const toolResults = compactToolResults(options, before, window, threshold)
+      if (toolResults) return toolResults
+    }
     return await compactConversation(options, before, window)
   } catch (error) {
-    const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-    const record = recordFor('conversation', before, before, window, 0, 'none', reason, false)
-    options.context.emit('context.compacted', 'context', record)
-    return { record }
+    if (options.signal?.aborted) throw error
+    return recordCompactionFailure(options.context, before, window, error)
   }
 }
 
+/** Convert a provider failure into an observable no-op; cancellation still propagates. */
+export function recordCompactionFailure(
+  context: RunContext,
+  before: number,
+  window: number,
+  error: unknown
+): CompactionResult {
+  const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  const record = recordFor('conversation', before, before, window, 0, 'none', reason, false)
+  context.emit('context.compacted', 'context', record)
+  return { record }
+}
+
+/** Materialize the durable transcript instead of the smaller model projection. */
+export function restoreCompactedMessage(message: Message): Message {
+  if (!Object.prototype.hasOwnProperty.call(message, 'friday_original_tool_content')) return message
+  const restored = structuredClone(message)
+  restored.content = structuredClone(restored.friday_original_tool_content)
+  delete restored.friday_original_tool_content
+  return restored
+}
+
+/**
+ * Deterministic stage one: keep calls and their ids intact, but replace old,
+ * already-consumed results with small receipts. The edits are transactional;
+ * if they cannot free a useful amount, semantic compaction sees the originals.
+ */
+function compactToolResults(
+  options: CompactionRequest,
+  before: number,
+  window: number,
+  threshold: number
+): CompactionResult | undefined {
+  const body = conversationBody(options.context.messages)
+  const batches = completeToolBatches(body)
+  const eligible = batches.slice(0, Math.max(0, batches.length - PROTECTED_TOOL_BATCHES))
+  const outcomes = toolOutcomes(body)
+  const changed: Array<{ message: Message; content: unknown }> = []
+  for (const batch of eligible) {
+    for (const { call, result } of batch.results) {
+      if (Object.prototype.hasOwnProperty.call(result, 'friday_original_tool_content')) continue
+      const original = messageText(result.content)
+      const receipt = JSON.stringify({
+        compacted: true,
+        tool: call.function.name,
+        status: outcomes.get(call.id) === 'error' ? 'error' : 'completed',
+        original_chars: original.length,
+        digest: `sha256:${createHash('sha256').update(original).digest('hex')}`,
+        message: 'Exact tool result archived after use; rerun the tool if details are needed.'
+      })
+      if (original.length - receipt.length < MIN_TOMBSTONE_SAVINGS) continue
+      changed.push({ message: result, content: result.content })
+      result.friday_original_tool_content = structuredClone(result.content)
+      result.content = receipt
+    }
+  }
+  if (!changed.length) return undefined
+
+  const candidateAfter = Number(tokenMeasurement(options.context, options.tools).tokens)
+  const target = Math.max(0.4, threshold - TOOL_RESULT_TARGET_DELTA)
+  if (candidateAfter / window > target) {
+    for (const change of changed) {
+      change.message.content = change.content
+      delete change.message.friday_original_tool_content
+    }
+    return undefined
+  }
+
+  delete options.context.metadata[ANCHOR]
+  const after = Number(tokenMeasurement(options.context, options.tools).tokens)
+  const record = recordFor(
+    'tool_results', before, after, window, 0, 'tombstone', '', true, [], false, changed.length
+  )
+  options.context.emit('context.compacted', 'context', record)
+  return { record }
+}
+
+type CompleteToolBatch = {
+  results: Array<{ call: ToolCall; result: Message }>
+}
+
+function completeToolBatches(messages: readonly Message[]): CompleteToolBatch[] {
+  const batches: CompleteToolBatch[] = []
+  for (let index = 0; index < messages.length; index += 1) {
+    const assistant = messages[index]
+    if (assistant?.role !== 'assistant' || !Array.isArray(assistant.tool_calls) || !assistant.tool_calls.length) continue
+    const calls = assistant.tool_calls.filter(validToolCall)
+    if (!calls.length) continue
+    const byId = new Map<string, Message>()
+    for (let cursor = index + 1; messages[cursor]?.role === 'tool'; cursor += 1) {
+      const result = messages[cursor]!
+      const id = String(result.tool_call_id ?? '')
+      if (!byId.has(id)) byId.set(id, result)
+    }
+    if (calls.some(call => !byId.has(call.id))) continue
+    batches.push({ results: calls.map(call => ({ call, result: byId.get(call.id)! })) })
+  }
+  return batches
+}
+
+function validToolCall(value: unknown): value is ToolCall {
+  if (!value || typeof value !== 'object') return false
+  const call = value as Partial<ToolCall>
+  return typeof call.id === 'string'
+    && !!call.function
+    && typeof call.function.name === 'string'
+    && typeof call.function.arguments === 'string'
+}
+
+function toolOutcomes(messages: readonly Message[]): Map<string, string> {
+  const outcomes = new Map<string, string>()
+  for (const message of messages) {
+    if (!Array.isArray(message.friday_activities)) continue
+    for (const value of message.friday_activities) {
+      const activity = object(value)
+      if (activity?.kind !== 'tool' || typeof activity.tool_call_id !== 'string') continue
+      outcomes.set(activity.tool_call_id, String(activity.status || ''))
+    }
+  }
+  return outcomes
+}
+
 async function compactConversation(
-  options: Parameters<typeof compactIfNeeded>[0],
+  options: CompactionRequest,
   before: number,
   window: number
 ): Promise<{ record: ContextCompaction; summary: string }> {
@@ -299,14 +455,16 @@ function splitMemory(value: string): { summary: string; memories: string[] } {
 function recordFor(
   kind: ContextCompaction['kind'], before: number, after: number, window: number,
   kept: number, strategy: ContextCompaction['strategy'], reason: string, ok = true,
-  memories: string[] = [], fallback = false
+  memories: string[] = [], fallback = false, toolResults = 0
 ): ContextCompaction {
   const notice = ok
-    ? `conversation compacted (${strategy}): ${before} -> ${after} tokens${fallback ? ' (offline summary)' : ''}`
+    ? kind === 'tool_results'
+      ? `tool results compacted (${strategy}): ${before} -> ${after} tokens`
+      : `conversation compacted (${strategy}): ${before} -> ${after} tokens${fallback ? ' (offline summary)' : ''}`
     : `conversation compaction skipped: ${reason || 'unavailable'}`
   return {
     kind, ok, fallback, strategy, reason, before_tokens: before, after_tokens: after,
-    window, kept_turns: kept, tool_results: 0, memories, notice
+    window, kept_turns: kept, tool_results: toolResults, memories, notice
   }
 }
 
@@ -337,7 +495,9 @@ function wireValue(value: unknown): unknown {
   const item = object(value)
   if (!item) return value
   if (item.type === 'image_url') return { type: 'image_url', image_url: { url: '[image attachment]' } }
-  return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, wireValue(child)]))
+  return Object.fromEntries(Object.entries(item)
+    .filter(([key]) => key !== 'friday_original_tool_content')
+    .map(([key, child]) => [key, wireValue(child)]))
 }
 
 function object(value: unknown): JsonObject | undefined {
