@@ -13,6 +13,7 @@ Friday records product releases here. Internal test builds and packaging retries
 
 ### Fixed
 - Theme presets now reflow against the actual settings content width, so a wide project sidebar cannot push palette cards beyond the desktop window.
+- Cancelling a shell command on Windows now waits for `taskkill` to finish releasing descendant processes before the Harness reports cancellation, preventing temporary workspaces from racing a still-open process handle.
 
 ## v0.8.4 (2026-08-21)
 

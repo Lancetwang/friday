@@ -362,7 +362,7 @@ export async function runShell(
   const stop = () => {
     if (stopping) return
     stopping = true
-    terminateProcessTree(child)
+    void terminateProcessTree(child).then(() => settleOutcome?.({ code: exitCode }))
     // SIGKILL cannot free a process stuck in uninterruptible I/O and cannot
     // reach a survivor that re-parented out of the group; the wait below must
     // not depend on either of them dying.
@@ -376,14 +376,19 @@ export async function runShell(
   signal?.addEventListener('abort', abort, { once: true })
   const outcome = await new Promise<{ code: number | null; error?: Error }>(resolveOutcome => {
     settleOutcome = resolveOutcome
-    child.once('error', error => resolveOutcome({ code: null, error }))
+    child.once('error', error => {
+      if (!stopping) resolveOutcome({ code: null, error })
+    })
     // 'close' waits for stdio to drain and never fires while a background
     // survivor holds the pipes; 'exit' plus a short flush grace is the honest
     // signal that the command itself is over.
-    child.once('close', code => resolveOutcome({ code }))
+    child.once('close', code => {
+      exitCode = code
+      if (!stopping) resolveOutcome({ code })
+    })
     child.once('exit', code => {
       exitCode = code
-      settleAfter(800)
+      if (!stopping) settleAfter(800)
     })
   })
   settled = true
@@ -470,25 +475,40 @@ function spillWriter(path: string): { write(chunk: string): void; finish(): Prom
   }
 }
 
-function terminateProcessTree(child: ChildProcess): void {
-  if (!child.pid || child.exitCode !== null) return
+function terminateProcessTree(child: ChildProcess): Promise<void> {
+  if (!child.pid || child.exitCode !== null) return Promise.resolve()
   if (process.platform !== 'win32') {
     try { process.kill(-child.pid, 'SIGKILL') } catch { child.kill('SIGKILL') }
-    return
+    return Promise.resolve()
   }
-  const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
-    windowsHide: true,
-    stdio: 'ignore'
-  })
-  const fallback = setTimeout(() => child.kill(), 5_000)
-  fallback.unref()
-  killer.once('error', () => {
-    clearTimeout(fallback)
-    child.kill()
-  })
-  killer.once('close', () => {
-    clearTimeout(fallback)
-    if (child.exitCode === null) child.kill()
+  // `child` may exit before taskkill has finished killing its descendants.
+  // Waiting for taskkill prevents runShell from returning while a descendant
+  // still holds the workspace as its current directory on Windows.
+  return new Promise(resolveKill => {
+    const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore'
+    })
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      clearTimeout(fallback)
+      resolveKill()
+    }
+    const fallback = setTimeout(() => {
+      child.kill()
+      finish()
+    }, 5_000)
+    fallback.unref()
+    killer.once('error', () => {
+      child.kill()
+      finish()
+    })
+    killer.once('close', () => {
+      if (child.exitCode === null) child.kill()
+      finish()
+    })
   })
 }
 
