@@ -5,6 +5,7 @@ import '@fontsource/noto-serif-sc/chinese-simplified-400.css'
 import 'katex/dist/katex.min.css'
 
 import App from './App'
+import { DesktopPluginProviders } from './plugins'
 import './styles.css'
 
 const splash = document.getElementById('boot-splash')
@@ -18,4 +19,8 @@ const revealApp = () => {
 
 window.addEventListener('friday:ready', revealApp, { once: true })
 fallback = window.setTimeout(revealApp, 15_000)
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root')!).render(
+  <DesktopPluginProviders>
+    <App />
+  </DesktopPluginProviders>
+)

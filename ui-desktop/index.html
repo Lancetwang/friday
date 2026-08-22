@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#efefeb" />
+    <meta name="theme-color" content="#ffffff" />
     <title>Friday</title>
     <style>
       html,
       body {
         height: 100%;
         margin: 0;
-        background: #efefeb;
+        background: var(--theme-canvas, #ffffff);
         color: #23262a;
       }
 
@@ -30,7 +30,7 @@
         justify-content: center;
         gap: 20px;
         padding-bottom: 9vh;
-        background: #efefeb;
+        background: var(--theme-canvas, #ffffff);
         opacity: 1;
         transition: opacity 220ms ease-out;
       }
@@ -67,7 +67,7 @@
         width: 42%;
         height: 100%;
         border-radius: inherit;
-        background: #2b51b5;
+        background: var(--theme-accent, #91caff);
         animation: boot-sweep 1.5s ease-in-out infinite;
       }
 
@@ -125,10 +125,14 @@
       ;(function () {
         try {
           var theme = localStorage.getItem('friday.desktop.theme')
-          if (theme !== 'dark' && theme !== 'light') {
-            theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-          }
+          if (theme !== 'dark' && theme !== 'light') theme = 'light'
           document.documentElement.dataset.theme = theme
+          var palette = JSON.parse(localStorage.getItem('friday.desktop.palette') || 'null')
+          if (palette && /^#[0-9a-f]{6}$/i.test(palette.canvas) && /^#[0-9a-f]{6}$/i.test(palette.accent)) {
+            document.documentElement.style.setProperty('--theme-canvas', palette.canvas)
+            document.documentElement.style.setProperty('--theme-accent', palette.accent)
+            if (theme === 'light') document.querySelector('meta[name="theme-color"]').setAttribute('content', palette.canvas)
+          }
           var stored = localStorage.getItem('friday.desktop.language')
           var zh = stored ? stored === 'zh' : navigator.language.toLowerCase().indexOf('zh') === 0
           document.documentElement.lang = zh ? 'zh-CN' : 'en'

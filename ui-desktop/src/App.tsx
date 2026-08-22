@@ -63,6 +63,7 @@ import {
 } from './Icons'
 import { normalizeMarkdown } from './markdown'
 import { MenuDetails } from './MenuDetails'
+import { DesktopPluginSettings, useThemePlugin } from './plugins'
 import { SaveFooter, SettingsMessage, SettingsSwitch, useSettingsSave } from './SettingsForm'
 import { collectMessageSources, hostOf, safeIconUrl, type WebSource } from './sources'
 
@@ -257,7 +258,6 @@ const MAX_MESSAGE_TEXT = 100_000
 const PROJECTS_KEY = 'friday.desktop.projects'
 const ACTIVE_PROJECT_KEY = 'friday.desktop.activeProject'
 const SIDEBAR_WIDTH_KEY = 'friday.desktop.sidebarWidth'
-const THEME_KEY = 'friday.desktop.theme'
 const DEFAULT_SIDEBAR_WIDTH = 252
 type SidebarSection = 'projects' | 'recent'
 const MIN_SIDEBAR_WIDTH = 180
@@ -504,23 +504,13 @@ function loadSidebarWidth() {
   return clampSidebarWidth(Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || DEFAULT_SIDEBAR_WIDTH)
 }
 
-type Theme = 'dark' | 'light'
-
-function storedTheme(): Theme | null {
-  const value = localStorage.getItem(THEME_KEY)
-  return value === 'dark' || value === 'light' ? value : null
-}
-
-function loadTheme(): Theme {
-  return storedTheme() || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-}
-
 function clampSidebarWidth(width: number) {
   const available = Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 420)
   return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH, available)
 }
 
 function App() {
+  const { mode: theme, setMode: setTheme } = useThemePlugin()
   const initialProjects = useRef(loadProjects())
   const [projects, setProjects] = useState<string[]>(initialProjects.current)
   const [activeProject, setActiveProject] = useState(localStorage.getItem(ACTIVE_PROJECT_KEY) || '')
@@ -530,7 +520,6 @@ function App() {
   const [collapsedSections, setCollapsedSections] = useState<Set<SidebarSection>>(new Set())
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
-  const [theme, setTheme] = useState<Theme>(loadTheme)
   const [language, setLanguageState] = useState<Language>(loadLanguage)
   const [page, setPage] = useState<'chat' | 'settings' | 'skills'>('chat')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
@@ -804,20 +793,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
   }, [sidebarWidth])
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#151719' : '#efefeb')
-    localStorage.setItem(THEME_KEY, theme)
-  }, [theme])
-
-  useEffect(() => {
-    if (storedTheme()) return
-    const media = window.matchMedia('(prefers-color-scheme: dark)')
-    const followSystem = () => setTheme(media.matches ? 'dark' : 'light')
-    media.addEventListener('change', followSystem)
-    return () => media.removeEventListener('change', followSystem)
-  }, [])
 
   useEffect(() => {
     let timer = 0
@@ -3128,38 +3103,36 @@ function pluginContribution(plugin: PluginInfo): string {
   return values.join(' · ') || t('plugins.noTools')
 }
 
+function pluginCopy(plugin: PluginInfo): { description: string; name: string } {
+  if (plugin.scope !== 'builtin') {
+    return { description: plugin.description || plugin.source, name: plugin.name }
+  }
+  const nameKey = `plugins.builtin.${plugin.name}.name`
+  const descriptionKey = `plugins.builtin.${plugin.name}.description`
+  const name = t(nameKey)
+  const description = t(descriptionKey)
+  return {
+    description: description === descriptionKey ? plugin.description || plugin.source : description,
+    name: name === nameKey ? plugin.name : name
+  }
+}
+
 /**
  * The plugin registry with one switch per row - the same on/off the TUI's
  * /plugins picker offers, persisted through the same gateway call.
  */
 function PluginsSettings({
-  onList,
+  plugins,
   onToggle
 }: {
-  onList: () => Promise<{ plugins: PluginInfo[] }>
+  plugins: PluginInfo[]
   onToggle: (name: string, enabled: boolean) => Promise<{ plugins: PluginInfo[] }>
 }) {
-  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
-  const [error, setError] = useState('')
   const form = useSettingsSave()
-
-  useEffect(() => {
-    let cancelled = false
-    onList().then(result => {
-      if (!cancelled) setPlugins(result.plugins)
-    }).catch(problem => {
-      if (!cancelled) setError(String(problem))
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [onList])
-
-  if (!plugins) return <SettingsLoading error={error} />
 
   const toggle = (plugin: PluginInfo, enabled: boolean) => {
     form.submit(
-      onToggle(plugin.name, enabled).then(result => setPlugins(result.plugins)),
+      onToggle(plugin.name, enabled),
       () => t(enabled ? 'plugins.enabled' : 'plugins.disabled', { name: plugin.name }),
       plugin.name
     )
@@ -3167,29 +3140,32 @@ function PluginsSettings({
 
   return (
     <div className="plugin-list">
-      {plugins.map(plugin => (
-        <div className={`model-provider ${plugin.disabled ? '' : 'enabled'}`} key={plugin.name}>
-          <div className="model-provider-identity">
-            <span className="model-provider-name">
-              <strong>{plugin.name}</strong>
-              <small>{plugin.description || plugin.source}</small>
-            </span>
+      {plugins.map(plugin => {
+        const copy = pluginCopy(plugin)
+        return (
+          <div className={`model-provider ${plugin.disabled ? '' : 'enabled'}`} key={plugin.name}>
+            <div className="model-provider-identity">
+              <span className="model-provider-name">
+                <strong title={plugin.name}>{copy.name}</strong>
+                <small>{copy.description}</small>
+              </span>
+            </div>
+            <div className="model-provider-meta">
+              <span>
+                {plugin.required ? `${t('plugins.required')} · ` : ''}
+                {t(`plugins.scope.${plugin.scope}`)} · {pluginContribution(plugin)}
+              </span>
+              {plugin.errors.length ? <span className="plugin-error">{t('plugins.error', { error: plugin.errors[0]! })}</span> : null}
+            </div>
+            <SettingsSwitch
+              checked={!plugin.disabled}
+              disabled={plugin.required || form.pending === plugin.name}
+              label={`${copy.name}: ${plugin.disabled ? t('plugins.off') : t('plugins.on')}`}
+              onChange={enabled => toggle(plugin, enabled)}
+            />
           </div>
-          <div className="model-provider-meta">
-            <span>
-              {plugin.required ? `${t('plugins.required')} · ` : ''}
-              {plugin.scope} · {pluginContribution(plugin)}
-            </span>
-            {plugin.errors.length ? <span className="plugin-error">{t('plugins.error', { error: plugin.errors[0]! })}</span> : null}
-          </div>
-          <SettingsSwitch
-            checked={!plugin.disabled}
-            disabled={plugin.required || form.pending === plugin.name}
-            label={`${plugin.name}: ${plugin.disabled ? t('plugins.off') : t('plugins.on')}`}
-            onChange={enabled => toggle(plugin, enabled)}
-          />
-        </div>
-      ))}
+        )
+      })}
       <p className="settings-note">{t('plugins.external')}</p>
       <SettingsMessage failed={form.failed} message={form.message} />
     </div>
@@ -3408,6 +3384,8 @@ function SettingsPage({
   const [apiKey, setApiKey] = useState('')
   const [expandedProvider, setExpandedProvider] = useState('')
   const [editingFile, setEditingFile] = useState<MemoryFileScope | null>(null)
+  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
+  const [pluginsError, setPluginsError] = useState('')
   const modelForm = useSettingsSave()
 
   useEffect(() => {
@@ -3418,6 +3396,18 @@ function SettingsPage({
       })
       .catch(value => {
         if (active) setSettingsError(String(value))
+      })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    void onListPlugins()
+      .then(value => {
+        if (active) setPlugins(value.plugins)
+      })
+      .catch(value => {
+        if (active) setPluginsError(String(value))
       })
     return () => { active = false }
   }, [])
@@ -3477,6 +3467,15 @@ function SettingsPage({
     return compaction
   })
 
+  const persistPlugin = (name: string, enabled: boolean) => onTogglePlugin(name, enabled).then(result => {
+    setPlugins(result.plugins)
+    return result
+  })
+
+  const compactionPluginEnabled = plugins
+    ? plugins.some(plugin => !plugin.disabled && plugin.capabilities.includes('compaction'))
+    : null
+
   return (
     <div className="settings-page">
       <aside className="settings-nav">
@@ -3524,6 +3523,7 @@ function SettingsPage({
                   </div>
                   <p className="language-note">{t('general.uiLanguageNote')}</p>
                 </div>
+                <DesktopPluginSettings slot="general" />
                 <div className="profile-settings">
                   <p>{t('general.profileNote')}</p>
                   {settings
@@ -3696,7 +3696,12 @@ function SettingsPage({
                 <p>{t('compaction.desc')}</p>
               </header>
               {settings
-                ? <CompactionSettingsForm initial={settings.compaction} onCompact={onCompact} onSave={persistCompaction} />
+                ? <CompactionSettingsForm
+                    initial={settings.compaction}
+                    onCompact={onCompact}
+                    onSave={persistCompaction}
+                    pluginEnabled={compactionPluginEnabled}
+                  />
                 : <SettingsLoading error={settingsError} />}
             </div>
           )}
@@ -3706,7 +3711,9 @@ function SettingsPage({
                 <h2>{t('plugins.title')}</h2>
                 <p>{t('plugins.desc')}</p>
               </header>
-              <PluginsSettings onList={onListPlugins} onToggle={onTogglePlugin} />
+              {plugins
+                ? <PluginsSettings plugins={plugins} onToggle={persistPlugin} />
+                : <SettingsLoading error={pluginsError} />}
             </div>
           )}
       </section>
@@ -3717,109 +3724,146 @@ function SettingsPage({
 function CompactionSettingsForm({
   initial,
   onCompact,
-  onSave
+  onSave,
+  pluginEnabled
 }: {
   initial: CompactionSettings
   onCompact: () => Promise<{ text: string }>
   onSave: (value: CompactionSettings) => Promise<CompactionSettings>
+  pluginEnabled: boolean | null
 }) {
   const [draft, setDraft] = useState(initial)
-  const form = useSettingsSave()
+  const saveForm = useSettingsSave()
+  const compactForm = useSettingsSave()
   useEffect(() => setDraft(initial), [initial])
+  const busy = Boolean(saveForm.pending || compactForm.pending)
+  const dirty = draft.automatic !== initial.automatic
+    || draft.strategy !== initial.strategy
+    || draft.threshold_percent !== initial.threshold_percent
   const save = (event: FormEvent) => {
     event.preventDefault()
-    if (form.pending) return
-    form.submit(onSave(draft).then(value => setDraft(value)), () => t('settings.saved'))
+    if (busy || !dirty) return
+    saveForm.submit(
+      onSave(draft).then(value => setDraft(value)),
+      () => t('compaction.saved')
+    )
   }
-  const compact = () => form.submit(
-    onSave(draft).then(value => {
-      setDraft(value)
-      return onCompact()
-    }),
-    result => result.text,
-    'compact'
-  )
+  const compact = () => {
+    if (busy || pluginEnabled === false) return
+    const settings = dirty
+      ? onSave(draft).then(value => {
+          setDraft(value)
+          return value
+        })
+      : Promise.resolve(draft)
+    compactForm.submit(
+      settings.then(() => onCompact()),
+      result => result.text,
+      'compact'
+    )
+  }
   const moveThreshold = (amount: number) => setDraft(current => ({
     ...current,
     threshold_percent: Math.min(95, Math.max(50, current.threshold_percent + amount))
   }))
 
   return (
-    <form className="compaction-settings settings-form" onSubmit={save}>
-      <div className="compaction-controls">
-        <div className="compaction-control">
-          <span className="compaction-copy">
-            <strong>{t('compaction.automatic')}</strong>
-            <small>{t('compaction.automaticNote')}</small>
-          </span>
-          <SettingsSwitch
-            checked={draft.automatic}
-            label={t('compaction.automatic')}
-            onChange={automatic => setDraft(current => ({ ...current, automatic }))}
-          />
-        </div>
-        <div className="compaction-control">
-          <span className="compaction-copy">
-            <strong>{t('compaction.threshold')}</strong>
-            <small>{t('compaction.thresholdNote')}</small>
-          </span>
-          <div className="threshold-stepper">
-            <button
-              aria-label={t('compaction.decreaseThreshold')}
-              disabled={draft.threshold_percent <= 50}
-              onClick={() => moveThreshold(-1)}
-              type="button"
-            >
-              <MinusIcon />
-            </button>
-            <output aria-live="polite">{draft.threshold_percent}<small>%</small></output>
-            <button
-              aria-label={t('compaction.increaseThreshold')}
-              disabled={draft.threshold_percent >= 95}
-              onClick={() => moveThreshold(1)}
-              type="button"
-            >
-              <PlusIcon />
-            </button>
+    <div className="compaction-settings">
+      <form className="compaction-policy settings-form" onSubmit={save}>
+        <div className="compaction-controls">
+          <div className="compaction-control">
+            <span className="compaction-copy">
+              <strong>{t('compaction.automatic')}</strong>
+              <small>{t('compaction.automaticNote')}</small>
+            </span>
+            <SettingsSwitch
+              checked={draft.automatic}
+              label={t('compaction.automatic')}
+              onChange={automatic => setDraft(current => ({ ...current, automatic }))}
+            />
           </div>
-        </div>
-        <div className="compaction-control compaction-strategy">
-          <span className="compaction-copy">
-            <strong>{t('compaction.strategy')}</strong>
-            <small>{t('compaction.strategyNote')}</small>
-          </span>
-          <div className="compaction-strategy-choice">
-            <div aria-label={t('compaction.strategy')} className="language-options" role="radiogroup">
-              {(['insert', 'two-stage'] as const).map(strategy => (
-                <button
-                  aria-checked={draft.strategy === strategy}
-                  className={`language-option ${draft.strategy === strategy ? 'active' : ''}`}
-                  key={strategy}
-                  onClick={() => setDraft(current => ({ ...current, strategy }))}
-                  role="radio"
-                  type="button"
-                >
-                  {t(strategy === 'insert' ? 'compaction.insert' : 'compaction.twoStage')}
-                </button>
-              ))}
+          <div className="compaction-control">
+            <span className="compaction-copy">
+              <strong>{t('compaction.threshold')}</strong>
+              <small>{t('compaction.thresholdNote')}</small>
+            </span>
+            <div className="threshold-stepper">
+              <button
+                aria-label={t('compaction.decreaseThreshold')}
+                disabled={draft.threshold_percent <= 50}
+                onClick={() => moveThreshold(-1)}
+                type="button"
+              >
+                <MinusIcon />
+              </button>
+              <output aria-live="polite">{draft.threshold_percent}<small>%</small></output>
+              <button
+                aria-label={t('compaction.increaseThreshold')}
+                disabled={draft.threshold_percent >= 95}
+                onClick={() => moveThreshold(1)}
+                type="button"
+              >
+                <PlusIcon />
+              </button>
             </div>
-            <small className="compaction-strategy-note">
-              {t(draft.strategy === 'insert' ? 'compaction.insertNote' : 'compaction.twoStageNote')}
-            </small>
+          </div>
+          <div className="compaction-control compaction-strategy">
+            <span className="compaction-copy">
+              <strong>{t('compaction.strategy')}</strong>
+            </span>
+            <div className="compaction-strategy-choice">
+              <div aria-label={t('compaction.strategy')} className="language-options" role="radiogroup">
+                {(['insert', 'two-stage'] as const).map(strategy => {
+                  const tip = `compaction-${strategy}-tip`
+                  return (
+                    <span className="compaction-strategy-option" key={strategy}>
+                      <button
+                        aria-checked={draft.strategy === strategy}
+                        aria-describedby={tip}
+                        className={`language-option ${draft.strategy === strategy ? 'active' : ''}`}
+                        onClick={() => setDraft(current => ({ ...current, strategy }))}
+                        role="radio"
+                        type="button"
+                      >
+                        {t(strategy === 'insert' ? 'compaction.insert' : 'compaction.twoStage')}
+                      </button>
+                      <span className="compaction-strategy-tooltip" id={tip} role="tooltip">
+                        {t(strategy === 'insert' ? 'compaction.insertNote' : 'compaction.twoStageNote')}
+                      </span>
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-      <p className="settings-note">{t('compaction.manualNote')}</p>
-      <SettingsMessage failed={form.failed} message={form.message} />
-      <footer>
-        <button className="line-action" disabled={Boolean(form.pending)} onClick={compact} type="button">
-          {form.pending === 'compact' ? t('compaction.compacting') : t('compaction.compactNow')}
+        <footer className="compaction-save-footer">
+          <SettingsMessage failed={saveForm.failed} message={saveForm.message} />
+          <button className="save-model" disabled={busy || !dirty} type="submit">
+            {saveForm.pending ? t('settings.saving') : t('compaction.saveSettings')}
+          </button>
+        </footer>
+      </form>
+      <section className={`compact-now-panel ${pluginEnabled === false ? 'unavailable' : ''}`}>
+        <span className="compaction-copy">
+          <strong>{t('compaction.manualTitle')}</strong>
+          <small>{t(pluginEnabled === false ? 'compaction.pluginUnavailable' : 'compaction.manualNote')}</small>
+        </span>
+        <button
+          className="compact-now-button"
+          disabled={busy || pluginEnabled === false}
+          onClick={compact}
+          type="button"
+        >
+          {compactForm.pending ? t('compaction.compacting') : t('compaction.compactNow')}
         </button>
-        <button className="save-model" disabled={Boolean(form.pending)} type="submit">
-          {form.pending === 'save' ? t('settings.saving') : t('settings.save')}
-        </button>
-      </footer>
-    </form>
+        {compactForm.message ? (
+          <div className="compact-now-message">
+            <SettingsMessage failed={compactForm.failed} message={compactForm.message} />
+          </div>
+        ) : null}
+      </section>
+    </div>
   )
 }
 

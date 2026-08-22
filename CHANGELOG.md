@@ -2,6 +2,18 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.8.5 (2026-08-22)
+
+### Added
+- Desktop appearance is now a local UI plugin registered through the same small provider-and-settings-slot seam as future desktop extensions. General settings offers six curated palettes, native color pickers, and `#RGB` or `#RRGGBB` input for the canvas and accent colors; changes apply immediately and persist on the device.
+
+### Changed
+- The light appearance now starts from a white canvas and soft sky-blue accent. Selected navigation, menus, switches, focus treatment, conversation compaction, and other highlighted controls all derive from the chosen accent, while readable foreground colors are selected for arbitrary accents and the existing dark appearance remains available.
+- Compaction settings distinguish the capability plugin from its automatic threshold policy, name the direct and two-stage strategies without permanent explanatory clutter, and separate saving policy from the immediate **Compact this conversation** action.
+
+### Fixed
+- Theme presets now reflow against the actual settings content width, so a wide project sidebar cannot push palette cards beyond the desktop window.
+
 ## v0.8.4 (2026-08-21)
 
 ### Added

@@ -102,7 +102,7 @@ export function builtinPlugins(workspace: string, options: ToolOptions = {}): Lo
     }),
     builtinPlugin({
       name: 'compaction',
-      description: 'Automatic and manual model-context compaction.',
+      description: 'Built-in compaction provider; without another provider, disabling it removes automatic and manual compaction.',
       compact: compactIfNeeded
     })
   ]

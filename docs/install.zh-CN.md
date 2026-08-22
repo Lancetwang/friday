@@ -45,7 +45,7 @@ Harness 与 TUI 位于 `friday-agent` 包中。
 npm tarball，并一起安装这组已经通过测试的产物：
 
 ```bash
-npm install --global ./friday-agent-core-0.8.4.tgz ./friday-agent-0.8.4.tgz
+npm install --global ./friday-agent-core-0.8.5.tgz ./friday-agent-0.8.5.tgz
 friday --version
 ```
 
@@ -68,7 +68,7 @@ npm install friday-agent-core
 同一个 GitHub Release 也提供 Core tarball，作为 Registry 发布前的备用安装方式：
 
 ```bash
-npm install ./friday-agent-core-0.8.4.tgz
+npm install ./friday-agent-core-0.8.5.tgz
 ```
 
 ## 从源码开发
