@@ -559,7 +559,9 @@ export class FridaySession {
       const spillPath = join(toolSpillDir(this.workspace, this.sessionId), `${approval.tool_call_id || approval.id}.log`)
       result = approval.background
         ? await this.processes.start(this.workspace, approval.command, spillPath, this.abort.signal)
-        : await runShell(this.workspace, approval.command, approval.timeout_seconds, this.abort.signal, progress, spillPath)
+        : await this.processes.track(
+          runShell(this.workspace, approval.command, approval.timeout_seconds, this.abort.signal, progress, spillPath)
+        )
       progress(JSON.stringify(result))
     } catch (error) {
       if (approval) await this.cancelApprovalDecision(approval, checkpointId)

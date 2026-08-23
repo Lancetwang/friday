@@ -2,6 +2,11 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.8.7 (2026-08-23)
+
+### Fixed
+- Session shutdown now retains and awaits cleanup for cancelled foreground Bash calls after Core has stopped waiting for the tool result. This closes the remaining Windows handle race where a completed headless turn could exit while `taskkill /T` was still releasing a descendant's workspace.
+
 ## v0.8.6 (2026-08-23)
 
 ### Added

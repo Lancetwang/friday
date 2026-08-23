@@ -200,6 +200,21 @@ test('managed background commands log without holding the turn and die with thei
   }
 })
 
+test('managed process cleanup remains awaitable after Core stops waiting for a foreground tool', async () => {
+  const registry = new ManagedProcessRegistry()
+  let finish!: () => void
+  const work = new Promise<void>(resolveWork => { finish = resolveWork })
+  registry.track(work)
+  let closed = false
+  const closing = registry.close().then(() => { closed = true })
+
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(closed, false)
+  finish()
+  await closing
+  assert.equal(closed, true)
+})
+
 test('the Memory tool replaces the Python CLI dependency inside agent turns', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'friday-memory-tool-'))
   const home = join(temporary, 'home')

@@ -232,7 +232,8 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
           if (!options.processes) throw new Error('Managed background processes require an active Friday session.')
           return options.processes.start(root, args.command, spillPath, signal)
         }
-        return runShell(root, args.command, capped(args.timeout_seconds, 60, 600), signal, onProgress, spillPath)
+        const run = runShell(root, args.command, capped(args.timeout_seconds, 60, 600), signal, onProgress, spillPath)
+        return options.processes ? options.processes.track(run) : run
       }
     },
     {
@@ -420,6 +421,18 @@ export async function runShell(
 /** Session-owned long-lived commands with bounded logs and deterministic cleanup. */
 export class ManagedProcessRegistry {
   private readonly running = new Map<ChildProcess, { finish: () => Promise<void> }>()
+  private readonly foreground = new Set<Promise<void>>()
+
+  /**
+   * Core may stop waiting for a cancelled tool immediately. Keep Friday-owned
+   * cleanup reachable so closing the session still waits for Bash to release
+   * its process tree and workspace handles.
+   */
+  track<T>(work: Promise<T>): Promise<T> {
+    const settled = work.then(() => {}, () => {}).finally(() => this.foreground.delete(settled))
+    this.foreground.add(settled)
+    return work
+  }
 
   async start(workspace: string, source: string, logPath: string, signal?: AbortSignal): Promise<JsonObject> {
     signal?.throwIfAborted()
@@ -494,6 +507,7 @@ export class ManagedProcessRegistry {
       await entry.finish()
       this.running.delete(child)
     }))
+    await Promise.all(this.foreground)
   }
 }
 
