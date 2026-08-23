@@ -16,6 +16,7 @@ export class GatewayClient extends EventEmitter {
   private proc: ChildProcess | null = null
   private pending = new Map<string, Pending>()
   private seq = 0
+  private closing: Promise<void> | undefined
 
   start() {
     if (this.proc) return
@@ -62,9 +63,26 @@ export class GatewayClient extends EventEmitter {
     })
   }
 
+  async close(timeoutMs = 5_000): Promise<void> {
+    if (this.closing) return this.closing
+    const proc = this.proc
+    if (!proc) return
+    this.closing = (async () => {
+      proc.stdin?.end()
+      if (await waitForExit(proc, timeoutMs)) return
+      proc.kill('SIGTERM')
+      if (await waitForExit(proc, 1_000)) return
+      proc.kill('SIGKILL')
+      await waitForExit(proc, 1_000)
+    })().finally(() => {
+      if (this.proc === proc) this.proc = null
+      this.closing = undefined
+    })
+    return this.closing
+  }
+
   kill() {
-    this.proc?.kill()
-    this.proc = null
+    this.proc?.kill('SIGTERM')
   }
 
   private dispatch(line: string) {
@@ -83,4 +101,21 @@ export class GatewayClient extends EventEmitter {
       this.emit('event', { type: 'gateway.protocol_error', payload: { preview: line.slice(0, 160) } } satisfies GatewayEvent)
     }
   }
+}
+
+function waitForExit(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true)
+  return new Promise(resolveExit => {
+    let settled = false
+    const finish = (exited: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      proc.removeListener('exit', onExit)
+      resolveExit(exited)
+    }
+    const onExit = () => finish(true)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    proc.once('exit', onExit)
+  })
 }

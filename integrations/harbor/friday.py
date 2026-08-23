@@ -1,6 +1,7 @@
 """Harbor adapter for Friday's headless TypeScript CLI."""
 
 import json
+import re
 import shlex
 from typing import override
 
@@ -29,7 +30,7 @@ class FridayAgent(BaseInstalledAgent):
         await self.ensure_system_dependencies(
             environment, ("bash", "curl", "nodejs", "npm")
         )
-        package = self._get_env("FRIDAY_NPM_SPEC") or "friday-agent@0.8.1"
+        package = self._get_env("FRIDAY_NPM_SPEC") or "friday-agent@0.8.6"
         install_command = f"npm install --global {shlex.quote(package)}"
         installed = await self.exec_as_agent(
             environment,
@@ -96,10 +97,26 @@ class FridayAgent(BaseInstalledAgent):
                 "LLM_API_KEY": connection.api_key,
             },
             command=(
-                "friday run --cwd /app --trajectory /logs/agent/trajectory.json -- "
+                "friday run "
+                f"{self._run_budget_args(instruction)}"
+                "--cwd /app --trajectory /logs/agent/trajectory.json -- "
                 f"{shlex.quote(instruction)}"
             ),
         )
+
+    def _run_budget_args(self, instruction: str) -> str:
+        configured = self._get_env("FRIDAY_RUN_TIMEOUT_SECONDS")
+        match = re.search(
+            r"(?:^|\n)You have (\d+) seconds to complete this task\."
+            r"(?: Do not cheat by using online solutions or hints specific to this task\.)?\s*$",
+            instruction,
+        )
+        timeout = int(configured or (match.group(1) if match else 0))
+        if timeout <= 0:
+            return ""
+        reserve = self._get_env("FRIDAY_FINISH_RESERVE_SECONDS")
+        suffix = f"--finish-reserve-seconds {int(reserve)} " if reserve else ""
+        return f"--timeout-seconds {timeout} {suffix}"
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:

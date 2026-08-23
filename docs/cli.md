@@ -25,6 +25,8 @@ Headless options for `ask`, `goal`, and `run`:
 --stdin                        Read the prompt from standard input
 --json                         Print the final result as JSON
 --trajectory <path>            Write an ATIF-v1.7 trajectory
+--timeout-seconds <seconds>    Set one deadline for the complete run
+--finish-reserve-seconds <n>   Stop tools early and reserve time to finish
 ```
 
 `ask` and `goal` leave the gateway default unchanged: `FRIDAY_PERMISSION_MODE`
@@ -38,7 +40,24 @@ Examples:
 friday ask --cwd E:\work\project "summarize this repository"
 Get-Content task.txt | friday run --stdin --json
 friday run --trajectory C:\logs\trajectory.json -- "fix the failing tests"
+friday run --timeout-seconds 900 --finish-reserve-seconds 90 -- "finish and verify the task"
 ```
+
+Set `--finish-reserve-seconds 0` when the caller owns shutdown and tools should
+use the entire deadline.
+
+The deadline is optional and therefore does not change ordinary `ask`, `goal`,
+or interactive sessions. When supplied, it covers the whole request rather
+than resetting for every tool or goal phase. Friday cancels tool work at the
+start of the finishing reserve, disables further tools, and asks the model for
+the best supported final response. The hard deadline cancels the remaining
+model request. A hard deadline returns exit code `124`; an external interrupt
+returns `130`.
+
+The trajectory path is updated atomically during the run (tool completions are
+flushed immediately and streaming-only changes are debounced), then written
+once more before the gateway exits. A timeout or signal therefore retains the
+latest complete observations instead of losing the entire in-memory trace.
 
 TUI slash commands:
 

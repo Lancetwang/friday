@@ -8,7 +8,7 @@ import { ToolExecutor, type ToolCall } from 'friday-agent-core'
 
 import { claimApproval, pendingApproval, preflightShell } from './permissions.js'
 import { discoverSkills, skillBody, skillDetail } from './skills.js'
-import { buildTools, runShell, SHELL_CONTEXT_LIMIT, toolSpillDir } from './tools.js'
+import { buildTools, ManagedProcessRegistry, runShell, SHELL_CONTEXT_LIMIT, toolSpillDir } from './tools.js'
 
 test('workspace tools write, page, edit, glob, and grep without escaping the root', async () => {
   const root = await mkdtemp(join(tmpdir(), 'friday-tools-'))
@@ -172,6 +172,34 @@ test('cancelling a shell command settles quickly instead of waiting for the tree
   }
 })
 
+test('managed background commands log without holding the turn and die with their registry', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'friday-shell-managed-'))
+  const marker = join(root, 'survived.txt')
+  const log = join(root, 'service.log')
+  const registry = new ManagedProcessRegistry()
+  const source = [
+    "console.log('service-ready')",
+    `setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'bad'),800)`,
+    'setTimeout(()=>{},5000)'
+  ].join(';')
+  const encoded = Buffer.from(source).toString('base64')
+  const evaluate = `eval(Buffer.from('${encoded}','base64').toString())`
+  const command = `${process.platform === 'win32' ? '& ' : ''}${JSON.stringify(process.execPath)} -e ${JSON.stringify(evaluate)}`
+  try {
+    const outcome = await registry.start(root, command, log)
+    assert.equal(outcome.background, true)
+    await waitUntil(async () => (await readFile(log, 'utf8').catch(() => '')).includes('service-ready'))
+
+    await registry.close()
+    await new Promise(resolve => setTimeout(resolve, 1_000))
+
+    await assert.rejects(readFile(marker, 'utf8'), { code: 'ENOENT' })
+  } finally {
+    await registry.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('the Memory tool replaces the Python CLI dependency inside agent turns', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'friday-memory-tool-'))
   const home = join(temporary, 'home')
@@ -284,4 +312,12 @@ function toolCall(name: string, args: Record<string, unknown>): ToolCall {
 
 function result(value: { content: string }): Record<string, unknown> {
   return JSON.parse(value.content) as Record<string, unknown>
+}
+
+async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!await predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for condition.')
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
 }

@@ -19,7 +19,11 @@ package without changing the adapter:
 ```bash
 harbor run ... \
   --agent integrations.harbor.friday:FridayAgent \
-  --ae FRIDAY_NPM_SPEC=friday-agent@0.8.5
+  --ae FRIDAY_NPM_SPEC=friday-agent@0.8.6
 ```
 
 Friday writes Harbor's `/logs/agent/trajectory.json` directly in ATIF-v1.7.
+The adapter also maps the task's canonical `You have N seconds` suffix onto
+Friday's generic run deadline. Override it with
+`FRIDAY_RUN_TIMEOUT_SECONDS`; set `FRIDAY_FINISH_RESERVE_SECONDS` only when a
+non-default reserve is required.

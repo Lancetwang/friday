@@ -2,10 +2,10 @@ import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
-import type { GatewayEvent, MessageMetrics, SessionInfo } from './types.js'
+import type { GatewayEvent, MessageMetrics, ModelTermination, SessionInfo } from './types.js'
 import { GatewayClient } from './gatewayClient.js'
 
-export const VERSION = '0.8.5'
+export const VERSION = '0.8.6'
 
 export type CliOptions = {
   command: 'ask' | 'goal' | 'help' | 'run' | 'tui' | 'version'
@@ -15,6 +15,8 @@ export type CliOptions = {
   stdin: boolean
   text: string
   trajectory?: string
+  timeoutSeconds?: number
+  finishReserveSeconds?: number
 }
 
 export function parseArgs(argv: string[]): CliOptions {
@@ -24,6 +26,8 @@ export function parseArgs(argv: string[]): CliOptions {
   let permissionMode: CliOptions['permissionMode']
   let stdin = false
   let trajectory: string | undefined
+  let timeoutSeconds: number | undefined
+  let finishReserveSeconds: number | undefined
   const text: string[] = []
   const value = (name: string, index: number): string => {
     const result = argv[index + 1]
@@ -39,6 +43,8 @@ export function parseArgs(argv: string[]): CliOptions {
     if (arg === '--stdin') { stdin = true; continue }
     if (arg === '--cwd') { cwd = value(arg, index); index += 1; continue }
     if (arg === '--trajectory') { trajectory = value(arg, index); index += 1; continue }
+    if (arg === '--timeout-seconds') { timeoutSeconds = positiveInteger(value(arg, index), arg); index += 1; continue }
+    if (arg === '--finish-reserve-seconds') { finishReserveSeconds = nonNegativeInteger(value(arg, index), arg); index += 1; continue }
     if (arg === '--permission-mode') {
       const mode = value(arg, index)
       if (!['auto', 'bypass', 'manual'].includes(mode)) throw new Error('--permission-mode must be manual, auto, or bypass.')
@@ -52,10 +58,27 @@ export function parseArgs(argv: string[]): CliOptions {
   }
   command ??= text.length ? 'help' : 'tui'
   if (command === 'run') permissionMode ??= 'bypass'
-  return { command, ...(cwd ? { cwd } : {}), json, ...(permissionMode ? { permissionMode } : {}), stdin, text: text.join(' '), ...(trajectory ? { trajectory } : {}) }
+  if (finishReserveSeconds !== undefined && timeoutSeconds === undefined) {
+    throw new Error('--finish-reserve-seconds requires --timeout-seconds.')
+  }
+  if (timeoutSeconds !== undefined && finishReserveSeconds !== undefined && finishReserveSeconds >= timeoutSeconds) {
+    throw new Error('--finish-reserve-seconds must be smaller than --timeout-seconds.')
+  }
+  return {
+    command,
+    ...(cwd ? { cwd } : {}),
+    json,
+    ...(permissionMode ? { permissionMode } : {}),
+    stdin,
+    text: text.join(' '),
+    ...(trajectory ? { trajectory } : {}),
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(finishReserveSeconds !== undefined ? { finishReserveSeconds } : {})
+  }
 }
 
 export async function headless(options: CliOptions): Promise<number> {
+  const deadlineMs = options.timeoutSeconds === undefined ? undefined : Date.now() + options.timeoutSeconds * 1_000
   const workspace = resolve(options.cwd || process.cwd())
   if (!(await stat(workspace).catch(() => undefined))?.isDirectory()) throw new Error(`Workspace is not a directory: ${workspace}`)
   process.env.FRIDAY_CWD = workspace
@@ -63,34 +86,110 @@ export async function headless(options: CliOptions): Promise<number> {
   if (!text) throw new Error(`${options.command} requires a prompt or --stdin.`)
   const gateway = new GatewayClient()
   const events: TimedEvent[] = []
-  let streamed = false
+  let streamedText = ''
+  let info: SessionInfo = {
+    cwd: workspace,
+    model: 'unknown',
+    permission_mode: options.permissionMode ?? 'manual',
+    thinking_effort: 'unknown',
+    tools: []
+  }
+  let result: HeadlessResult | undefined
+  let interrupted: NodeJS.Signals | undefined
+  let requestStarted = false
+  const trajectory = options.trajectory
+    ? new TrajectoryWriter(resolve(options.trajectory), () => atif(text, info, events, result ?? {
+      text: streamedText,
+      ...(info.session_id ? { session_id: info.session_id } : {}),
+      stop_reason: interrupted ? 'cancelled' : 'running'
+    }))
+    : undefined
+  const interrupt = (signal: NodeJS.Signals) => {
+    interrupted ??= signal
+    trajectory?.schedule(true)
+    if (requestStarted) void gateway.request('chat.cancel', { session_id: info.session_id }).catch(() => {})
+  }
+  process.once('SIGINT', interrupt)
+  process.once('SIGTERM', interrupt)
   gateway.on('event', (event: GatewayEvent) => {
-    events.push({ event, timestamp: new Date().toISOString() })
-    if (!options.json && event.type === 'message.delta') {
-      streamed = true
-      process.stdout.write(event.payload.text)
+    if (trajectoryEvent(event)) events.push({ event, timestamp: new Date().toISOString() })
+    if (event.type === 'message.delta') {
+      streamedText += event.payload.text
+      if (!options.json) process.stdout.write(event.payload.text)
     } else if (event.type === 'gateway.stderr') process.stderr.write(`${event.payload.line}\n`)
+    if (event.type === 'message.delta' || trajectoryEvent(event) || event.type === 'message.cancelled') {
+      trajectory?.schedule(event.type !== 'message.delta')
+    }
   })
   gateway.start()
   try {
     if (options.permissionMode) await gateway.request('permission.set', { mode: options.permissionMode })
-    const info = await gateway.request<SessionInfo>('session.info')
+    if (interrupted) {
+      result = { cancelled: true, text: '', stop_reason: 'cancelled' }
+      return 130
+    }
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      result = { cancelled: true, text: '', stop_reason: 'deadline' }
+      return 124
+    }
+    info = await gateway.request<SessionInfo>('session.info')
+    if (interrupted) {
+      result = { cancelled: true, text: '', stop_reason: 'cancelled', ...(info.session_id ? { session_id: info.session_id } : {}) }
+      return 130
+    }
+    const remainingMs = deadlineMs === undefined ? undefined : Math.max(0, deadlineMs - Date.now())
+    const reserveMs = options.finishReserveSeconds === undefined ? undefined : options.finishReserveSeconds * 1_000
+    if (remainingMs !== undefined && (remainingMs < 1 || (reserveMs !== undefined && reserveMs >= remainingMs))) {
+      result = { cancelled: true, text: '', stop_reason: 'deadline', ...(info.session_id ? { session_id: info.session_id } : {}) }
+      return 124
+    }
     const method = options.command === 'goal' ? 'goal.run' : 'chat.send'
-    const result = await gateway.request<HeadlessResult>(method, { text })
-    if (options.trajectory) await writeTrajectory(resolve(options.trajectory), atif(text, info, events, result))
+    requestStarted = true
+    const received = await gateway.request<HeadlessResult>(method, {
+      text,
+      ...(remainingMs !== undefined ? {
+        run: {
+          timeout_ms: remainingMs,
+          ...(reserveMs !== undefined ? { reserve_ms: reserveMs } : {})
+        }
+      } : {})
+    })
+    result = received.cancelled && !received.text && streamedText ? { ...received, text: streamedText } : received
+    requestStarted = false
+    await trajectory?.flush()
     if (options.json) process.stdout.write(`${JSON.stringify(result)}\n`)
-    else if (!streamed) process.stdout.write(`${result.text}\n`)
+    else if (!streamedText) process.stdout.write(`${result.text}\n`)
     else process.stdout.write('\n')
-    return result.cancelled ? 130 : 0
+    return result.cancelled ? (result.stop_reason === 'deadline' ? 124 : 130) : 0
+  } catch (error) {
+    result ??= {
+      text: streamedText,
+      ...(info.session_id ? { session_id: info.session_id } : {}),
+      stop_reason: interrupted ? 'cancelled' : 'error'
+    }
+    throw error
   } finally {
-    gateway.kill()
+    requestStarted = false
+    process.removeListener('SIGINT', interrupt)
+    process.removeListener('SIGTERM', interrupt)
+    try {
+      await trajectory?.flush()
+    } finally {
+      await gateway.close()
+    }
   }
+}
+
+function trajectoryEvent(event: GatewayEvent): boolean {
+  return event.type === 'tool.start' || event.type === 'tool.complete'
+    || event.type === 'message.complete' || event.type === 'message.suspended'
 }
 
 type HeadlessResult = {
   cancelled?: boolean
   session_id?: string
   stop_reason?: string
+  termination?: ModelTermination
   text: string
   verification?: unknown
 }
@@ -147,8 +246,53 @@ export function atif(instruction: string, info: SessionInfo, events: TimedEvent[
       ...(typeof metrics?.cached_tokens === 'number' ? { total_cached_tokens: metrics.cached_tokens } : {}),
       total_steps: steps.length
     },
-    extra: { permission_mode: info.permission_mode, ...(result.stop_reason ? { stop_reason: result.stop_reason } : {}) }
+    extra: {
+      permission_mode: info.permission_mode,
+      ...(result.stop_reason ? { stop_reason: result.stop_reason } : {}),
+      ...(result.termination ? { termination: result.termination } : {})
+    }
   }
+}
+
+class TrajectoryWriter {
+  private queued = Promise.resolve()
+  private timer: ReturnType<typeof setTimeout> | undefined
+
+  constructor(private readonly path: string, private readonly snapshot: () => unknown) {}
+
+  schedule(immediate = false): void {
+    if (immediate) {
+      if (this.timer) clearTimeout(this.timer)
+      this.timer = undefined
+      void this.flush().catch(() => {})
+      return
+    }
+    if (this.timer) return
+    this.timer = setTimeout(() => {
+      this.timer = undefined
+      void this.flush().catch(() => {})
+    }, 200)
+  }
+
+  flush(): Promise<void> {
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = undefined
+    const value = this.snapshot()
+    this.queued = this.queued.then(() => writeTrajectory(this.path, value))
+    return this.queued
+  }
+}
+
+function positiveInteger(value: string, name: string): number {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer.`)
+  return parsed
+}
+
+function nonNegativeInteger(value: string, name: string): number {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative integer.`)
+  return parsed
 }
 
 function atifMetrics(metrics: MessageMetrics): Record<string, number> {
@@ -198,6 +342,8 @@ Options:
   --stdin                        Read the instruction from stdin
   --json                         Print only the final JSON result
   --trajectory <path>            Write an ATIF-v1.7 trajectory
+  --timeout-seconds <seconds>    Set one deadline for the complete run
+  --finish-reserve-seconds <n>   Reserve time for final response and shutdown
   -h, --help                     Show this help
   -v, --version                  Show the version
 

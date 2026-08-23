@@ -38,6 +38,7 @@ const string = (description: string): JsonObject => ({ type: 'string', descripti
 const integer = (description: string, minimum = 1, maximum = MAX_RESULTS): JsonObject => ({
   type: 'integer', description, minimum, maximum
 })
+const boolean = (description: string): JsonObject => ({ type: 'boolean', description })
 
 type ToolOptions = {
   sessionId?: string
@@ -47,6 +48,7 @@ type ToolOptions = {
   updatePlan?: (value: { plan: unknown; objective?: unknown; explanation?: unknown; next_action?: unknown }) => unknown | Promise<unknown>
   readPaths?: () => readonly string[]
   reviewCommand?: (command: string, risk: string, signal?: AbortSignal) => Promise<{ decision: 'allow' | 'deny'; reason: string }>
+  processes?: ManagedProcessRegistry
 }
 
 type Edit = { old_text: string; new_text: string }
@@ -207,8 +209,12 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
       }
     },
     {
-      name: 'Bash', description: 'Run a shell command in the workspace. Uses PowerShell on Windows and sh elsewhere.',
-      parameters: object({ command: string('Shell command.'), timeout_seconds: integer('Timeout in seconds.', 1, 600) }, ['command']),
+      name: 'Bash', description: 'Run a shell command in the workspace. Uses PowerShell on Windows and sh elsewhere. For a long-lived service, set background=true instead of appending a shell background operator; Friday owns its lifetime and logs.',
+      parameters: object({
+        command: string('Shell command.'),
+        timeout_seconds: integer('Foreground timeout in seconds.', 1, 600),
+        background: boolean('Start a managed background service and return immediately.')
+      }, ['command']),
       async preflight(call, signal) {
         await options.beforeMutation?.()
         return preflightShell(call, {
@@ -222,6 +228,10 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
       execute(args, signal, onProgress) {
         if (typeof args.command !== 'string') throw new Error('command must be a string')
         const spillPath = join(toolSpillDir(root, options.sessionId || 'default'), `${getCurrentToolCall()?.id || randomUUID()}.log`)
+        if (args.background === true) {
+          if (!options.processes) throw new Error('Managed background processes require an active Friday session.')
+          return options.processes.start(root, args.command, spillPath, signal)
+        }
         return runShell(root, args.command, capped(args.timeout_seconds, 60, 600), signal, onProgress, spillPath)
       }
     },
@@ -312,12 +322,7 @@ export async function runShell(
   spillPath?: string
 ): Promise<JsonObject> {
   signal?.throwIfAborted()
-  const command = process.platform === 'win32'
-    ? `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;${source}`
-    : source
-  const [file, shellArgs] = process.platform === 'win32'
-    ? ['powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command]]
-    : ['/bin/bash', ['-lc', command]]
+  const [file, shellArgs] = shellInvocation(source)
   const child = spawn(file, shellArgs, {
     cwd: workspace,
     detached: process.platform !== 'win32',
@@ -410,6 +415,95 @@ export async function runShell(
     exit_code: timedOut ? null : outcome.code ?? 1,
     ...(timedOut ? { timed_out: true } : {})
   }
+}
+
+/** Session-owned long-lived commands with bounded logs and deterministic cleanup. */
+export class ManagedProcessRegistry {
+  private readonly running = new Map<ChildProcess, { finish: () => Promise<void> }>()
+
+  async start(workspace: string, source: string, logPath: string, signal?: AbortSignal): Promise<JsonObject> {
+    signal?.throwIfAborted()
+    mkdirSync(dirname(logPath), { recursive: true })
+    const log = createWriteStream(logPath)
+    log.on('error', () => {})
+    await new Promise<void>((resolveOpen, rejectOpen) => {
+      log.once('open', () => resolveOpen())
+      log.once('error', rejectOpen)
+    })
+    let written = 0
+    const drain = (chunk: Buffer) => {
+      const room = SPILL_CAP_BYTES - written
+      if (room <= 0) return
+      const kept = chunk.subarray(0, room)
+      written += kept.length
+      log.write(kept)
+    }
+    const [file, args] = shellInvocation(source)
+    const child = spawn(file, args, {
+      cwd: workspace,
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    child.stdout!.on('data', drain)
+    child.stderr!.on('data', drain)
+    let finished: Promise<void> | undefined
+    const finish = () => finished ??= new Promise<void>(resolveLog => {
+      let done = false
+      const settle = () => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolveLog()
+      }
+      const timer = setTimeout(settle, 1_000)
+      timer.unref?.()
+      log.once('close', settle)
+      log.once('error', settle)
+      log.end(settle)
+    })
+    this.running.set(child, { finish })
+    child.once('close', () => {
+      this.running.delete(child)
+      void finish()
+    })
+    try {
+      await new Promise<void>((resolveSpawn, rejectSpawn) => {
+        child.once('spawn', resolveSpawn)
+        child.once('error', rejectSpawn)
+      })
+    } catch (error) {
+      this.running.delete(child)
+      await finish()
+      throw error
+    }
+    if (signal?.aborted) {
+      await terminateProcessTree(child)
+      signal.throwIfAborted()
+    }
+    child.unref()
+    return { background: true, pid: child.pid ?? null, log_path: logPath, log_limit_bytes: SPILL_CAP_BYTES }
+  }
+
+  async close(): Promise<void> {
+    const entries = [...this.running]
+    await Promise.all(entries.map(async ([child, entry]) => {
+      await terminateProcessTree(child)
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+      await entry.finish()
+      this.running.delete(child)
+    }))
+  }
+}
+
+function shellInvocation(source: string): [string, string[]] {
+  const command = process.platform === 'win32'
+    ? `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;${source}`
+    : source
+  return process.platform === 'win32'
+    ? ['powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command]]
+    : ['/bin/bash', ['-lc', command]]
 }
 
 type StreamState = { head: string; tail: string; total: number }

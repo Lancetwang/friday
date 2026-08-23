@@ -6,7 +6,7 @@ import { Agent } from './agent.js'
 import { AnthropicModel } from './anthropic.js'
 import { ModelRequestError } from './errors.js'
 import { OpenAIModel } from './openai.js'
-import { ResponsesModel } from './responses.js'
+import { ResponsesModel, responsesMessage } from './responses.js'
 import { ToolExecutor } from './tools.js'
 import type { JsonObject, Tool, ToolCall } from './types.js'
 
@@ -23,10 +23,12 @@ test('streams through a model-tool-model turn', async () => {
       if (turn++ === 0) {
         sse(response, { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'add', arguments: '{"a":2,' } }] } }] })
         sse(response, { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"b":3}' } }] } }] })
+        sse(response, { choices: [{ delta: {}, finish_reason: 'tool_calls' }] })
         sse(response, { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } })
       } else {
         sse(response, { choices: [{ delta: { content: 'The answer ' } }] })
         sse(response, { choices: [{ delta: { content: 'is 5.' } }] })
+        sse(response, { choices: [{ delta: {}, finish_reason: 'stop' }] })
         sse(response, { choices: [], usage: { prompt_tokens: 15, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 6 } } })
       }
       response.end('data: [DONE]\n\n')
@@ -58,9 +60,10 @@ test('streams through a model-tool-model turn', async () => {
       tools: [add]
     })
 
-    const answer = await agent.chat('What is 2 + 3?', { onDelta: chunk => chunks.push(chunk) })
+    const run = await agent.run('What is 2 + 3?', { onDelta: chunk => chunks.push(chunk) })
 
-    assert.equal(answer, 'The answer is 5.')
+    assert.equal(run.text, 'The answer is 5.')
+    assert.deepEqual(run.termination, { reason: 'stop' })
     assert.deepEqual(chunks, ['The answer ', 'is 5.'])
     assert.deepEqual(agent.context.messages.map(message => message.role), ['system', 'user', 'assistant', 'tool', 'assistant'])
     assert.equal(agent.context.messages[3]?.content, '5')
@@ -266,7 +269,7 @@ test('Anthropic Messages preserves signed thinking and tool turns', async () => 
       sse(response, { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'signed' } })
       sse(response, { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'next-call', name: 'Read', input: {} } })
       sse(response, { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":"README.md"}' } })
-      sse(response, { type: 'message_delta', usage: { output_tokens: 5 } })
+      sse(response, { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } })
       sse(response, { type: 'message_stop' })
       response.end()
     })
@@ -305,6 +308,7 @@ test('Anthropic Messages preserves signed thinking and tool turns', async () => 
       function: { name: 'Read', arguments: '{"path":"README.md"}' }
     }])
     assert.deepEqual(result.usage, { input_tokens: 12, output_tokens: 5 })
+    assert.deepEqual(result.termination, { reason: 'tool_calls', raw: 'tool_use' })
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   }
@@ -420,6 +424,7 @@ test('OpenAI Responses replays typed items and normalizes completed output', asy
     assert.deepEqual(result.reasoning_content, [{ type: 'reasoning', id: 'reasoning-2', summary: [] }])
     assert.equal(result.tool_calls?.[0]?.id, 'response-call')
     assert.deepEqual(result.usage, { input_tokens: 20, output_tokens: 7 })
+    assert.deepEqual(result.termination, { reason: 'tool_calls' })
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   }
@@ -461,6 +466,80 @@ test('provider HTTP failures expose structured status and detail to callers', as
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   }
+})
+
+test('an empty length-limited response recovers instead of reporting false success', async () => {
+  let calls = 0
+  const agent = new Agent({
+    model: {
+      async complete() {
+        calls += 1
+        return calls === 1
+          ? { role: 'assistant', content: '', reasoning_content: 'spent', termination: { reason: 'length' } }
+          : { role: 'assistant', content: 'A concise result.', termination: { reason: 'stop' } }
+      }
+    }
+  })
+
+  const result = await agent.run('finish the task')
+
+  assert.equal(calls, 2)
+  assert.equal(result.text, 'A concise result.')
+  assert.deepEqual(result.termination, { reason: 'stop' })
+  assert.equal(agent.context.events.some(event => event.type === 'loop.warning' && event.data.reason === 'empty_model_response'), true)
+  assert.match(String(agent.context.messages.at(-2)?.content), /exhausted its output budget/)
+})
+
+test('Responses incomplete output preserves the provider length termination', () => {
+  const message = responsesMessage({
+    status: 'incomplete',
+    incomplete_details: { reason: 'max_output_tokens' },
+    output: [{ type: 'reasoning', id: 'reasoning-only', summary: [] }]
+  })
+  assert.equal(message.content, '')
+  assert.deepEqual(message.termination, { reason: 'length', raw: 'max_output_tokens' })
+})
+
+test('repeated empty model responses fail clearly rather than ending successfully', async () => {
+  const agent = new Agent({
+    model: { complete: async () => ({ role: 'assistant', content: '', termination: { reason: 'unknown' } }) },
+    maxEmptyRetries: 1
+  })
+
+  await assert.rejects(agent.run('finish the task'), /empty response 2 times/)
+})
+
+test('a tool-only signal can stop preflight while preserving the final model call', async () => {
+  let calls = 0
+  let executions = 0
+  const tools = new AbortController()
+  const agent = new Agent({
+    model: {
+      async complete() {
+        calls += 1
+        return calls === 1
+          ? { role: 'assistant', content: '', tool_calls: [call('slow', 1)], termination: { reason: 'tool_calls' } }
+          : { role: 'assistant', content: 'Stopped work and summarized.', termination: { reason: 'stop' } }
+      }
+    },
+    tools: [{
+      name: 'slow', description: 'slow', parameters: { type: 'object' },
+      preflight: (_call, signal) => new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      }),
+      execute: () => {
+        executions += 1
+        return new Promise(() => {})
+      }
+    }]
+  })
+  setTimeout(() => tools.abort(new Error('work budget ended')), 25)
+
+  const result = await agent.run('work', { toolSignal: tools.signal })
+
+  assert.equal(calls, 2)
+  assert.equal(executions, 0)
+  assert.equal(result.text, 'Stopped work and summarized.')
 })
 
 function call(name: string, index: number): ToolCall {

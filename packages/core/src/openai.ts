@@ -1,5 +1,6 @@
 import { throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
+import { normalizeTermination } from './termination.js'
 import type { AssistantMessage, ChatModel, JsonObject, ModelRequest, ToolCall } from './types.js'
 
 export type OpenAIModelOptions = {
@@ -54,11 +55,14 @@ async function readStream(body: ReadableStream<Uint8Array>, request: ModelReques
   let content = ''
   let reasoning = ''
   let usage: JsonObject | undefined
+  let finishReason: unknown
   const calls = new Map<number, ToolCall>()
   const state: MergeState = { lastSlot: -1 }
 
   for await (const chunk of readSseJson(body)) {
     if (isObject(chunk.usage)) usage = chunk.usage
+    const choice = firstChoice(chunk)
+    if (choice?.finish_reason != null) finishReason = choice.finish_reason
     const delta = firstDelta(chunk)
     if (!delta) continue
     if (typeof delta.content === 'string') {
@@ -71,19 +75,25 @@ async function readStream(body: ReadableStream<Uint8Array>, request: ModelReques
     }
     mergeToolCalls(calls, delta.tool_calls, state)
   }
+  const modelTermination = normalizeTermination(finishReason)
   return {
     role: 'assistant',
     content,
     ...(reasoning ? { reasoning_content: reasoning } : {}),
     ...(calls.size ? { tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call) } : {}),
-    ...(usage ? { usage } : {})
+    ...(usage ? { usage } : {}),
+    ...(modelTermination ? { termination: modelTermination } : {})
   }
 }
 
-function firstDelta(chunk: JsonObject): JsonObject | undefined {
+function firstChoice(chunk: JsonObject): JsonObject | undefined {
   const choices = chunk.choices
-  if (!Array.isArray(choices) || !isObject(choices[0])) return undefined
-  return isObject(choices[0].delta) ? choices[0].delta : undefined
+  return Array.isArray(choices) && isObject(choices[0]) ? choices[0] : undefined
+}
+
+function firstDelta(chunk: JsonObject): JsonObject | undefined {
+  const choice = firstChoice(chunk)
+  return choice && isObject(choice.delta) ? choice.delta : undefined
 }
 
 type MergeState = { lastSlot: number }

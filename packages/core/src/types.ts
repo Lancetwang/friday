@@ -12,12 +12,28 @@ export type ToolCall = {
   function: { name: string; arguments: string }
 }
 
+export type ModelFinishReason =
+  | 'stop'
+  | 'tool_calls'
+  | 'length'
+  | 'content_filter'
+  | 'incomplete'
+  | 'unknown'
+
+/** Provider-neutral reason the model stopped producing this message. */
+export type ModelTermination = {
+  reason: ModelFinishReason
+  /** Original provider value, retained for diagnostics without leaking it into control flow. */
+  raw?: string
+}
+
 export type AssistantMessage = Message & {
   role: 'assistant'
   content: string
   reasoning_content?: unknown
   tool_calls?: ToolCall[]
   usage?: JsonObject
+  termination?: ModelTermination
 }
 
 export type ModelRequest = {

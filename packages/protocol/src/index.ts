@@ -13,6 +13,11 @@ export type MessageMetrics = {
   window_tokens?: number | null
 }
 
+export type ModelTermination = {
+  reason: 'content_filter' | 'incomplete' | 'length' | 'stop' | 'tool_calls' | 'unknown'
+  raw?: string
+}
+
 export type ProgressStep = {
   status: 'blocked' | 'completed' | 'in_progress' | 'pending'
   step: string
@@ -30,6 +35,7 @@ export type ProgressState = {
 
 export type ApprovalInfo = {
   approval_required?: boolean
+  background?: boolean
   command?: string
   id?: string
   message?: string
@@ -255,8 +261,8 @@ export type GatewayEvent =
   | { type: 'gateway.ready'; payload: { cwd: string } }
   | { type: 'session.info'; payload: SessionInfo }
   | { type: 'message.start' | 'message.delta' | 'message.steered'; payload: { text: string } & SessionScoped }
-  | { type: 'message.complete' | 'message.suspended'; payload: { artifacts?: ArtifactInfo[]; fork_points?: Array<{ kind: 'assistant'; message_index: number }>; metrics?: MessageMetrics; progress?: ProgressState; status?: string; text: string; verification?: VerificationResult } & SessionScoped }
-  | { type: 'message.cancelled'; payload: SessionScoped }
+  | { type: 'message.complete' | 'message.suspended'; payload: { artifacts?: ArtifactInfo[]; fork_points?: Array<{ kind: 'assistant'; message_index: number }>; metrics?: MessageMetrics; progress?: ProgressState; status?: string; termination?: ModelTermination; text: string; verification?: VerificationResult } & SessionScoped }
+  | { type: 'message.cancelled'; payload: { stop_reason?: string } & SessionScoped }
   | { type: 'session.updated'; payload: { running?: boolean } & SessionScoped }
   | { type: 'session.titled'; payload: { title?: string } & SessionScoped }
   | { type: 'permission.updated'; payload: { permission_mode: PermissionMode } }

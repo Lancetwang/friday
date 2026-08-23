@@ -16,6 +16,7 @@ export type Approval = {
   command: string
   reason: string
   timeout_seconds: number
+  background?: boolean
   session_id: string
   tool_call_id?: string
 }
@@ -70,6 +71,7 @@ export async function preflightShell(call: ToolCall, options: PermissionOptions,
     command,
     reason,
     timeout_seconds: positiveInteger(args.timeout_seconds, 60, 600),
+    ...(args.background === true ? { background: true } : {}),
     session_id: options.sessionId,
     tool_call_id: call.id
   }
@@ -287,6 +289,7 @@ function isApproval(value: unknown): value is Approval {
   const item = value as Partial<Approval>
   return typeof item.id === 'string' && typeof item.command === 'string' && typeof item.session_id === 'string'
     && (item.tool_call_id === undefined || typeof item.tool_call_id === 'string')
+    && (item.background === undefined || typeof item.background === 'boolean')
     && typeof item.timeout_seconds === 'number' && typeof item.reason === 'string'
 }
 

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 
-import type { JsonObject, Tool, ToolCall, ToolSchema } from './types.js'
+import type { JsonObject, Tool, ToolCall, ToolPreflight, ToolSchema } from './types.js'
 
 export type ToolResult = {
   toolCallId: string
@@ -55,7 +55,15 @@ export class ToolExecutor {
 
   async preflightAll(calls: readonly ToolCall[], signal?: AbortSignal): Promise<ToolBatchPreflight | undefined> {
     for (const call of calls) {
-      const decision = await this.tools.get(call.function.name)?.preflight?.(call, signal)
+      if (signal?.aborted) return cancelledPreflight(calls, signal.reason)
+      let decision: ToolPreflight | undefined
+      try {
+        decision = await this.tools.get(call.function.name)?.preflight?.(call, signal)
+      } catch (error) {
+        if (signal?.aborted) return cancelledPreflight(calls, signal.reason ?? error)
+        throw error
+      }
+      if (signal?.aborted) return cancelledPreflight(calls, signal.reason)
       if (!decision || decision.action === 'allow') continue
       return {
         paused: decision.action === 'pause',
@@ -122,13 +130,27 @@ export class ToolExecutor {
   }
 }
 
+function cancelledPreflight(calls: readonly ToolCall[], reason: unknown): ToolBatchPreflight {
+  const message = errorText(reason instanceof Error ? reason : new Error('Tool work was cancelled.'))
+  return {
+    paused: false,
+    results: calls.map(call => ({
+      toolCallId: call.id,
+      content: stringify({ cancelled: true, message }),
+      isError: true,
+      elapsedMs: 0
+    }))
+  }
+}
+
 function raceAbort<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return work
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       work.catch(() => {})
-      const error = new Error('Tool execution was cancelled.')
-      error.name = 'AbortError'
+      const reason = signal.reason
+      const error = reason instanceof Error ? reason : new Error('Tool execution was cancelled.')
+      if (!(reason instanceof Error)) error.name = 'AbortError'
       reject(error)
     }
     if (signal.aborted) {

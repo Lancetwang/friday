@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
-  Agent, RunContext, type AgentEvent, type Message, type Tool, type ToolCall, type Usage
+  Agent, RunContext, type AgentEvent, type Message, type ModelTermination, type Tool, type ToolCall, type Usage
 } from 'friday-agent-core'
 import type { HistoryItem, ResumeChoice } from 'friday-agent-protocol'
 
@@ -49,7 +49,7 @@ import {
   type RegisteredCompactor,
   type RegisteredMemoryProvider
 } from './plugins.js'
-import { builtinPlugins, runShell, toolSpillDir } from './tools.js'
+import { builtinPlugins, ManagedProcessRegistry, runShell, toolSpillDir } from './tools.js'
 import { writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
 import { modelFor } from './model.js'
@@ -68,6 +68,7 @@ import { verifyGoal, type VerificationResult } from './verification.js'
 import { deleteSessionTraces, writeTrace } from './trace.js'
 import { attachmentPrompt, type LocalAttachment } from './attachments.js'
 import { localTimestamp, zonedTimestamp } from './time.js'
+import { budgetIsFinishing, RunBudget, type RunBudgetSpec } from './budget.js'
 
 export type TurnMetrics = {
   elapsed_ms: number
@@ -89,6 +90,8 @@ export type TurnResult = {
   metrics: TurnMetrics
   status: 'done' | 'paused'
   artifacts?: ArtifactInfo[]
+  stop_reason?: string
+  termination?: ModelTermination
 }
 
 export type ApprovalResult = {
@@ -113,6 +116,7 @@ type SessionRunOptions = {
   deferCompletion?: boolean
   images?: string[]
   attachments?: LocalAttachment[]
+  budget?: RunBudgetSpec
 }
 
 type CheckpointSeed = {
@@ -151,6 +155,8 @@ export class FridaySession {
   private plugins: LoadedPlugin[]
   private memoryProvider: RegisteredMemoryProvider | undefined
   private compactor: RegisteredCompactor | undefined
+  private activeBudget: RunBudget | undefined
+  private readonly processes = new ManagedProcessRegistry()
 
   private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext, external: LoadedPlugin[]) {
     this.workspace = resolveWorkspace(workspace)
@@ -186,7 +192,8 @@ export class FridaySession {
         beforeMutation: () => this.ensureCheckpoint(),
         updatePlan: value => updatePlan(this.context, value),
         readPaths: () => [toolSpillDir(this.workspace, this.sessionId), ...this.readAllow],
-        reviewCommand: (command, risk, signal) => this.reviewShell(command, risk, signal)
+        reviewCommand: (command, risk, signal) => this.reviewShell(command, risk, signal),
+        processes: this.processes
       }),
       ...external
     ], disabledPlugins(this.workspace))
@@ -319,7 +326,8 @@ export class FridaySession {
           })
           if (!options.continueProgress) session.ensureAgent().resetLoopGuard()
           if (!options.internal) session.turns += 1
-        }
+        },
+        ...(options.budget ? { budget: options.budget } : {})
       }, onDelta)
     } catch (error) {
       throw presentImageInputError(error, images.length > 0)
@@ -329,17 +337,19 @@ export class FridaySession {
   async goal(
     goal: string,
     onDelta?: (text: string) => void,
-    options: { images?: string[]; attachments?: LocalAttachment[] } = {}
+    options: { images?: string[]; attachments?: LocalAttachment[]; budget?: RunBudgetSpec } = {}
   ): Promise<GoalResult> {
     const objective = goal.trim()
     if (!objective) throw new Error('Goal cannot be empty.')
     const turn = await this.chat(objective, onDelta, {
       input: goalAttemptPrompt(objective), mode: 'goal', deferCompletion: true,
       ...(options.images ? { images: options.images } : {}),
-      ...(options.attachments ? { attachments: options.attachments } : {})
+      ...(options.attachments ? { attachments: options.attachments } : {}),
+      ...(options.budget ? { budget: options.budget } : {})
     })
     if (turn.status === 'paused') return { ...turn, verifications: [] }
-    return this.verifyGoalLoop(objective, turn, 1, onDelta)
+    if (turn.stop_reason === 'deadline') return { ...turn, verifications: [], stop_reason: 'deadline' }
+    return this.verifyGoalLoop(objective, turn, 1, onDelta, options.budget)
   }
 
   cancel(): boolean {
@@ -398,6 +408,11 @@ export class FridaySession {
 
   get running(): boolean {
     return !!this.abort
+  }
+
+  async close(): Promise<void> {
+    if (this.abort) this.cancel()
+    await this.processes.close()
   }
 
   transcript(): Message[] {
@@ -542,7 +557,9 @@ export class FridaySession {
         tool_call_id: approval!.tool_call_id || '', name: 'Bash', content
       })
       const spillPath = join(toolSpillDir(this.workspace, this.sessionId), `${approval.tool_call_id || approval.id}.log`)
-      result = await runShell(this.workspace, approval.command, approval.timeout_seconds, this.abort.signal, progress, spillPath)
+      result = approval.background
+        ? await this.processes.start(this.workspace, approval.command, spillPath, this.abort.signal)
+        : await runShell(this.workspace, approval.command, approval.timeout_seconds, this.abort.signal, progress, spillPath)
       progress(JSON.stringify(result))
     } catch (error) {
       if (approval) await this.cancelApprovalDecision(approval, checkpointId)
@@ -706,6 +723,17 @@ export class FridaySession {
       tools: this.tools,
       beforeStep: (_context, _step, signal) => {
         this.drainSteers()
+        if (this.activeBudget?.finalizing) {
+          if (this.activeBudget.enterFinalization()) {
+            this.context.emit('loop.guard', 'runtime', { reason: 'run_budget' })
+            this.context.addMessage({
+              role: 'system',
+              content: 'The run has entered its finishing reserve. Do not call more tools. Return the best supported result now, clearly stating anything unfinished.',
+              agent_internal: true
+            })
+          }
+          return { tools: false as const }
+        }
         return this.compactBeforeStep(signal)
       }
     }, this.context)
@@ -733,10 +761,11 @@ export class FridaySession {
     trace: string,
     before: Usage,
     started: number,
-    pendingMetrics: TurnMetrics | undefined
+    pendingMetrics: TurnMetrics | undefined,
+    stopReason: 'cancelled' | 'deadline'
   ): Promise<void> {
     try {
-      repairDanglingToolCalls(this.context.messages)
+      repairDanglingToolCalls(this.context.messages, stopReason)
       this.removeRuntimeMessages()
       const current = this.measureTurn(before, started)
       const metrics = pendingMetrics ? addMetrics(pendingMetrics, current) : current
@@ -746,7 +775,7 @@ export class FridaySession {
       if (this.activeCheckpoint) await finishCheckpoint(this.workspace, this.activeCheckpoint, false).catch(() => {})
       this.attachTurnMetadata(metrics)
       await this.save(user, '', metrics)
-      await this.recordTrace(trace, user, '', 'cancelled', metrics)
+      await this.recordTrace(trace, user, '', stopReason, metrics)
     } catch {
       // Salvage is best-effort; it must never mask the cancellation itself.
     }
@@ -766,6 +795,7 @@ export class FridaySession {
       deferDone: boolean
       saveOnError?: boolean
       prepare(session: FridaySession, snapshot: CheckpointSeed): Promise<void> | void
+      budget?: RunBudgetSpec
     },
     onDelta?: (text: string) => void
   ): Promise<TurnResult> {
@@ -783,17 +813,25 @@ export class FridaySession {
     const readAllow = new Set(this.readAllow)
     const started = performance.now()
     this.abort = new AbortController()
+    const budget = options.budget ? new RunBudget(options.budget, this.abort) : undefined
+    this.activeBudget = budget
     try {
       await options.prepare(this, snapshot)
-      const result = await this.ensureAgent().resume({ signal: this.abort.signal, ...(onDelta ? { onDelta } : {}) })
+      const result = await this.ensureAgent().resume({
+        signal: this.abort.signal,
+        ...(budget ? { toolSignal: budget.toolSignal } : {}),
+        ...(onDelta ? { onDelta } : {})
+      })
+      this.abort.signal.throwIfAborted()
       const current = this.measureTurn(before, started)
       const metrics = pendingMetrics ? addMetrics(pendingMetrics, current) : current
+      const stopReason = budget?.finalizing ? 'deadline' : ''
       this.pending = result.status === 'paused' ? await pendingApproval(this.workspace, this.sessionId) : { pending: false }
       this.pendingMetrics = result.status === 'paused' ? metrics : undefined
       if (result.status === 'paused') finishProgress(this.context, 'waiting')
       else {
         this.removeRuntimeMessages()
-        if (!options.deferDone) finishProgress(this.context, 'done')
+        if (!options.deferDone || stopReason) finishProgress(this.context, stopReason ? 'blocked' : 'done')
       }
       const artifacts = this.activeCheckpoint
         ? await checkpointArtifacts(this.workspace, (await finishCheckpoint(this.workspace, this.activeCheckpoint, result.status === 'paused')).changed_paths ?? [])
@@ -801,8 +839,16 @@ export class FridaySession {
       this.attachArtifacts(artifacts)
       this.attachTurnMetadata(metrics)
       await this.save(options.user, result.text, metrics)
-      await this.recordTrace(options.trace, options.user, result.text, result.status, metrics)
-      return { text: result.text, metrics, status: result.status, ...(artifacts.length ? { artifacts } : {}) }
+      await this.recordTrace(options.trace, options.user, result.text, stopReason || result.status, metrics)
+      this.abort.signal.throwIfAborted()
+      return {
+        text: result.text,
+        metrics,
+        status: result.status,
+        ...(result.termination ? { termination: result.termination } : {}),
+        ...(stopReason ? { stop_reason: stopReason } : {}),
+        ...(artifacts.length ? { artifacts } : {})
+      }
     } catch (error) {
       this.steers.length = 0
       if (isCancellation(error)) {
@@ -810,7 +856,9 @@ export class FridaySession {
         // completed tool exchange, repair the tail so the message array
         // stays API-valid, and account for what was actually spent. Only
         // real errors roll the turn back as if it never happened.
-        await this.salvageCancelledTurn(options.user, options.trace, before, started, pendingMetrics)
+        await this.salvageCancelledTurn(
+          options.user, options.trace, before, started, pendingMetrics, cancellationReason(error)
+        )
         throw error
       }
       this.context.messages.splice(0, this.context.messages.length, ...snapshot.messages)
@@ -825,6 +873,8 @@ export class FridaySession {
       if (options.saveOnError) await this.save('', '', emptyMetrics())
       throw error
     } finally {
+      budget?.dispose()
+      this.activeBudget = undefined
       this.abort = undefined
       this.checkpointSeed = undefined
       this.activeCheckpoint = ''
@@ -838,7 +888,8 @@ export class FridaySession {
     goal: string,
     initial: TurnResult,
     firstAttempt: number,
-    onDelta?: (text: string) => void
+    onDelta?: (text: string) => void,
+    budget?: RunBudgetSpec
   ): Promise<GoalResult> {
     let answer = initial.text
     let metrics = initial.metrics
@@ -850,7 +901,12 @@ export class FridaySession {
     try {
       while (attempt <= 6) {
         this.throwIfCancelRequested()
-        let verification = await this.runVerification(goal, attempt)
+        if (budgetIsFinishing(budget)) {
+          const verification = deadlineVerification(attempt)
+          verifications.push(verification)
+          return this.finishGoal(answer, metrics, verification, verifications, 'deadline', artifacts)
+        }
+        let verification = await this.runVerification(goal, attempt, budget)
         metrics = addMetrics(metrics, verification)
         verifications.push(verification)
         if (verification.verdict === 'pass') {
@@ -893,7 +949,8 @@ export class FridaySession {
           mode: 'goal',
           internal: true,
           continueProgress: true,
-          deferCompletion: true
+          deferCompletion: true,
+          ...(budget ? { budget } : {})
         })
         answer = repair.text
         metrics = addMetrics(metrics, repair.metrics)
@@ -906,18 +963,21 @@ export class FridaySession {
       throw new Error('Goal loop ended without a verdict.')
     } catch (error) {
       if (!isCancellation(error)) throw error
-      finishProgress(this.context, 'blocked', { verdict: 'inconclusive', attempt, stop_reason: 'cancelled' })
+      const stopReason = cancellationReason(error)
+      finishProgress(this.context, 'blocked', { verdict: 'inconclusive', attempt, stop_reason: stopReason })
       this.attachArtifacts(artifacts)
       await this.save('', answer, metrics)
-      await this.recordTrace('goal-cancelled', goal, answer, 'cancelled', metrics)
+      await this.recordTrace(`goal-${stopReason}`, goal, answer, stopReason, metrics)
       throw error
     }
   }
 
-  private async runVerification(goal: string, attempt: number): Promise<AttemptVerification> {
+  private async runVerification(goal: string, attempt: number, budget?: RunBudgetSpec): Promise<AttemptVerification> {
     this.throwIfCancelRequested()
     this.context.emit('verification.start', 'verification', { attempt })
     this.abort = new AbortController()
+    const activeBudget = budget ? new RunBudget(budget, this.abort) : undefined
+    this.activeBudget = activeBudget
     try {
       const history = this.transcript().flatMap(message => {
         if (message.role !== 'user' || message.friday_internal) return []
@@ -931,7 +991,8 @@ export class FridaySession {
         goal,
         events: this.lastEvents,
         history,
-        signal: this.abort.signal
+        signal: this.abort.signal,
+        ...(activeBudget ? { toolSignal: activeBudget.toolSignal } : {})
       })
       const verification = { ...result, attempt }
       recordVerificationProgress(this.context, verification)
@@ -945,6 +1006,8 @@ export class FridaySession {
       })
       return verification
     } finally {
+      activeBudget?.dispose()
+      this.activeBudget = undefined
       this.abort = undefined
     }
   }
@@ -1714,7 +1777,7 @@ function parseJson(value: unknown): unknown {
  * Close each unanswered call with an explicit cancellation result so the kept
  * partial turn is a valid, honest conversation.
  */
-function repairDanglingToolCalls(messages: Message[]): void {
+function repairDanglingToolCalls(messages: Message[], stopReason: 'cancelled' | 'deadline'): void {
   const lastAssistant = messages.findLastIndex(message =>
     message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0)
   if (lastAssistant < 0) return
@@ -1726,13 +1789,41 @@ function repairDanglingToolCalls(messages: Message[]): void {
     messages.push({
       role: 'tool',
       tool_call_id: call.id,
-      content: '{"cancelled":true,"message":"Interrupted by the user before this tool finished."}'
+      content: JSON.stringify({
+        cancelled: true,
+        message: stopReason === 'deadline'
+          ? 'The run deadline was reached before this tool finished.'
+          : 'Interrupted by the user before this tool finished.'
+      })
     })
   }
 }
 
 function isCancellation(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+}
+
+function cancellationReason(error: unknown): 'cancelled' | 'deadline' {
+  return error instanceof Error && error.name === 'TimeoutError' ? 'deadline' : 'cancelled'
+}
+
+function deadlineVerification(attempt: number): AttemptVerification {
+  return {
+    attempt,
+    verdict: 'inconclusive',
+    passed: false,
+    blocked: false,
+    evidence: [],
+    feedback: 'The run entered its finishing reserve before independent verification could start.',
+    next_check: '',
+    required: true,
+    stop_reason: 'deadline',
+    requests: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: null,
+    elapsed_ms: 0
+  }
 }
 
 function permissionReview(content: string): { decision: 'allow' | 'deny'; reason: string } {

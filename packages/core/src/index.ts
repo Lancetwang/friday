@@ -1,4 +1,4 @@
-export { Agent, type AgentOptions, type AgentRunResult } from './agent.js'
+export { Agent, type AgentOptions, type AgentRunOptions, type AgentRunResult } from './agent.js'
 export { AnthropicModel, anthropicMessages, type AnthropicModelOptions } from './anthropic.js'
 export { RunContext, type Usage } from './context.js'
 export { ModelRequestError } from './errors.js'
@@ -11,7 +11,9 @@ export type {
   ChatModel,
   JsonObject,
   Message,
+  ModelFinishReason,
   ModelRequest,
+  ModelTermination,
   Tool,
   ToolCall,
   ToolPreflight,

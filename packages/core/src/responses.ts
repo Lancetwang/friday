@@ -1,5 +1,6 @@
 import { throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
+import { normalizeTermination, termination } from './termination.js'
 import type { AssistantMessage, ChatModel, JsonObject, Message, ModelRequest, ToolCall, ToolSchema } from './types.js'
 
 export type ResponsesModelOptions = {
@@ -41,9 +42,11 @@ export class ResponsesModel implements ChatModel {
         request.onDelta?.(String(event.delta ?? ''))
       } else if (type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') {
         request.onReasoningDelta?.(String(event.delta ?? ''))
-      } else if (type === 'response.completed' && isObject(event.response)) completed = event.response
+      } else if ((type === 'response.completed' || type === 'response.incomplete') && isObject(event.response)) {
+        completed = event.response
+      }
     }
-    if (!completed) throw new Error('Responses stream ended without a completed response.')
+    if (!completed) throw new Error('Responses stream ended without a terminal response.')
     return responsesMessage(completed)
   }
 }
@@ -98,11 +101,18 @@ export function responsesMessage(response: JsonObject): AssistantMessage {
       }
     }
   }
+  const status = typeof response.status === 'string' ? response.status : undefined
+  const incompleteReason = isObject(response.incomplete_details) ? response.incomplete_details.reason : undefined
+  const terminalValue = incompleteReason ?? status
+  const modelTermination = incompleteReason == null && (!status || status === 'completed')
+    ? termination(calls.length ? 'tool_calls' : 'stop', status)
+    : normalizeTermination(terminalValue) ?? termination('incomplete', terminalValue == null ? undefined : String(terminalValue))
   return {
     role: 'assistant', content,
     ...(reasoning.length ? { reasoning_content: reasoning } : {}),
     ...(calls.length ? { tool_calls: calls } : {}),
-    ...(isObject(response.usage) ? { usage: response.usage } : {})
+    ...(isObject(response.usage) ? { usage: response.usage } : {}),
+    termination: modelTermination
   }
 }
 

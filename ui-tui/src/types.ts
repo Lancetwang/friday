@@ -3,6 +3,7 @@ export type {
   ContextCompaction,
   GatewayEvent,
   MessageMetrics,
+  ModelTermination,
   ProgressState,
   SessionInfo,
   VerificationResult

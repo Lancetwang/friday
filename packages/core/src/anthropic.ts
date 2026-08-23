@@ -1,5 +1,6 @@
 import { throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
+import { normalizeTermination } from './termination.js'
 import type { AssistantMessage, ChatModel, JsonObject, Message, ModelRequest, ToolCall, ToolSchema } from './types.js'
 
 export type AnthropicModelOptions = {
@@ -100,6 +101,7 @@ async function readAnthropicStream(body: ReadableStream<Uint8Array>, request: Mo
   let content = ''
   let inputTokens: number | undefined
   let outputTokens: number | undefined
+  let stopReason: unknown
   // Cache counts only ever arrive on message_start; keep them verbatim so the
   // usage this returns stays a faithful copy of what Anthropic reported.
   let cacheUsage: JsonObject = {}
@@ -128,8 +130,9 @@ async function readAnthropicStream(body: ReadableStream<Uint8Array>, request: Mo
         block.partial_json = String(block.partial_json ?? '') + String(event.delta.partial_json ?? '')
       }
       blocks.set(event.index, block)
-    } else if (type === 'message_delta' && isObject(event.usage)) {
-      outputTokens = integer(event.usage.output_tokens)
+    } else if (type === 'message_delta') {
+      if (isObject(event.delta) && event.delta.stop_reason != null) stopReason = event.delta.stop_reason
+      if (isObject(event.usage)) outputTokens = integer(event.usage.output_tokens)
     }
   }
   const reasoning: JsonObject[] = []
@@ -146,13 +149,15 @@ async function readAnthropicStream(body: ReadableStream<Uint8Array>, request: Mo
       })
     }
   }
+  const modelTermination = normalizeTermination(stopReason)
   return {
     role: 'assistant', content,
     ...(reasoning.length ? { reasoning_content: reasoning } : {}),
     ...(calls.length ? { tool_calls: calls } : {}),
     ...(inputTokens !== undefined || outputTokens !== undefined
       ? { usage: { input_tokens: inputTokens ?? 0, output_tokens: outputTokens ?? 0, ...cacheUsage } }
-      : {})
+      : {}),
+    ...(modelTermination ? { termination: modelTermination } : {})
   }
 }
 

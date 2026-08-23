@@ -32,6 +32,7 @@ export async function verifyGoal(options: {
   events?: readonly AgentEvent[]
   history?: readonly string[]
   signal?: AbortSignal
+  toolSignal?: AbortSignal
 }): Promise<VerificationResult> {
   const started = performance.now()
   const context = new RunContext()
@@ -45,11 +46,24 @@ export async function verifyGoal(options: {
     model: modelFor(options.config, options.thinking, 4_000),
     tools: buildVerifierTools(options.workspace),
     instructions,
-    maxSteps: 40
+    maxSteps: 40,
+    beforeStep: () => {
+      if (!options.toolSignal?.aborted) return
+      if (!context.messages.some(message => message.verifier_finishing)) {
+        context.addMessage({
+          role: 'system',
+          content: 'The verification run has entered its finishing reserve. Do not call more tools. Return the strict verification JSON from the evidence already collected.',
+          agent_internal: true,
+          verifier_finishing: true
+        })
+      }
+      return { tools: false as const }
+    }
   }, context)
   try {
     const result = await agent.run(verificationPrompt(options.goal, options.events ?? [], options.history ?? []), {
-      ...(options.signal ? { signal: options.signal } : {})
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.toolSignal ? { toolSignal: options.toolSignal } : {})
     })
     const parsed = parseVerification(result.text)
     return {

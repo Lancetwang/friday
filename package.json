@@ -1,6 +1,6 @@
 {
   "name": "friday-agent",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Friday, a local-first general-purpose agent.",
   "license": "MIT",
   "repository": {
@@ -30,7 +30,8 @@
     "build": "npm run build:cli",
     "build:runtime": "npm --global=false run build -w friday-agent-core && npm --global=false run build -w friday-agent-harness",
     "build:cli": "npm run build:runtime && npm --global=false run build -w friday-agent-cli && bun scripts/build-cli.mjs",
-    "check": "npm --global=false run build -w friday-agent-core && npm --global=false run check -w friday-agent-harness && npm --global=false run typecheck -w friday-agent-cli",
+    "check": "npm run check:versions && npm --global=false run build -w friday-agent-core && npm --global=false run check -w friday-agent-harness && npm --global=false run typecheck -w friday-agent-cli",
+    "check:versions": "node scripts/check-version-consistency.mjs",
     "gateway": "npm --global=false run gateway -w friday-agent-harness",
     "tui": "npm run build:cli && node dist/friday.js",
     "desktop": "npm run build:runtime && npm run desktop --prefix ui-desktop",
@@ -39,13 +40,13 @@
     "bundle:desktop": "npm run sidecar && npm run bundle --prefix ui-desktop",
     "pack:release": "node -e \"require('node:fs').mkdirSync('artifacts/npm',{recursive:true})\" && npm pack --pack-destination artifacts/npm && npm pack -w friday-agent-core --pack-destination artifacts/npm",
     "prepare": "npm run build:cli",
-    "test": "npm --global=false run test -w friday-agent-core && npm --global=false run test -w friday-agent-harness && npm --global=false run test -w friday-agent-cli"
+    "test": "npm run check:versions && npm --global=false run test -w friday-agent-core && npm --global=false run test -w friday-agent-harness && npm --global=false run test -w friday-agent-cli"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "friday-agent-core": "0.8.5"
+    "friday-agent-core": "0.8.6"
   },
   "devDependencies": {
     "@types/node": "24.13.2",

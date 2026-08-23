@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto'
 
 import { RunContext } from './context.js'
 import { ToolExecutor, toolSchema } from './tools.js'
-import type { AssistantMessage, ChatModel, JsonObject, Tool, ToolCall } from './types.js'
+import type { AssistantMessage, ChatModel, JsonObject, ModelTermination, Tool, ToolCall } from './types.js'
 
 export type AgentOptions = {
   model: ChatModel
   instructions?: string
   tools?: readonly Tool[]
   maxSteps?: number
+  maxEmptyRetries?: number
   beforeStep?(
     context: RunContext,
     step: number,
@@ -16,7 +17,15 @@ export type AgentOptions = {
   ): void | { tools?: boolean } | Promise<void | { tools?: boolean }>
 }
 
-export type AgentRunResult = { status: 'done' | 'paused'; text: string }
+export type AgentRunOptions = {
+  /** Cancels the complete turn, including model calls. */
+  signal?: AbortSignal
+  /** Optionally stops new/active tool work while leaving time for a final model response. */
+  toolSignal?: AbortSignal
+  onDelta?: (text: string) => void
+}
+
+export type AgentRunResult = { status: 'done' | 'paused'; text: string; termination?: ModelTermination }
 
 export class Agent {
   readonly context: RunContext
@@ -34,17 +43,17 @@ export class Agent {
     }
   }
 
-  async run(text: string, options: { signal?: AbortSignal; onDelta?: (text: string) => void } = {}): Promise<AgentRunResult> {
+  async run(text: string, options: AgentRunOptions = {}): Promise<AgentRunResult> {
     this.resetLoopGuard()
     this.context.addMessage({ role: 'user', content: text })
     return this.loop(options)
   }
 
-  async resume(options: { signal?: AbortSignal; onDelta?: (text: string) => void } = {}): Promise<AgentRunResult> {
+  async resume(options: AgentRunOptions = {}): Promise<AgentRunResult> {
     return this.loop(options)
   }
 
-  async chat(text: string, options: { signal?: AbortSignal; onDelta?: (text: string) => void } = {}): Promise<string> {
+  async chat(text: string, options: AgentRunOptions = {}): Promise<string> {
     return (await this.run(text, options)).text
   }
 
@@ -53,9 +62,11 @@ export class Agent {
     this.warned.clear()
   }
 
-  private async loop(options: { signal?: AbortSignal; onDelta?: (text: string) => void }): Promise<AgentRunResult> {
+  private async loop(options: AgentRunOptions): Promise<AgentRunResult> {
     const maxSteps = this.options.maxSteps ?? 100
+    const maxEmptyRetries = this.options.maxEmptyRetries ?? 2
     let toolsEnabled = true
+    let emptyRetries = 0
     for (let step = 1; step <= maxSteps; step += 1) {
       options.signal?.throwIfAborted()
       this.context.step = step
@@ -68,10 +79,35 @@ export class Agent {
       if (!toolsEnabled) delete message.tool_calls
       this.context.addMessage(message)
       const calls = this.executor.parse(message)
-      if (!calls.length || !toolsEnabled) return { status: 'done', text: message.content }
+      if (!calls.length || !toolsEnabled) {
+        if (message.content.trim()) {
+          return {
+            status: 'done',
+            text: message.content,
+            ...(message.termination ? { termination: message.termination } : {})
+          }
+        }
+        emptyRetries += 1
+        this.context.emit('loop.warning', 'runtime', {
+          reason: 'empty_model_response',
+          attempt: emptyRetries,
+          termination: message.termination ?? {}
+        })
+        if (emptyRetries > maxEmptyRetries) {
+          throw new Error(`Model returned an empty response ${emptyRetries} times without an executable tool call.`)
+        }
+        this.context.addMessage({
+          role: 'system',
+          content: emptyRecovery(message.termination, toolsEnabled),
+          agent_internal: true
+        })
+        continue
+      }
+      emptyRetries = 0
 
       this.emitCalls(calls)
-      const preflight = await this.executor.preflightAll(calls, options.signal)
+      const toolSignal = options.toolSignal ?? options.signal
+      const preflight = await this.executor.preflightAll(calls, toolSignal)
       if (preflight) {
         this.appendResults(preflight.results)
         if (preflight.paused) {
@@ -81,7 +117,7 @@ export class Agent {
         if (this.applyNoProgress(calls, preflight.results) === 'halt') toolsEnabled = false
         continue
       }
-      const results = await this.executor.executeAll(calls, options.signal, (call, content) => {
+      const results = await this.executor.executeAll(calls, toolSignal, (call, content) => {
         this.context.emit('tool.progress', 'tool', {
           tool_call_id: call.id,
           name: call.function.name,
@@ -134,7 +170,7 @@ export class Agent {
   }
 
   private async complete(
-    options: { signal?: AbortSignal; onDelta?: (text: string) => void },
+    options: AgentRunOptions,
     toolsEnabled: boolean
   ): Promise<AssistantMessage> {
     const schemas = toolsEnabled ? this.tools.map(toolSchema) : []
@@ -159,10 +195,18 @@ export class Agent {
       has_tool_calls: !!message.tool_calls?.length,
       has_reasoning: !!message.reasoning_content,
       content_length: message.content.length,
+      termination: message.termination ?? {},
       usage: message.usage ?? {}
     })
     return message
   }
+}
+
+function emptyRecovery(value: ModelTermination | undefined, toolsEnabled: boolean): string {
+  const reason = value?.reason === 'length'
+    ? 'The previous response exhausted its output budget during reasoning.'
+    : 'The previous response contained neither a visible answer nor an executable tool call.'
+  return `${reason} Continue now with a concise user-visible answer${toolsEnabled ? ' or one concrete tool action' : ''}; do not return another empty response.`
 }
 
 type ToolResult = Awaited<ReturnType<ToolExecutor['executeAll']>>[number]

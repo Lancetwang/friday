@@ -9,7 +9,7 @@ The built-in capability packs expose this tool surface:
 | `Edit` | Apply exact, non-overlapping text replacements. |
 | `Glob` | Find workspace files and directories by glob. |
 | `Grep` | Search workspace text files with a JavaScript regular expression. |
-| `Bash` | Run PowerShell on Windows or `/bin/bash -lc` elsewhere. |
+| `Bash` | Run PowerShell on Windows or `/bin/bash -lc` elsewhere; optionally own a background service. |
 | `WebSearch` | Search through the configured Tavily/AnySearch fallback chain. |
 | `WebFetch` | Fetch a public URL as bounded Markdown through Jina Reader. |
 | `UpdatePlan` | Update the session's visible objective, steps, and next action. |
@@ -72,6 +72,20 @@ pipes, and uses a bounded grace after termination. Cancellation also races the
 tool promise itself, so a child that ignores the signal cannot keep the Agent
 turn waiting; an unkillable or detached process may remain outside Friday after
 the cancelled call has settled.
+
+For a long-lived server, pass `background: true` to Bash and run the command in
+the foreground (do not append `&`, `Start-Process`, or another daemonizing
+operator). The call returns its PID and `log_path` immediately. Friday drains
+stdout and stderr into that log, caps it at 2 MB, and owns the complete process
+tree until the session is deleted, evicted, reset, or the gateway closes. This
+explicit contract lets a completed turn and CLI exit without inheriting a
+service's pipes. A command that daemonizes itself outside this contract cannot
+be given the same lifecycle guarantee.
+
+When a request has an overall run budget, that remaining work window is also a
+hard cap on Bash: the per-call `timeout_seconds` may be larger, but the shared
+tool signal wins. Friday records the cancellation result and uses the finishing
+reserve for a model response instead of starting another tool.
 
 ## Concurrency
 

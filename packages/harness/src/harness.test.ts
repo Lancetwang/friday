@@ -327,7 +327,7 @@ test('the gateway keeps a running session alive while another session is selecte
     await gateway.handle({ id: 'cancel-background', method: 'chat.cancel', params: { session_id: firstId } })
     assert.deepEqual(responseResult(output, 'cancel-background'), { cancelled: true, session_id: firstId })
     await cancelledRun
-    assert.deepEqual(responseResult(output, 'cancelled-chat'), { cancelled: true, session_id: firstId })
+    assert.deepEqual(responseResult(output, 'cancelled-chat'), { cancelled: true, text: '', stop_reason: 'cancelled', session_id: firstId })
     await gateway.handle({ id: 'still-selected', method: 'session.info' })
     assert.equal((responseResult(output, 'still-selected') as { session_id: unknown }).session_id, secondId)
   } finally {
@@ -456,7 +456,7 @@ test('cancelling returns undelivered steers instead of firing a follow-up turn',
       cancelled: true, dropped_steers: ['change of plans'], session_id: sessionId
     })
     await run
-    assert.deepEqual(responseResult(output, 'chat'), { cancelled: true, session_id: sessionId })
+    assert.deepEqual(responseResult(output, 'chat'), { cancelled: true, text: '', stop_reason: 'cancelled', session_id: sessionId })
 
     // Past the follow-up dispatch window: the dropped steer must not have
     // started a new turn behind the user's back.

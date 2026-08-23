@@ -86,11 +86,19 @@ Loop.
 ## State and concurrency
 
 A live session owns its Agent, RunContext, approval state, progress artifact,
-and cancellation controller. Switching the UI to another conversation does not
-stop it. The gateway serializes navigation and shared settings mutations, while
+cancel/budget controllers, and managed background process registry. Switching
+the UI to another conversation does not stop it. Deleting or evicting the
+session does stop its managed services. The gateway serializes navigation and shared settings mutations, while
 each session rejects a second concurrent turn of its own. Tools explicitly
 marked parallel-safe use promise concurrency. Every other tool - including
 mutations, plan or memory operations, and Bash - is a serial barrier.
+
+Core normalizes provider stop metadata to `stop`, `tool_calls`, `length`,
+`content_filter`, `incomplete`, or `unknown`. A response with neither visible
+text nor an executable tool call is never successful: Core asks the same model
+to recover, then fails clearly after a bounded number of empty responses.
+Harness may add an optional absolute run budget without changing that loop: its
+tool signal ends work before the hard model signal, leaving a finishing reserve.
 
 The session loader still hydrates legacy `artifacts`, `metrics`, and
 `activities` metadata arrays when they are present in an older snapshot.

@@ -2,6 +2,22 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.8.6 (2026-08-23)
+
+### Added
+- Agent Core now exposes provider-neutral model termination metadata across OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages. Empty or reasoning-only terminal responses are recovered instead of being accepted as successful turns.
+- Headless CLI runs can share one absolute deadline across model calls, tools, goal repairs, and verification, with a configurable finishing reserve and incremental atomic ATIF trajectory snapshots.
+- The Bash tool supports explicitly managed background services with bounded session logs and process-tree cleanup when their owning session or gateway closes.
+
+### Changed
+- Run budgets are opt-in. Ordinary TUI, desktop, and unbounded CLI loops are unchanged; bounded runs stop tool work before the hard deadline and use the reserve for a final response. A reserve of zero lets tools use the entire deadline.
+- Headless shutdown now waits for the gateway to release session resources before escalating from graceful stdin closure to process termination.
+
+### Fixed
+- Provider output-length exhaustion, repeated empty responses, and content-free terminal events can no longer produce false-success empty answers.
+- CLI interruption preserves completed tool observations and partial model output, records the cancellation reason, and exits deterministically with `124` for deadlines or `130` for external signals.
+- Release checks now reject version drift across the public packages, private runtime workspaces, desktop metadata, CLI constant, and Harbor adapter.
+
 ## v0.8.5 (2026-08-22)
 
 ### Added

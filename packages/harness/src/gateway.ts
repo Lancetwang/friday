@@ -8,6 +8,7 @@ import type {
   ArtifactInfo,
   GatewayEvent,
   MessageMetrics,
+  ModelTermination,
   VerificationResult
 } from 'friday-agent-protocol'
 
@@ -49,6 +50,7 @@ import { startTraceServer, stopTraceServer, type TraceServer } from './trace.js'
 import { imageUrls, prepareLocalAttachments } from './attachments.js'
 import { resetFriday } from './reset.js'
 import { ImageInputRejectedError } from './model-errors.js'
+import type { RunBudgetSpec } from './budget.js'
 import {
   loadUserProfile,
   loadWebSearchSettings,
@@ -218,8 +220,8 @@ export class Gateway {
       } else if (method === 'approval.pending') this.ok(id, this.session.approval())
       else if (method === 'session.reset') {
         const result = await this.runGlobal(async () => {
+          await this.releaseSessions()
           const removed = await resetFriday(this.workspace, params.global === true)
-          this.releaseSessions()
           this.session = await this.loadSession()
           await recordProject(this.workspace, true)
           return { removed, info: this.sessionInfo(), history: [] }
@@ -289,6 +291,7 @@ export class Gateway {
         const selected = await prepareLocalAttachments(params.attachments)
         const images = imageUrls([...imageUrls(params.images), ...selected.images.map(image => image.data_url)])
         const attachments = selected.attachments
+        const budget = runBudget(params.run)
         const run = this.runSession(session, `/goal ${text}`, async () => {
           this.event('message.start', { text: `/goal ${text}`, session_id: session.sessionId })
           this.event('session.updated', { running: true, session_id: session.sessionId })
@@ -296,7 +299,7 @@ export class Gateway {
             const result = await session.goal(
               text,
               chunk => this.event('message.delta', { text: chunk, session_id: session.sessionId }),
-              { images, attachments }
+              { images, attachments, ...(budget ? { budget } : {}) }
             )
             this.emitTurn(session, result)
             this.titleSession(session)
@@ -315,6 +318,7 @@ export class Gateway {
           text: result.text,
           verification: result.verification,
           stop_reason: result.stop_reason,
+          ...(result.termination ? { termination: result.termination } : {}),
           session_id: session.sessionId
         })
       } else if (method === 'thinking.set') {
@@ -382,6 +386,7 @@ export class Gateway {
         const selected = await prepareLocalAttachments(params.attachments)
         const images = imageUrls([...imageUrls(params.images), ...selected.images.map(image => image.data_url)])
         const attachments = selected.attachments
+        const budget = runBudget(params.run)
         const run = this.runSession(session, text, async () => {
           this.event('message.start', { text, session_id: session.sessionId })
           this.event('session.updated', { running: true, session_id: session.sessionId })
@@ -389,7 +394,7 @@ export class Gateway {
             const result = await session.chat(
               text,
               chunk => this.event('message.delta', { text: chunk, session_id: session.sessionId }),
-              { images, attachments }
+              { images, attachments, ...(budget ? { budget } : {}) }
             )
             this.emitTurn(session, result)
             this.titleSession(session)
@@ -404,7 +409,12 @@ export class Gateway {
         })
         requestSession = session
         const result = await run
-        this.ok(id, { text: result.text, session_id: session.sessionId })
+        this.ok(id, {
+          text: result.text,
+          ...(result.stop_reason ? { stop_reason: result.stop_reason } : {}),
+          ...(result.termination ? { termination: result.termination } : {}),
+          session_id: session.sessionId
+        })
       } else if (method === 'chat.steer') {
         const text = typeof params.text === 'string' ? params.text.trim() : ''
         if (!text) throw new Error('Steering message cannot be empty.')
@@ -452,7 +462,7 @@ export class Gateway {
       if (requestSession && isAbort(error) && (method === 'chat.send' || method === 'goal.run')) {
         const sessionId = requestSession.sessionId
         if (!requestFinalized) this.finishTurnError(sessionId, error)
-        this.ok(id, { cancelled: true, session_id: sessionId })
+        this.ok(id, { cancelled: true, text: '', stop_reason: abortReason(error), session_id: sessionId })
         return
       }
       if (!requestFinalized && requestSession && (method === 'chat.send' || method === 'goal.run' || method.startsWith('approval.'))) {
@@ -486,7 +496,7 @@ export class Gateway {
       ...(this.globalRun ? [this.globalRun] : []),
       ...(this.navigationRun ? [this.navigationRun] : [])
     ])
-    this.releaseSessions()
+    await this.releaseSessions()
   }
 
   private event<Type extends GatewayEvent['type']>(
@@ -501,6 +511,7 @@ export class Gateway {
     metrics: MessageMetrics
     status: 'done' | 'paused'
     stop_reason?: string
+    termination?: ModelTermination
     verification?: VerificationResult
     artifacts?: ArtifactInfo[]
   }): void {
@@ -521,6 +532,7 @@ export class Gateway {
         metrics: result.metrics,
         progress: session.progress(),
         status: result.stop_reason || 'done',
+        ...(result.termination ? { termination: result.termination } : {}),
         fork_points: sessionHistory(session).flatMap(item =>
           item.kind === 'assistant' && typeof item.message_index === 'number'
             ? [{ kind: 'assistant', message_index: item.message_index }]
@@ -664,10 +676,12 @@ export class Gateway {
       if (sessionId === protectedId || sessionId === this.session?.sessionId || this.activeRuns.has(sessionId)) continue
       delete session.onEvent
       this.sessions.delete(sessionId)
+      void session.close()
     }
   }
 
-  private releaseSessions(): void {
+  private async releaseSessions(): Promise<void> {
+    await Promise.allSettled([...this.sessions.values()].map(session => session.close()))
     for (const session of this.sessions.values()) delete session.onEvent
     this.sessions.clear()
     this.sessionLoads.clear()
@@ -836,6 +850,8 @@ export class Gateway {
       })
       if (runs.length) await waitForRuns(runs)
 
+      await Promise.all(subtree.map(id => this.sessions.get(id)?.close()))
+
       const persisted = await deleteSessionTree(this.workspace, sessionId, true)
       const deleted = [...new Set([...subtree, ...persisted])]
       for (const deletedId of deleted) {
@@ -933,7 +949,7 @@ export class Gateway {
 
   private finishTurnError(sessionId: string, error: unknown): void {
     const cancelled = isAbort(error)
-    if (cancelled) this.event('message.cancelled', { session_id: sessionId })
+    if (cancelled) this.event('message.cancelled', { stop_reason: abortReason(error), session_id: sessionId })
     this.finishActivity(sessionId, !cancelled)
     this.event('session.updated', { running: false, session_id: sessionId })
   }
@@ -945,6 +961,24 @@ function writeLine(value: unknown): void {
 
 function isAbort(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+}
+
+function abortReason(error: unknown): string {
+  return error instanceof Error && error.name === 'TimeoutError' ? 'deadline' : 'cancelled'
+}
+
+function runBudget(value: unknown): RunBudgetSpec | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('run must be an object.')
+  const record = value as Record<string, unknown>
+  const timeout = record.timeout_ms
+  if (!Number.isSafeInteger(timeout) || (timeout as number) <= 0) throw new Error('run.timeout_ms must be a positive integer.')
+  const defaultReserve = Math.min(90_000, Math.max(0, Math.floor((timeout as number) / 5)))
+  const reserve = record.reserve_ms === undefined ? defaultReserve : record.reserve_ms
+  if (!Number.isSafeInteger(reserve) || (reserve as number) < 0 || (reserve as number) >= (timeout as number)) {
+    throw new Error('run.reserve_ms must be a non-negative integer smaller than run.timeout_ms.')
+  }
+  return { deadlineMs: Date.now() + (timeout as number), reserveMs: reserve as number }
 }
 
 function approvalPayload(value: unknown): ApprovalInfo | undefined {
