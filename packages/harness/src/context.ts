@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 import {
   toolSchema,
+  normalizeUsage,
   type AgentEvent,
   type JsonObject,
   type Message,
@@ -49,7 +50,7 @@ export function observeContextUsage(context: RunContext, event: AgentEvent): voi
   const pending = object(context.metadata[PENDING_ANCHOR])
   const message = object(event.data.message)
   const usage = object(message?.usage)
-  const promptTokens = integer(usage?.prompt_tokens) ?? integer(usage?.input_tokens)
+  const promptTokens = normalizeUsage(usage).input
   if (pending && promptTokens !== undefined) {
     context.metadata[ANCHOR] = { ...pending, prompt_tokens: promptTokens }
   }

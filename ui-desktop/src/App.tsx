@@ -1566,12 +1566,12 @@ function App() {
     sendGateway<MemoryFileInfo>(settingsWorkspace, 'settings.memory.save', { content, file })
   // Stable identity: the plugins pane fetches from an effect keyed on this.
   const listPlugins = useCallback(
-    () => sendGateway<{ plugins: PluginInfo[] }>(settingsWorkspace, 'plugin.list'),
+    (reload = false) => sendGateway<{ plugins: PluginInfo[] }>(settingsWorkspace, reload ? 'plugin.reload' : 'plugin.list'),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [settingsWorkspace]
   )
-  const togglePlugin = (name: string, enabled: boolean) =>
-    sendGateway<{ plugins: PluginInfo[] }>(settingsWorkspace, 'plugin.toggle', { enabled, name })
+  const togglePlugin = (name: string, enabled: boolean, trustDigest?: string) =>
+    sendGateway<{ plugins: PluginInfo[] }>(settingsWorkspace, 'plugin.toggle', { enabled, name, ...(trustDigest ? { trust_digest: trustDigest } : {}) })
 
   const resolveApproval = (method: string, params: Record<string, unknown> = {}) => {
     const approval = pendingApproval
@@ -3123,10 +3123,12 @@ function pluginCopy(plugin: PluginInfo): { description: string; name: string } {
  */
 function PluginsSettings({
   plugins,
+  onReload,
   onToggle
 }: {
   plugins: PluginInfo[]
-  onToggle: (name: string, enabled: boolean) => Promise<{ plugins: PluginInfo[] }>
+  onReload: () => Promise<{ plugins: PluginInfo[] }>
+  onToggle: (name: string, enabled: boolean, trustDigest?: string) => Promise<{ plugins: PluginInfo[] }>
 }) {
   const form = useSettingsSave()
 
@@ -3157,16 +3159,20 @@ function PluginsSettings({
               </span>
               {plugin.errors.length ? <span className="plugin-error">{t('plugins.error', { error: plugin.errors[0]! })}</span> : null}
             </div>
-            <SettingsSwitch
+            {plugin.trusted === false ? <button disabled={!plugin.digest || form.pending === plugin.name}
+              onClick={() => form.submit(onToggle(plugin.name, true, plugin.digest), () => t('plugins.enabled', { name: plugin.name }), plugin.name)}>
+              {t('plugins.trust')}
+            </button> : <SettingsSwitch
               checked={!plugin.disabled}
               disabled={plugin.required || form.pending === plugin.name}
               label={`${copy.name}: ${plugin.disabled ? t('plugins.off') : t('plugins.on')}`}
               onChange={enabled => toggle(plugin, enabled)}
-            />
+            />}
           </div>
         )
       })}
       <p className="settings-note">{t('plugins.external')}</p>
+      <button className="line-action" disabled={!!form.pending} onClick={() => form.submit(onReload(), () => t('plugins.reloaded'), 'reload')}>{t('plugins.reload')}</button>
       <SettingsMessage failed={form.failed} message={form.message} />
     </div>
   )
@@ -3364,7 +3370,7 @@ function SettingsPage({
   onDelete: (profileId: string) => Promise<ModelCatalog>
   onEnable: (target: ModelTarget, enabled: boolean) => Promise<ModelCatalog>
   onLanguageChange: (language: Language) => void
-  onListPlugins: () => Promise<{ plugins: PluginInfo[] }>
+  onListPlugins: (reload?: boolean) => Promise<{ plugins: PluginInfo[] }>
   onLoad: () => Promise<AppSettings>
   onReadMemory: (file: MemoryFileScope) => Promise<MemoryFileDetail>
   onRefreshModels: (target: ModelTarget) => Promise<{ catalog: ModelCatalog; models: string[] }>
@@ -3375,7 +3381,7 @@ function SettingsPage({
   onSaveMemory: (file: MemoryFileScope, content: string) => Promise<MemoryFileInfo>
   onSaveProfile: (profile: Partial<UserProfileSettings>) => Promise<UserProfileSettings>
   onSaveWeb: (value: Record<string, unknown>) => Promise<WebSearchSettings>
-  onTogglePlugin: (name: string, enabled: boolean) => Promise<{ plugins: PluginInfo[] }>
+  onTogglePlugin: (name: string, enabled: boolean, trustDigest?: string) => Promise<{ plugins: PluginInfo[] }>
 }) {
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -3467,7 +3473,7 @@ function SettingsPage({
     return compaction
   })
 
-  const persistPlugin = (name: string, enabled: boolean) => onTogglePlugin(name, enabled).then(result => {
+  const persistPlugin = (name: string, enabled: boolean, trustDigest?: string) => onTogglePlugin(name, enabled, trustDigest).then(result => {
     setPlugins(result.plugins)
     return result
   })
@@ -3712,7 +3718,7 @@ function SettingsPage({
                 <p>{t('plugins.desc')}</p>
               </header>
               {plugins
-                ? <PluginsSettings plugins={plugins} onToggle={persistPlugin} />
+                ? <PluginsSettings plugins={plugins} onToggle={persistPlugin} onReload={() => onListPlugins(true).then(result => { setPlugins(result.plugins); return result })} />
                 : <SettingsLoading error={pluginsError} />}
             </div>
           )}

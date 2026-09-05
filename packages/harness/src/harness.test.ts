@@ -1,3 +1,5 @@
+import { readRecord } from './records.js'
+import { installFixturePlugins } from './plugin-test-support.js'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -80,7 +82,7 @@ test('the harness loads legacy config, chats, and writes a resumable snapshot', 
       }
     })
     assert.equal(typeof result.metrics.window_tokens, 'number')
-    const snapshot = JSON.parse(await readFile(join(projectStateDir(workspace), 'sessions', 'session-one.json'), 'utf8')) as Record<string, unknown>
+    const snapshot = await readRecord(workspace, join(projectStateDir(workspace), 'sessions', 'session-one.json')) as Record<string, unknown>
     assert.equal(snapshot.turns, 1)
     const userTimes = snapshot.user_message_times as Array<Record<string, unknown>>
     assert.equal(userTimes.length, 1)
@@ -98,7 +100,7 @@ test('the harness loads legacy config, chats, and writes a resumable snapshot', 
     const resumed = await FridaySession.create(workspace, 'session-one')
     assert.deepEqual(resumed.context.messages.map(message => message.role), ['system', 'user', 'assistant'])
     await resumed.chat('again')
-    const updated = JSON.parse(await readFile(join(projectStateDir(workspace), 'sessions', 'session-one.json'), 'utf8')) as Record<string, unknown>
+    const updated = await readRecord(workspace, join(projectStateDir(workspace), 'sessions', 'session-one.json')) as Record<string, unknown>
     assert.equal(updated.created, '2020-01-01T00:00:00')
     assert.equal(updated.title, 'Keep this title')
     assert.equal(updated.fork_parent, 'parent-session')
@@ -554,8 +556,8 @@ test('model profiles keep credentials private and remain selectable', async () =
     }, { apiKey: 'private-b', activate: false })
     assert.equal(second.active, 'local-a')
     assert(!JSON.stringify(second).includes('private-'))
-    assert(!await readFile(join(home, 'models.json'), 'utf8').then(value => value.includes('private-')))
-    assert((await readFile(join(home, 'model-credentials.json'), 'utf8')).includes('private-b'))
+    assert(!JSON.stringify(second).includes('private-'))
+    assert((await readFile(join(home, 'model-state.json'), 'utf8')).includes('private-b'))
 
     assert.equal((await selectModelProfile(workspace, 'local-b')).active, 'local-b')
     assert.equal((await setModelEnabled(workspace, false, '', 'local-a')).profiles.find(profile => profile.id === 'local-a')?.enabled, false)
@@ -751,7 +753,7 @@ test('compaction shrinks the model prompt without shrinking resumable UI history
     assert(events.includes('context.compacted'))
     assert(session.context.messages.length < 6)
     assert.deepEqual(sessionHistory(session), before)
-    const snapshot = JSON.parse(await readFile(join(projectStateDir(workspace), 'sessions', 'compact-session.json'), 'utf8')) as Record<string, unknown>
+    const snapshot = await readRecord(workspace, join(projectStateDir(workspace), 'sessions', 'compact-session.json')) as Record<string, unknown>
     assert.equal((snapshot.archived_messages as unknown[]).length, 3)
     const resumed = await FridaySession.create(workspace, 'compact-session')
     assert.deepEqual(sessionHistory(resumed), before)
@@ -917,6 +919,7 @@ test('an external compactor is replaceable but cannot bypass the Harness context
         return { summary: 'custom compactor ran', record: { after_tokens: 1 } }
       }
     }`)
+    await installFixturePlugins(workspace)
     const session = await FridaySession.create(workspace, 'custom-compact-session')
     const compaction = session.info().compaction as Record<string, unknown>
     assert.equal(compaction.provider, 'custom-compactor')
@@ -994,6 +997,7 @@ test('an external memory provider replaces built-in recall and capture without c
         }
       }
     }`)
+    await installFixturePlugins(workspace)
     const session = await FridaySession.create(workspace, 'custom-memory-session')
     const info = session.info()
     assert.equal((info.memory as Record<string, unknown>).provider, 'custom-memory')
@@ -1237,9 +1241,7 @@ test('gateway undo restores both a mutating agent turn and its conversation boun
     assert.deepEqual(restored.changed_paths, ['undo-me.txt'])
     assert.deepEqual(restored.history, [])
     await assert.rejects(readFile(join(workspace, 'undo-me.txt'), 'utf8'), { code: 'ENOENT' })
-    const snapshot = JSON.parse(await readFile(
-      join(projectStateDir(workspace), 'sessions', `${restored.info.session_id}.json`), 'utf8'
-    )) as Record<string, unknown>
+    const snapshot = await readRecord(workspace, join(projectStateDir(workspace), 'sessions', `${restored.info.session_id}.json`)) as Record<string, unknown>
     assert.equal(snapshot.user, '')
     assert.equal(snapshot.assistant, '')
   } finally {
@@ -1372,9 +1374,7 @@ test('a risky shell call pauses the session, executes once after approval, and r
     await assert.rejects(artifactDetail(workspace, '../outside.txt'), /outside the workspace|relative/)
     assert.equal(session.approval().pending, false)
     assert.equal(modelCalls, 2)
-    const snapshot = JSON.parse(await readFile(
-      join(projectStateDir(workspace), 'sessions', 'approval-session.json'), 'utf8'
-    )) as Record<string, unknown>
+    const snapshot = await readRecord(workspace, join(projectStateDir(workspace), 'sessions', 'approval-session.json')) as Record<string, unknown>
     const activityItems = (snapshot.activities as Array<{ items?: Array<Record<string, unknown>> }>)
       .flatMap(record => record.items ?? [])
     assert(activityItems.some(item => item.kind === 'tool' && item.tool_call_id === 'shell-call'))

@@ -1,4 +1,4 @@
-import { throwModelRequestError } from './errors.js'
+import { ModelStreamError, throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
 import { normalizeTermination, termination } from './termination.js'
 import type { AssistantMessage, ChatModel, JsonObject, Message, ModelRequest, ToolCall, ToolSchema } from './types.js'
@@ -28,7 +28,7 @@ export class ResponsesModel implements ChatModel {
         stream: true,
         ...(instructions ? { instructions } : {}),
         ...(request.tools?.length ? { tools: request.tools.map(responsesTool), tool_choice: request.toolChoice ?? 'auto' } : {}),
-        ...(this.options.maxOutputTokens ? { max_output_tokens: this.options.maxOutputTokens } : {}),
+        ...(this.options.maxOutputTokens ? { max_output_tokens: Math.min(this.options.maxOutputTokens, request.maxOutputTokens ?? Infinity) } : {}),
         ...this.options.body
       }),
       ...(request.signal ? { signal: request.signal } : {})
@@ -36,17 +36,25 @@ export class ResponsesModel implements ChatModel {
     if (!response.ok) await throwModelRequestError(response)
     if (!response.body) throw new Error('Model response had no body.')
     let completed: JsonObject | undefined
-    for await (const event of readSseJson(response.body)) {
+    let content = ''
+    try {
+    for await (const event of readSseJson(response.body, request)) {
       const type = String(event.type ?? '')
+      if (type === 'error' || type === 'response.failed') throw new Error(`Responses stream error: ${JSON.stringify(event).slice(0, 2000)}`)
       if (type === 'response.output_text.delta') {
+        content += String(event.delta ?? '')
         request.onDelta?.(String(event.delta ?? ''))
       } else if (type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') {
         request.onReasoningDelta?.(String(event.delta ?? ''))
       } else if ((type === 'response.completed' || type === 'response.incomplete') && isObject(event.response)) {
         completed = event.response
+        break
       }
     }
     if (!completed) throw new Error('Responses stream ended without a terminal response.')
+    } catch (error) {
+      throw new ModelStreamError(error instanceof Error ? error.message : String(error), { role: 'assistant', content })
+    }
     return responsesMessage(completed)
   }
 }

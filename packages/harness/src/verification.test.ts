@@ -62,9 +62,10 @@ test('goal mode repairs once, passes independent verification, and reports both 
     const verifier = JSON.stringify(body.messages).includes('Friday Verifier')
     if (verifier) {
       verifierCalls += 1
+      if (verifierCalls === 2) return { tool_calls: [{ id: 'inspect', type: 'function', function: { name: 'Read', arguments: JSON.stringify({ path: '.' }) } }] }
       return verifierCalls === 1
         ? JSON.stringify({ verdict: 'repair', evidence: ['marker -> inspect -> missing'], feedback: 'Add the marker.', next_check: 'Inspect the marker.' })
-        : JSON.stringify({ verdict: 'pass', evidence: ['marker -> inspect -> present'], feedback: '', next_check: '' })
+        : JSON.stringify({ verdict: 'pass', evidence: ['workspace -> inspect -> readable [tool:inspect]'], feedback: '', next_check: '' })
     }
     mainCalls += 1
     if (mainCalls === 2) {
@@ -102,7 +103,7 @@ test('goal mode repairs once, passes independent verification, and reports both 
       attempt: response.result.verification.attempt
     }, { verdict: 'pass', attempt: 2 })
     assert.equal(mainCalls, 2)
-    assert.equal(verifierCalls, 2)
+    assert.equal(verifierCalls, 3)
     assert.deepEqual(eventPayloads(output, 'verification.complete').map(item => item.verdict), ['repair', 'pass'])
     assert.equal(eventPayloads(output, 'message.complete')[0]?.status, 'done')
     const current = responseResult(output, 'goal')
@@ -191,13 +192,14 @@ test('cancelling independent verification leaves a resumable blocked goal instea
 async function answerRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  answer: (body: Record<string, unknown>) => string
+  answer: (body: Record<string, unknown>) => string | Record<string, unknown>
 ): Promise<void> {
   const chunks: Buffer[] = []
   for await (const chunk of request) chunks.push(Buffer.from(chunk))
   const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
   response.writeHead(200, { 'content-type': 'text/event-stream' })
-  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: answer(body) } }] })}\n\n`)
+  const output = answer(body)
+  response.write(`data: ${JSON.stringify({ choices: [{ delta: typeof output === 'string' ? { content: output } : output }] })}\n\n`)
   response.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 5, completion_tokens: 3 } })}\n\n`)
   response.end('data: [DONE]\n\n')
 }

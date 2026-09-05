@@ -24,7 +24,7 @@ metadata positively advertises image input, but missing or stale metadata means
 "unknown", not "text-only". Clipboard and selected-file images are therefore
 sent to the chosen provider even for a newly released or manually configured
 model. The provider remains the authority; if it rejects image input, the
-Harness rolls the failed turn back and returns a stable, actionable Friday
+Harness preserves the failed request and completed effects, and returns a stable, actionable Friday
 error instead of exposing the provider's response payload. This classification
 is deliberately narrow: other provider failures keep their normal error after
 the Harness has retried transient HTTP or network failures.
@@ -34,13 +34,16 @@ the Harness has retried transient HTTP or network failures.
 Friday keeps the model catalog and credentials outside the workspace:
 
 ```text
-~/.friday/models.json                         profiles, active profile, disabled targets
-~/.friday/model-credentials.json              API keys, keyed by profile id
+~/.friday/model-state.json                    atomic private profiles + credentials state
+~/.friday/models.json                         legacy profiles (read before migration)
+~/.friday/model-credentials.json              legacy credentials (read before migration)
 ~/.friday/config.json                         global fallback defaults and other settings
 ~/.friday/projects/<workspace-id>/config.json project fallback overrides and other settings
 ```
 
-`models.json` is the source of truth for saved profiles. The two `config.json`
+`model-state.json` is the source of truth after the first settings save. It is
+written privately and atomically with its credentials under a cross-process lock.
+The old two files remain readable as migration input until that first save. The two `config.json`
 layers provide defaults when Friday has to create or validate a profile; the
 project layer overrides the global layer. They are also used by settings such
 as `disabled_plugins`. Friday does not use or migrate
@@ -65,14 +68,14 @@ A minimal fallback configuration is:
 | `base_url` | API base URL. Built-in discovery supplies a host-defined URL; compatible profiles require their own. |
 | `context_window` | Configured context capacity and the denominator used by context-pressure checks. |
 | `max_output_tokens` | Maximum output requested for one main-agent call. It must not exceed `context_window`. |
-| `run_token_budget` | Positive compatibility field retained in stored profiles and old configs. The current runtime does not enforce it. |
+| `run_token_budget` | Shared run token ceiling, including compaction, verification and retries; unreported usage is estimated. |
 
-Profile values stored in `models.json` take precedence over these fallback
+Profile values stored in `model-state.json` take precedence over these fallback
 defaults. Editing a fallback does not rewrite existing profiles.
 
 ## Credentials
 
-Keys saved by Friday live in `~/.friday/model-credentials.json`, are omitted
+Keys saved by Friday live in private `~/.friday/model-state.json`, are omitted
 from the public model catalog, and are not written to sessions or normal trace
 metadata. The reveal control reads a saved key only after the user requests it.
 
@@ -90,7 +93,7 @@ ANYSEARCH_API_KEY=optional-web-search-fallback-key
 JINA_API_KEY=optional-web-fetch-key
 ```
 
-Keep `model-credentials.json` private even though normal traces redact common
+Keep `model-state.json` and any legacy `model-credentials.json` private even though normal traces redact common
 secret patterns.
 
 ## When changes take effect
@@ -115,3 +118,7 @@ normal Agent attempt has a 100-step guard, an independent verifier has 40
 steps, and Goal mode can make at most six attempts. Provider usage is measured
 and reported but is not stopped by `run_token_budget`. See [Verification, Run
 Guards, and Compaction](verification.md) for the complete behavior.
+
+Newly discovered models use their reported context/output limits. Unknown new
+profiles default conservatively to 32,768 context and 4,096 output tokens.
+Explicit saved limits take precedence and should match the model you deploy.

@@ -1,12 +1,18 @@
 import type { ChatModel, JsonObject, Message, RunContext, Tool } from 'friday-agent-core'
 
 /** Stable, deliberately narrow contract for Friday product plugins. */
-export type PluginApi = { workspace: string }
+export type PluginApi = { workspace: string; sessionId?: string; signal?: AbortSignal }
+
+/** Host-selected execution boundary; plugins cannot replace verifier isolation. */
+export type ExecutionBackend = {
+  name: string
+  execute(request: { workspace: string; command: string; timeoutSeconds: number; readOnly: boolean; signal?: AbortSignal; onProgress?: (content: string) => void; spillPath?: string }): Promise<JsonObject>
+}
 
 export type MemoryPreparation = { capture?: JsonObject; recall?: string }
 
 export type MemoryProvider = {
-  prepare(request: { sessionId: string; text: string; workspace: string }): Promise<MemoryPreparation>
+  prepare(request: { sessionId: string; text: string; workspace: string; signal?: AbortSignal }): Promise<MemoryPreparation>
   consolidate?(request: {
     days: number
     review(payload: JsonObject): Promise<unknown>
@@ -64,6 +70,8 @@ export type CompactionRequest = {
 export type ContextCompactor = (request: CompactionRequest) => Promise<CompactionResult>
 
 export type FridayPlugin = {
+  /** Per-session lifecycle. Return cleanup for reload/close. Activation must be reversible. */
+  activate?(api: PluginApi): void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>
   name: string
   version?: string
   description?: string

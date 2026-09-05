@@ -1,6 +1,6 @@
 {
   "name": "friday-agent-protocol",
-  "version": "0.8.7",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "types": "./src/index.ts",

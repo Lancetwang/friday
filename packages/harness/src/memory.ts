@@ -4,7 +4,7 @@ import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 import { fridayHome, projectStateDir } from './config.js'
-import { writeTextAtomic } from './storage.js'
+import { writeTextAtomic, withStateLock } from './storage.js'
 
 export const MEMORY_SCOPES = ['user', 'global', 'project', 'episode'] as const
 export type MemoryScope = typeof MEMORY_SCOPES[number]
@@ -533,7 +533,7 @@ async function withMemoryWrite<T>(work: () => Promise<T>): Promise<T> {
   let release = () => {}
   memoryWriteTail = new Promise<void>(resolveTail => { release = resolveTail })
   await previous
-  try { return await work() } finally { release() }
+  try { return await withStateLock(join(fridayHome(), 'memory-state'), work) } finally { release() }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

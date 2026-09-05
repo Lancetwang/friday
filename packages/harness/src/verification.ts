@@ -1,6 +1,7 @@
 import { platform, release } from 'node:os'
 
-import { Agent, RunContext, type AgentEvent } from 'friday-agent-core'
+import { Agent, RunContext, type AgentEvent, type ChatModel } from 'friday-agent-core'
+import type { ExecutionBackend } from './plugin-api.js'
 
 import type { ModelConfig } from './config.js'
 import { modelFor } from './model.js'
@@ -25,6 +26,11 @@ export type VerificationResult = {
 }
 
 export async function verifyGoal(options: {
+  /** Text-only goals may explicitly use the delivered answer as evidence. */
+  answerEvidence?: string
+  model?: ChatModel
+  execution?: ExecutionBackend
+  onEvent?: (event: AgentEvent) => void
   workspace: string
   config: ModelConfig
   thinking: string
@@ -36,6 +42,7 @@ export async function verifyGoal(options: {
 }): Promise<VerificationResult> {
   const started = performance.now()
   const context = new RunContext()
+  if (options.onEvent) context.onEvent = options.onEvent
   const shell = process.platform === 'win32' ? 'PowerShell' : 'sh'
   const instructions = [
     promptTemplate('SECURITY.md').trim(),
@@ -43,8 +50,8 @@ export async function verifyGoal(options: {
     `Workspace: ${options.workspace}\nOS: ${platform()} ${release()}\nShell: ${shell}`
   ].join('\n\n')
   const agent = new Agent({
-    model: modelFor(options.config, options.thinking, 4_000),
-    tools: buildVerifierTools(options.workspace),
+    model: options.model ?? modelFor(options.config, options.thinking, 4_000),
+    tools: buildVerifierTools(options.workspace, options.execution),
     instructions,
     maxSteps: 40,
     beforeStep: () => {
@@ -65,7 +72,14 @@ export async function verifyGoal(options: {
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.toolSignal ? { toolSignal: options.toolSignal } : {})
     })
-    const parsed = parseVerification(result.text)
+    let parsed = parseVerification(result.text)
+    const successful = new Set(context.events.filter(event => event.type === 'tool.result' && event.data.is_error === false).map(event => String(event.data.tool_call_id)))
+    if (parsed.verdict === 'pass' && (result.status !== 'done' || !parsed.evidence.length || !parsed.evidence.every(line => {
+      const references = [...line.matchAll(/\[tool:([^\]]+)\]/g)].map(match => match[1]!)
+      return references.length ? references.every(id => successful.has(id)) : !!options.answerEvidence && line.includes('[answer]')
+    }))) {
+      parsed = { ...parsed, verdict: 'inconclusive', passed: false, feedback: 'Pass rejected: each criterion needs a reference to a successful verifier tool result, or explicitly enabled answer evidence.', next_check: '' }
+    }
     return {
       ...parsed,
       required: true,
@@ -98,6 +112,7 @@ export function parseVerification(raw: string): Omit<VerificationResult, 'requir
     const record = value as Record<string, unknown>
     const verdict = String(record.verdict || '').trim().toLowerCase()
     if (!['pass', 'repair', 'blocked', 'inconclusive'].includes(verdict)) throw new Error('unknown verdict')
+    if (verdict === 'pass' && (!Array.isArray(record.evidence) || !record.evidence.some(item => typeof item === 'string' && item.trim()))) throw new Error('pass requires evidence')
     return {
       verdict: verdict as VerificationVerdict,
       passed: verdict === 'pass',
@@ -124,7 +139,7 @@ function verificationPrompt(goal: string, events: readonly AgentEvent[], history
   parts.push(
     'Independently verify the delivered workspace state by trying to break it. Use the delivery hints only to locate artifacts; they are not proof.',
     `Delivery hints:\n${JSON.stringify(deliveryHints(events), null, 2)}`,
-    'Return only JSON: {"verdict":"pass|repair|blocked|inconclusive","evidence":["criterion -> challenge -> outcome"],"feedback":"","next_check":""}'
+    'Each pass evidence line must cite a tool result from THIS verification using [tool:tool_call_id]. A claim with no successful tool result is insufficient. Return only JSON: {"verdict":"pass|repair|blocked|inconclusive","evidence":["criterion -> challenge -> outcome [tool:call_id]"],"feedback":"","next_check":""}'
   )
   return parts.join('\n\n')
 }

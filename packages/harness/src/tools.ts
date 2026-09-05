@@ -10,7 +10,7 @@ import { getCurrentToolCall, type JsonObject, type Tool } from 'friday-agent-cor
 import { disabledPlugins, projectStateDir } from './config.js'
 import { defaultPermissionMode, preflightShell, preflightVerifierShell, type PermissionMode } from './permissions.js'
 import { assembleTools, builtinPlugin, markDisabled, type LoadedPlugin } from './plugins.js'
-import { writeTextAtomic } from './storage.js'
+import { withStateLock, writeTextAtomic } from './storage.js'
 import { buildSkillTool, skillRouting } from './skills.js'
 import { buildWebTools } from './web.js'
 import {
@@ -22,6 +22,7 @@ import {
 } from './memory.js'
 import { buildMemoryInstructions } from './prompts.js'
 import { compactIfNeeded } from './context.js'
+import type { ExecutionBackend } from './plugin-api.js'
 
 const MAX_OUTPUT_CHARS = 50_000
 const MAX_OUTPUT_LINES = 2_000
@@ -41,6 +42,8 @@ const integer = (description: string, minimum = 1, maximum = MAX_RESULTS): JsonO
 const boolean = (description: string): JsonObject => ({ type: 'boolean', description })
 
 type ToolOptions = {
+  execution?: ExecutionBackend
+  readOnly?: boolean
   sessionId?: string
   permissionMode?: () => PermissionMode
   sessionAllowed?: () => boolean
@@ -122,10 +125,11 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
       parameters: object({
         path: string('Path relative to the workspace.'),
         start_line: integer('1-based first line.', 1, Number.MAX_SAFE_INTEGER),
+        start_column: integer('1-based character offset on the first line; use next_start_column when paging long lines.', 1, Number.MAX_SAFE_INTEGER),
         line_count: integer(`Lines to return, capped at ${MAX_OUTPUT_LINES}.`, 1, MAX_OUTPUT_LINES)
       }, ['path']),
       async execute(args, signal) {
-        return readPage(paths.readable(args.path), positive(args.start_line, 1), capped(args.line_count, MAX_OUTPUT_LINES, MAX_OUTPUT_LINES), signal)
+        return readPage(paths.readable(args.path), positive(args.start_line, 1), capped(args.line_count, MAX_OUTPUT_LINES, MAX_OUTPUT_LINES), signal, positive(args.start_column, 1))
       }
     },
     {
@@ -228,6 +232,11 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
       execute(args, signal, onProgress) {
         if (typeof args.command !== 'string') throw new Error('command must be a string')
         const spillPath = join(toolSpillDir(root, options.sessionId || 'default'), `${getCurrentToolCall()?.id || randomUUID()}.log`)
+        if (options.execution) {
+          if (args.background === true) throw new Error('This execution backend does not support managed background services.')
+          return options.execution.execute({ workspace: root, command: args.command, timeoutSeconds: capped(args.timeout_seconds, 60, 600), readOnly: options.readOnly === true,
+            ...(signal ? { signal } : {}), ...(onProgress ? { onProgress } : {}), spillPath })
+        }
         if (args.background === true) {
           if (!options.processes) throw new Error('Managed background processes require an active Friday session.')
           return options.processes.start(root, args.command, spillPath, signal)
@@ -287,8 +296,8 @@ function memoryTool(root: string): Tool {
  * user unplugged stays unplugged during verification too - except for the
  * required workspace pack.
  */
-export function buildVerifierTools(workspace: string): Tool[] {
-  const packs = markDisabled(builtinPlugins(workspace), disabledPlugins(workspace))
+export function buildVerifierTools(workspace: string, execution?: ExecutionBackend): Tool[] {
+  const packs = markDisabled(builtinPlugins(workspace, { readOnly: true, ...(execution ? { execution } : {}) }), disabledPlugins(workspace))
   const allowed = packs.flatMap(pack => pack.disabled ? [] : [...pack.module?.verifierTools ?? []])
   const tools = assembleTools(packs, { workspace: resolve(workspace) }).filter(tool => allowed.includes(tool.name))
   const missing = allowed.filter(name => !tools.some(tool => tool.name === name))
@@ -320,10 +329,11 @@ export async function runShell(
   timeoutSeconds = 60,
   signal?: AbortSignal,
   onProgress?: (content: string) => void,
-  spillPath?: string
+  spillPath?: string,
+  launch?: { file: string; args: string[] }
 ): Promise<JsonObject> {
   signal?.throwIfAborted()
-  const [file, shellArgs] = shellInvocation(source)
+  const [file, shellArgs] = launch ? [launch.file, launch.args] : shellInvocation(source)
   const child = spawn(file, shellArgs, {
     cwd: workspace,
     detached: process.platform !== 'win32',
@@ -414,6 +424,7 @@ export async function runShell(
     stdout,
     stderr: outcome.error ? (stderrText || outcome.error.message).slice(-MAX_OUTPUT_CHARS) : stderrText,
     exit_code: timedOut ? null : outcome.code ?? 1,
+    ...(timedOut || outcome.code !== 0 ? { is_error: true } : {}),
     ...(timedOut ? { timed_out: true } : {})
   }
 }
@@ -656,31 +667,39 @@ function workspacePaths(root: string, readPaths?: () => readonly string[]) {
   }
 }
 
-async function readPage(path: string, startLine: number, lineCount: number, signal?: AbortSignal): Promise<JsonObject> {
+async function readPage(path: string, startLine: number, lineCount: number, signal?: AbortSignal, startColumn = 1): Promise<JsonObject> {
   if ((await stat(path)).isDirectory()) return directoryPage(path, startLine, lineCount)
   const lines: string[] = []
   let number = 0
   let chars = 0
   let hasMore = false
+  let nextColumn = 1
   const input = createReadStream(path, { encoding: 'utf8' })
   const reader = createInterface({ input, crlfDelay: Infinity })
-  for await (const line of reader) {
+  try {
+  for await (const raw of reader) {
     signal?.throwIfAborted()
     number += 1
     if (number < startLine) continue
+    const line = (number === 1 ? raw.replace(/^\uFEFF/, '') : raw).slice(number === startLine ? startColumn - 1 : 0)
     if (lines.length >= lineCount || chars + line.length + 1 > MAX_OUTPUT_CHARS) {
       hasMore = true
+      if (!lines.length && line.length) {
+        lines.push(line.slice(0, MAX_OUTPUT_CHARS))
+        nextColumn = startColumn + MAX_OUTPUT_CHARS
+      }
       break
     }
     lines.push(lines.length || startLine > 1 ? line : line.replace(/^\uFEFF/, ''))
     chars += line.length + 1
   }
+  } finally { reader.close(); input.destroy() }
   return {
     path,
     start_line: startLine,
     end_line: startLine + lines.length - 1,
     content: lines.join('\n'),
-    ...(hasMore ? { next_start_line: startLine + lines.length } : {})
+    ...(hasMore ? { next_start_line: nextColumn > 1 ? startLine : startLine + lines.length, next_start_column: nextColumn } : {})
   }
 }
 
@@ -833,7 +852,7 @@ async function withFileLock<T>(path: string, work: () => Promise<T>): Promise<T>
   fileLocks.set(key, tail)
   await previous
   try {
-    return await work()
+    return await withStateLock(path, work)
   } finally {
     release()
     if (fileLocks.get(key) === tail) fileLocks.delete(key)

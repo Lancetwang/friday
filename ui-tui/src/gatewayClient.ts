@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import type { GatewayEvent } from './types.js'
+import type { RuntimeMethods } from 'friday-agent-protocol'
 
 type Pending = {
   reject: (error: Error) => void
@@ -13,6 +14,9 @@ type Pending = {
 }
 
 export class GatewayClient extends EventEmitter {
+  requestTyped<M extends keyof RuntimeMethods>(method: M, params: RuntimeMethods[M]['params']): Promise<RuntimeMethods[M]['result']> {
+    return this.request(method, params)
+  }
   private proc: ChildProcess | null = null
   private pending = new Map<string, Pending>()
   private seq = 0

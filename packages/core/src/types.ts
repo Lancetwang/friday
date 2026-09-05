@@ -37,6 +37,10 @@ export type AssistantMessage = Message & {
 }
 
 export type ModelRequest = {
+  /** Optional per-request output cap; adapters also respect their configured limit. */
+  maxOutputTokens?: number
+  /** Transport activity, including tool argument fragments and heartbeat events. */
+  onActivity?: () => void
   messages: readonly Message[]
   tools?: readonly ToolSchema[]
   /**
@@ -64,6 +68,8 @@ export type ToolSchema = {
 }
 
 export type Tool = {
+  /** Override schema validation for custom JSON Schema dialects or formats. */
+  validate?(args: JsonObject): void
   name: string
   description: string
   parameters: JsonObject

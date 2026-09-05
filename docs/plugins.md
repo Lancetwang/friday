@@ -11,9 +11,8 @@ The registry is deliberately narrower than the Harness itself. Sessions,
 permissions, checkpoints, traces, and Goal verification remain ordinary
 Harness services. Memory and compaction are replaceable singleton services:
 the Harness fixes when they run and how their outputs enter a turn, while the
-selected provider owns storage/retrieval or context-rewrite policy. The public
-plugin contract does not expose arbitrary session-lifecycle hooks, and Core
-imports none of it.
+selected provider owns storage/retrieval or context-rewrite policy. The public plugin contract exposes a bounded activate/cleanup lifecycle and Core
+imports none of it. See the [Harness SDK](runtime-sdk.md) for host composition.
 
 ## The built-in plugins
 
@@ -38,12 +37,11 @@ capabilities, tools, disabled state, and any errors.
   environment.
 
 The effective disabled set is the union of both JSON layers and the environment
-list. A UI toggle persists the choice in JSON, then reloads the active session;
-Friday rejects the change until all requests in that gateway are idle.
-Only that active session is rebuilt. Other cached sessions and other gateway
-processes keep their assembled registry until a later toggle rebuilds them or
-they are recreated. An environment-disabled plugin cannot be re-enabled from a
-UI running in that environment.
+list. A UI toggle persists the choice and reloads all cached sessions in that
+gateway once requests are idle. Other processes recheck the disabled list before
+the next public turn. `plugin.reload`, the desktop Reload plugins button and
+`FridaySession.reloadPlugins()` replace a registry at an idle boundary. An
+environment-disabled plugin cannot be re-enabled from a UI in that environment.
 
 Disabling is real, not cosmetic: a disabled `memory` removes the Memory tool,
 its durable profile/memory prompt section, future recall/capture, and model-backed
@@ -160,10 +158,29 @@ export default {
 | Project | `<workspace>/.friday/plugins/*.mjs` or `*.js` |
 | User | `~/.friday/plugins/*.mjs` or `*.js` |
 
-Files with either extension must contain an ES module. Project plugins shadow
-user plugins with the same name. Files are re-imported when a new session
-starts, so editing a plugin takes effect with `/new` - no gateway restart
-needed.
+Each ES module needs an adjacent static manifest: `ticket-lookup.mjs` uses
+`ticket-lookup.plugin.json`:
+
+```json
+{"api_version": 1, "name": "ticket-lookup", "version": "1.0.0", "description": "Ticket lookup"}
+```
+
+The exported name must match the manifest. Identity and the disabled list are
+checked before import; shadowed modules are not imported. Missing or invalid
+manifests appear as discovery errors. Existing plugins need this manifest.
+Project code also needs explicit trust of its current entry/manifest digest.
+The desktop offers **Trust local code and enable**; programmatic hosts can call
+`trustPlugin(workspace, name, digest)` after obtaining the user's approval, or
+send `plugin.toggle` with `trust_digest`. User-directory installation is a trust
+boundary, but a manifest is still required there. Disabling never runs the module.
+
+A plugin may define `activate({workspace, sessionId, signal})` and return an
+async cleanup function. Each session generation activates once and cleans up
+on reload/close. Failed replacement activation keeps the prior active registry.
+Changed entry bytes get a new import digest and require renewed project trust.
+Bundle a plugin into a self-contained entry for hot updates: transitive ESM
+imports remain subject to Node's module cache, and their bytes are not included
+in the entry digest. Plugins run trusted JavaScript with host privileges.
 
 ### Memory service contract
 

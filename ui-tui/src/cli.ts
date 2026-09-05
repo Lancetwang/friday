@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type { GatewayEvent, MessageMetrics, ModelTermination, SessionInfo } from './types.js'
 import { GatewayClient } from './gatewayClient.js'
 
-export const VERSION = '0.8.7'
+export const VERSION = '0.9.0'
 
 export type CliOptions = {
   command: 'ask' | 'goal' | 'help' | 'run' | 'tui' | 'version'
@@ -160,7 +160,7 @@ export async function headless(options: CliOptions): Promise<number> {
     if (options.json) process.stdout.write(`${JSON.stringify(result)}\n`)
     else if (!streamedText) process.stdout.write(`${result.text}\n`)
     else process.stdout.write('\n')
-    return result.cancelled ? (result.stop_reason === 'deadline' ? 124 : 130) : 0
+    return result.cancelled ? (result.stop_reason === 'deadline' ? 124 : 130) : result.stop_reason === 'incomplete' ? 2 : 0
   } catch (error) {
     result ??= {
       text: streamedText,

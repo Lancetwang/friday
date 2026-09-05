@@ -72,6 +72,8 @@ export type ContextCompaction = {
 }
 
 export type PluginInfo = {
+  trusted?: boolean
+  digest?: string
   capabilities: string[]
   description: string
   disabled: boolean
@@ -106,7 +108,7 @@ export type SessionInfo = {
   tools: string[]
 }
 
-export type DiscoveredModel = { id: string; vision?: boolean }
+export type DiscoveredModel = { id: string; vision?: boolean; context_window?: number; max_output_tokens?: number }
 
 export type ModelProfile = {
   api_key_configured: boolean
@@ -255,7 +257,7 @@ export type ClientMessage = {
   text: string
 }
 
-type SessionScoped = { session_id?: string }
+type SessionScoped = { session_id?: string; run_id?: string }
 
 export type GatewayEvent =
   | { type: 'gateway.ready'; payload: { cwd: string } }
@@ -278,3 +280,14 @@ export type GatewayEvent =
   | { type: 'memory.updated'; payload: Record<string, unknown> & SessionScoped }
   | { type: 'gateway.stderr'; payload: { line: string } }
   | { type: 'gateway.protocol_error'; payload: { preview: string } }
+
+/** Version 1 clients may omit protocol_version for compatibility. */
+export type RpcRequest = { id?: string | number; jsonrpc?: '2.0'; protocol_version?: 1; method: string; params?: Record<string, unknown> }
+export type RuntimeMethods = {
+  'session.info': { params: Record<string, never>; result: SessionInfo }
+  'session.current': { params: Record<string, never>; result: { info: SessionInfo; history: HistoryItem[] } }
+  'session.list': { params: { offset?: number; limit?: number }; result: { choices: ResumeChoice[]; next_offset?: number } }
+  'plugin.list': { params: Record<string, never>; result: { plugins: PluginInfo[] } }
+  'plugin.toggle': { params: { name: string; enabled: boolean; trust_digest?: string }; result: { plugins: PluginInfo[]; info: SessionInfo } }
+}
+export type RuntimeRequest<M extends keyof RuntimeMethods> = Omit<RpcRequest, 'method' | 'params'> & { method: M; params: RuntimeMethods[M]['params'] }

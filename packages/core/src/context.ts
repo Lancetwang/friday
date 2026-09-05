@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { AgentEvent, JsonObject, Message } from './types.js'
+import { normalizeUsage } from './usage.js'
 
 export type Usage = {
   requests: number
@@ -15,7 +16,13 @@ export type Usage = {
 }
 
 export class RunContext {
-  readonly runId = randomUUID().replaceAll('-', '')
+  private currentRunId = randomUUID().replaceAll('-', '')
+  get runId(): string { return this.currentRunId }
+  beginRun(id = randomUUID().replaceAll('-', '')): void {
+    this.currentRunId = id
+    this.sequence = 0
+    delete this.step
+  }
   readonly messages: Message[] = []
   readonly events: AgentEvent[] = []
   readonly metadata: JsonObject = {}
@@ -54,10 +61,8 @@ export class RunContext {
     // Cache accumulates independently of the input/output null poisoning: a
     // provider that reports a cache figure has told us something true about
     // this request even when a sibling request reported no token counts.
-    const cached = cachedTokensOf(value)
+    const { cached, input, output } = normalizeUsage(value)
     if (cached !== undefined) this.usage.cachedTokens = (this.usage.cachedTokens ?? 0) + cached
-    const input = integer(value.input_tokens) ?? integer(value.prompt_tokens)
-    const output = integer(value.output_tokens) ?? integer(value.completion_tokens)
     if (input === undefined || output === undefined || this.usage.inputTokens === null || this.usage.outputTokens === null) {
       this.usage.inputTokens = null
       this.usage.outputTokens = null
@@ -97,10 +102,6 @@ function isObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function integer(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : undefined
-}
-
 function subtract(current: number | null, previous: number | null): number | null {
   return current === null || previous === null ? null : current - previous
 }
@@ -109,21 +110,4 @@ function subtract(current: number | null, previous: number | null): number | nul
 function subtractCached(current: number | null, previous: number | null): number | null {
   if (current === null) return null
   return current - (previous ?? 0)
-}
-
-/**
- * Every provider spells cached prompt tokens differently, so read all the known
- * shapes rather than one. Anthropic splits the figure into a read and a write
- * half and both are prompt tokens the request did not pay full price for.
- */
-function cachedTokensOf(usage: JsonObject): number | undefined {
-  const read = integer(usage.cache_read_input_tokens)
-  const written = integer(usage.cache_creation_input_tokens)
-  if (read !== undefined || written !== undefined) return (read ?? 0) + (written ?? 0)
-  const details = isObject(usage.prompt_tokens_details) ? usage.prompt_tokens_details
-    : isObject(usage.input_tokens_details) ? usage.input_tokens_details
-      : undefined
-  return integer(details?.cached_tokens)
-    ?? integer(usage.cached_tokens)
-    ?? integer(usage.prompt_cache_hit_tokens)
 }

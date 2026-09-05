@@ -11,7 +11,7 @@ import type {
   ModelProvider
 } from 'friday-agent-protocol'
 
-import { writeJsonAtomic } from './storage.js'
+import { writeJsonAtomic, withStateLock } from './storage.js'
 import { localTimestamp } from './time.js'
 
 export type { CompactionSettings, DiscoveredModel, ModelCatalog, ModelProfile, ModelProvider } from 'friday-agent-protocol'
@@ -27,6 +27,7 @@ export type ModelConfig = {
   contextWindow: number
   maxOutputTokens: number
   apiKey: string
+  runTokenBudget?: number
 }
 
 type StoredProfile = {
@@ -107,13 +108,15 @@ export function loadModelConfig(workspace: string, requestedProfile?: string): M
     ...(profile.vision === true ? { vision: true } : {}),
     contextWindow: profile.context_window,
     maxOutputTokens: profile.max_output_tokens,
+    runTokenBudget: profile.run_token_budget,
     apiKey: text(credentials[profile.id], providerKey(profile.provider))
   }
 }
 
 export function loadModelCatalog(workspace: string): ModelCatalog {
   const base = baseConfig(workspace)
-  const saved = readObject(join(fridayHome(), 'models.json'))
+  const committed = readObject(join(fridayHome(), 'model-state.json'))
+  const saved = committed.schema_version === 1 ? committed : readObject(join(fridayHome(), 'models.json'))
   const raw = Array.isArray(saved.profiles) ? saved.profiles.filter(isObject) as StoredProfile[] : []
   const profiles = raw.flatMap(value => {
     try { return [validateProfile(value, base)] } catch { return [] }
@@ -353,7 +356,9 @@ export async function fetchProviderModels(provider: string, baseUrl: string, api
     const id = item.id.trim()
     const vision = discoveredVision(item)
     const existing = models.get(id)
-    if (!existing || vision) models.set(id, { id, ...(vision ? { vision: true } : {}) })
+    if (!existing || vision) models.set(id, { id, ...(vision ? { vision: true } : {}),
+      ...(positive(item.context_window ?? item.context_length, 0) ? { context_window: positive(item.context_window ?? item.context_length, 0) } : {}),
+      ...(positive(item.max_output_tokens, 0) ? { max_output_tokens: positive(item.max_output_tokens, 0) } : {}) })
   }
   return [...models.values()].sort((left, right) => left.id.localeCompare(right.id))
 }
@@ -449,6 +454,7 @@ export async function setPluginEnabled(workspace: string, name: string, enabled:
   if (!key) throw new Error('Plugin name is required.')
   const layers = [join(fridayHome(), 'config.json'), join(projectStateDir(workspace), 'config.json')]
   for (const [index, path] of layers.entries()) {
+    await withStateLock(path, async () => {
     const config = readObject(path)
     const current = Array.isArray(config.disabled_plugins)
       ? config.disabled_plugins.map(value => String(value).trim().toLowerCase()).filter(Boolean)
@@ -456,8 +462,9 @@ export async function setPluginEnabled(workspace: string, name: string, enabled:
     const next = enabled
       ? current.filter(value => value !== key)
       : index === 0 ? [...new Set([...current, key])] : current
-    if (next.length === current.length && next.every((value, position) => value === current[position])) continue
+    if (next.length === current.length && next.every((value, position) => value === current[position])) return
     await writeJsonAtomic(path, { ...config, disabled_plugins: next })
+    })
   }
   return disabledPlugins(workspace)
 }
@@ -479,11 +486,13 @@ export async function saveCompactionSettings(
   workspace: string,
   value: Record<string, unknown>
 ): Promise<CompactionSettings> {
-  const settings = compactionSettings(value, loadCompactionSettings(workspace))
   const path = join(projectStateDir(workspace), 'config.json')
+  return withStateLock(path, async () => {
+  const settings = compactionSettings(value, loadCompactionSettings(workspace))
   const config = readObject(path)
   await writeJsonAtomic(path, { ...config, compaction: settings })
   return settings
+  })
 }
 
 function baseConfig(workspace: string): typeof DEFAULTS {
@@ -507,7 +516,7 @@ function baseConfig(workspace: string): typeof DEFAULTS {
     provider,
     model,
     base_url: baseUrl,
-    context_window: contextWindow === 353_000 ? DEFAULTS.context_window : contextWindow,
+    context_window: contextWindow,
     max_output_tokens: maxOutputTokens,
     run_token_budget: runTokenBudget
   }
@@ -523,8 +532,9 @@ function validateProfile(value: StoredProfile | Record<string, unknown>, base: t
   if (!id || !name) throw new Error('Model configuration id and name are required.')
   if (!definition.builtin && !model) throw new Error('Model configuration model is required.')
   validateUrl(baseUrl)
-  const contextWindow = positive(value.context_window, base.context_window)
-  const maxOutputTokens = positive(value.max_output_tokens, base.max_output_tokens)
+  // Unknown models start conservatively; explicit profile limits remain authoritative.
+  const contextWindow = positive(value.context_window, 32_768)
+  const maxOutputTokens = positive(value.max_output_tokens, Math.min(contextWindow, 4_096))
   const runTokenBudget = positive(value.run_token_budget, base.run_token_budget)
   if (maxOutputTokens > contextWindow) throw new Error('Maximum output tokens cannot exceed the context window.')
   const vision = value.vision === true || supportsVision(provider, model) === true
@@ -535,7 +545,7 @@ function validateProfile(value: StoredProfile | Record<string, unknown>, base: t
     model,
     base_url: baseUrl,
     ...(vision ? { vision: true } : {}),
-    context_window: contextWindow === 353_000 ? base.context_window : contextWindow,
+    context_window: contextWindow,
     max_output_tokens: maxOutputTokens,
     run_token_budget: runTokenBudget,
     ...(value.auto ? { auto: true } : {})
@@ -578,6 +588,8 @@ function syncBuiltin(
       profile = validateProfile({
         id: profileId(`${provider.id}-${model}`), name: model, provider: provider.id, model,
         base_url: provider.base_url, auto: true, ...(vision ? { vision: true } : {})
+        , ...(discovered.context_window ? { context_window: discovered.context_window } : {}),
+        ...(discovered.max_output_tokens ? { max_output_tokens: discovered.max_output_tokens } : {})
       }, base)
       next.push(profile)
     }
@@ -597,12 +609,13 @@ async function writeModelState(
   disabled: Set<string>,
   credentials: Record<string, string>
 ): Promise<void> {
-  await writeJsonAtomic(join(fridayHome(), 'models.json'), {
+  await writeJsonAtomic(join(fridayHome(), 'model-state.json'), {
+    schema_version: 1,
     active,
     disabled: [...disabled].sort(),
-    profiles
-  })
-  await writeJsonAtomic(join(fridayHome(), 'model-credentials.json'), credentials, true)
+    profiles,
+    credentials
+  }, true)
 }
 
 async function withModelWrite<T>(work: () => Promise<T>): Promise<T> {
@@ -614,7 +627,7 @@ async function withModelWrite<T>(work: () => Promise<T>): Promise<T> {
   modelWrites.set(key, tail)
   await previous
   try {
-    return await work()
+    return await withStateLock(join(fridayHome(), 'model-state'), work)
   } finally {
     release()
     if (modelWrites.get(key) === tail) modelWrites.delete(key)
@@ -622,7 +635,8 @@ async function withModelWrite<T>(work: () => Promise<T>): Promise<T> {
 }
 
 function credentialsObject(): Record<string, string> {
-  const value = readObject(join(fridayHome(), 'model-credentials.json'))
+  const committed = readObject(join(fridayHome(), 'model-state.json'))
+  const value = committed.schema_version === 1 ? committed.credentials as Record<string, unknown> : readObject(join(fridayHome(), 'model-credentials.json'))
   return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => typeof item === 'string' && item ? [[key, item]] : []))
 }
 

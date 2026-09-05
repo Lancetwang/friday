@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import { RunContext } from './context.js'
+import { ModelStreamError } from './errors.js'
 import { ToolExecutor, toolSchema } from './tools.js'
 import type { AssistantMessage, ChatModel, JsonObject, ModelTermination, Tool, ToolCall } from './types.js'
 
@@ -10,6 +11,8 @@ export type AgentOptions = {
   tools?: readonly Tool[]
   maxSteps?: number
   maxEmptyRetries?: number
+  /** Awaited at execution boundaries. Hosts may durably record progress here. */
+  checkpoint?(context: RunContext, boundary: 'model' | 'tool'): void | Promise<void>
   beforeStep?(
     context: RunContext,
     step: number,
@@ -25,7 +28,7 @@ export type AgentRunOptions = {
   onDelta?: (text: string) => void
 }
 
-export type AgentRunResult = { status: 'done' | 'paused'; text: string; termination?: ModelTermination }
+export type AgentRunResult = { status: 'done' | 'paused' | 'incomplete'; text: string; termination?: ModelTermination }
 
 export class Agent {
   readonly context: RunContext
@@ -76,9 +79,19 @@ export class Agent {
       if (control?.tools === false) toolsEnabled = false
       options.signal?.throwIfAborted()
       const message = await this.complete(options, toolsEnabled)
+      const incomplete = ['length', 'incomplete', 'content_filter'].includes(message.termination?.reason ?? '')
+      const incompleteCalls = incomplete && !!message.tool_calls?.length
+      if (incomplete && message.tool_calls?.length) {
+        message.incomplete_tool_calls = message.tool_calls
+        delete message.tool_calls
+      }
       if (!toolsEnabled) delete message.tool_calls
-      this.context.addMessage(message)
       const calls = this.executor.parse(message)
+      this.context.addMessage(message)
+      await this.options.checkpoint?.(this.context, 'model')
+      if (incomplete && (message.content.trim() || incompleteCalls)) {
+        return { status: 'incomplete', text: message.content, ...(message.termination ? { termination: message.termination } : {}) }
+      }
       if (!calls.length || !toolsEnabled) {
         if (message.content.trim()) {
           return {
@@ -110,6 +123,7 @@ export class Agent {
       const preflight = await this.executor.preflightAll(calls, toolSignal)
       if (preflight) {
         this.appendResults(preflight.results)
+        await this.options.checkpoint?.(this.context, 'tool')
         if (preflight.paused) {
           this.context.emit('agent.paused', 'runtime', {})
           return { status: 'paused', text: '' }
@@ -117,14 +131,20 @@ export class Agent {
         if (this.applyNoProgress(calls, preflight.results) === 'halt') toolsEnabled = false
         continue
       }
+      let recording = Promise.resolve()
       const results = await this.executor.executeAll(calls, toolSignal, (call, content) => {
         this.context.emit('tool.progress', 'tool', {
           tool_call_id: call.id,
           name: call.function.name,
           content
         })
+      }, result => {
+        recording = recording.then(async () => {
+          this.appendResults([result])
+          await this.options.checkpoint?.(this.context, 'tool')
+        })
+        return recording
       })
-      this.appendResults(results)
       if (this.applyNoProgress(calls, results) === 'halt') toolsEnabled = false
     }
     throw new Error(`Agent exceeded maxSteps=${maxSteps}.`)
@@ -165,7 +185,7 @@ export class Agent {
         is_error: result.isError,
         elapsed_ms: result.elapsedMs
       })
-      this.context.addMessage({ role: 'tool', tool_call_id: result.toolCallId, content: result.content })
+      this.context.addMessage({ role: 'tool', tool_call_id: result.toolCallId, content: result.content, is_error: result.isError })
     }
   }
 
@@ -179,7 +199,9 @@ export class Agent {
       message_count: this.context.messages.length,
       tool_names: toolsEnabled ? this.tools.map(tool => tool.name) : []
     })
-    const message = await this.options.model.complete({
+    let message: AssistantMessage
+    try {
+    message = await this.options.model.complete({
       messages: this.context.messages,
       ...(schemas.length ? { tools: schemas } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
@@ -189,6 +211,15 @@ export class Agent {
       },
       onReasoningDelta: text => this.context.emit('model.reasoning.delta', 'model', { content: text })
     })
+    } catch (error) {
+      if (error instanceof ModelStreamError) {
+        this.context.recordUsage(error.partial.usage)
+        this.context.addMessage(error.partial)
+        await this.options.checkpoint?.(this.context, 'model')
+      }
+      options.signal?.throwIfAborted()
+      throw error
+    }
     this.context.recordUsage(message.usage)
     this.context.observe('model.response.payload', 'model', { message })
     this.context.emit('model.response', 'model', {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline'
+import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 import type { AgentEvent } from 'friday-agent-core'
@@ -38,6 +39,7 @@ import {
   sessionChoices,
   sessionExists,
   sessionHistory,
+  sessionMessagePage,
   sessionTree
 } from './session.js'
 import { thinkingOptions } from './thinking.js'
@@ -51,6 +53,8 @@ import { imageUrls, prepareLocalAttachments } from './attachments.js'
 import { resetFriday } from './reset.js'
 import { ImageInputRejectedError } from './model-errors.js'
 import type { RunBudgetSpec } from './budget.js'
+import { trustPlugin } from './plugins.js'
+import { MAX_RPC_BYTES, PROTOCOL_VERSION, RpcError, validateRpcRequest } from './rpc.js'
 import {
   loadUserProfile,
   loadWebSearchSettings,
@@ -105,7 +109,16 @@ export class Gateway {
     let requestSession: FridaySession | undefined
     let requestFinalized = false
     try {
+      validateRpcRequest(request)
       if (method === 'session.info') this.ok(id, this.sessionInfo())
+      else if (method === 'session.list') {
+        const offset = Number(params.offset ?? 0)
+        const limit = Math.min(200, Number(params.limit ?? 50))
+        if (!limit) throw new RpcError(-32602, 'limit must be positive.')
+        const choices = await sessionChoices(this.workspace)
+        this.ok(id, { choices: choices.slice(offset, offset + limit), ...(offset + limit < choices.length ? { next_offset: offset + limit } : {}) })
+      }
+      else if (method === 'session.messages') this.ok(id, { messages: await sessionMessagePage(this.workspace, String(params.id || this.session.sessionId), Number(params.offset ?? 0), Number(params.limit ?? 100)) })
       else if (method === 'session.current') this.ok(id, { info: this.sessionInfo(), history: sessionHistory(this.session) })
       else if (method === 'session.resume_choices') this.ok(id, { choices: await this.resumeChoices() })
       else if (method === 'session.tree') this.ok(id, await sessionTree(this.workspace, String(params.id || this.session.sessionId)))
@@ -162,13 +175,21 @@ export class Gateway {
           const target = known.find(plugin => String(plugin.name).toLowerCase() === name.toLowerCase())
           if (!target) throw new Error(`Unknown plugin: ${name}`)
           if (target.required === true && !enabled) throw new Error(`Plugin '${name}' is required and cannot be disabled.`)
+          if (enabled && target.trusted === false) {
+            if (params.trust_digest !== target.digest || typeof params.trust_digest !== 'string') throw new Error('Review and explicitly trust the project plugin before enabling it.')
+            await trustPlugin(this.workspace, name, params.trust_digest)
+          }
           await setPluginEnabled(this.workspace, name, enabled)
-          await this.session.reloadPlugins()
+          for (const session of this.sessions.values()) await session.reloadPlugins()
           return { plugins: this.session.info().plugins, info: this.sessionInfo() }
         }, 'Stop running requests before changing plugins.')
         this.ok(id, result)
       }
       else if (method === 'skill.list') this.ok(id, { skills: discoverSkills(this.workspace) })
+      else if (method === 'plugin.reload') this.ok(id, await this.runGlobal(async () => {
+        for (const session of this.sessions.values()) await session.reloadPlugins()
+        return { plugins: this.session.info().plugins, info: this.sessionInfo() }
+      }))
       else if (method === 'skill.get') this.ok(id, skillDetail(this.workspace, String(params.path || '')))
       else if (method === 'artifact.get') this.ok(id, await artifactDetail(this.workspace, String(params.path || '')))
       else if (method === 'attachment.prepare') this.ok(id, await prepareLocalAttachments(params.attachments))
@@ -293,13 +314,14 @@ export class Gateway {
         const attachments = selected.attachments
         const budget = runBudget(params.run)
         const run = this.runSession(session, `/goal ${text}`, async () => {
+          session.context.beginRun()
           this.event('message.start', { text: `/goal ${text}`, session_id: session.sessionId })
           this.event('session.updated', { running: true, session_id: session.sessionId })
           try {
             const result = await session.goal(
               text,
               chunk => this.event('message.delta', { text: chunk, session_id: session.sessionId }),
-              { images, attachments, ...(budget ? { budget } : {}) }
+              { images, attachments, runId: session.context.runId, ...(budget ? { budget } : {}) }
             )
             this.emitTurn(session, result)
             this.titleSession(session)
@@ -388,13 +410,14 @@ export class Gateway {
         const attachments = selected.attachments
         const budget = runBudget(params.run)
         const run = this.runSession(session, text, async () => {
+          session.context.beginRun()
           this.event('message.start', { text, session_id: session.sessionId })
           this.event('session.updated', { running: true, session_id: session.sessionId })
           try {
             const result = await session.chat(
               text,
               chunk => this.event('message.delta', { text: chunk, session_id: session.sessionId }),
-              { images, attachments, ...(budget ? { budget } : {}) }
+              { images, attachments, runId: session.context.runId, ...(budget ? { budget } : {}) }
             )
             this.emitTurn(session, result)
             this.titleSession(session)
@@ -475,7 +498,7 @@ export class Gateway {
         jsonrpc: '2.0',
         id: id ?? null,
         error: {
-          code: imageRejection ? -32010 : -32000,
+          code: error instanceof RpcError ? error.code : imageRejection ? -32010 : -32000,
           message: error instanceof Error ? error.message : String(error),
           ...(imageRejection ? { data: { kind: imageRejection.kind, status: imageRejection.status } } : {})
         }
@@ -503,13 +526,15 @@ export class Gateway {
     type: Type,
     payload: GatewayPayload<Type>
   ): void {
-    this.send({ jsonrpc: '2.0', method: 'event', params: { type, payload } })
+    const sessionId = 'session_id' in payload ? String(payload.session_id) : undefined
+    const runId = sessionId ? this.sessions.get(sessionId)?.context.runId : undefined
+    this.send({ jsonrpc: '2.0', protocol_version: PROTOCOL_VERSION, method: 'event', params: { type, payload: { ...payload, ...(runId ? { run_id: runId } : {}) } } })
   }
 
   private emitTurn(session: FridaySession, result: {
     text: string
     metrics: MessageMetrics
-    status: 'done' | 'paused'
+    status: 'done' | 'paused' | 'incomplete'
     stop_reason?: string
     termination?: ModelTermination
     verification?: VerificationResult
@@ -600,13 +625,14 @@ export class Gateway {
     if (!pending.length) return
     const text = pending.join('\n')
     void this.runSession(session, text, async () => {
+      session.context.beginRun()
       this.event('message.start', { text, session_id: session.sessionId })
       this.event('session.updated', { running: true, session_id: session.sessionId })
       try {
         const result = await session.chat(
           text,
           chunk => this.event('message.delta', { text: chunk, session_id: session.sessionId }),
-          {}
+          { runId: session.context.runId }
         )
         this.emitTurn(session, result)
         this.titleSession(session)
@@ -1042,6 +1068,7 @@ export async function runGateway(): Promise<void> {
     for await (const line of input) {
       if (!line.trim()) continue
       try {
+        if (Buffer.byteLength(line) > MAX_RPC_BYTES) throw new RpcError(-32600, 'Request exceeds the 32 MiB limit.')
         const value: unknown = JSON.parse(line.replace(/^\uFEFF/, ''))
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('expected an object')
         void gateway.handle(value as Request)
@@ -1054,6 +1081,12 @@ export async function runGateway(): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node resolves module URLs through symlinks, including macOS temporary paths.
+// Compiled sidecars may use virtual paths, so retain the original on lookup failure.
+let entryPath = process.argv[1]
+if (entryPath) {
+  try { entryPath = realpathSync(entryPath) } catch {}
+}
+if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
   await runGateway()
 }

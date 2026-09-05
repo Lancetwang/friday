@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
-  Agent, RunContext, type AgentEvent, type Message, type ModelTermination, type Tool, type ToolCall, type Usage
+  Agent, RunContext, type ChatModel, type AgentEvent, type Message, type ModelTermination, type Tool, type ToolCall, type Usage
 } from 'friday-agent-core'
 import type { HistoryItem, ResumeChoice } from 'friday-agent-protocol'
 
@@ -39,6 +39,9 @@ import {
 import { buildInstructions, promptTemplate } from './prompts.js'
 import {
   assembleCompactor,
+  activatePlugins,
+  builtinPlugin,
+  disposePlugins,
   assembleMemoryProvider,
   assembleTools,
   loadPlugins,
@@ -50,7 +53,7 @@ import {
   type RegisteredMemoryProvider
 } from './plugins.js'
 import { builtinPlugins, ManagedProcessRegistry, runShell, toolSpillDir } from './tools.js'
-import { writeJsonAtomic } from './storage.js'
+import { acquireStateLock, withStateLock, writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
 import { modelFor } from './model.js'
 import { presentImageInputError } from './model-errors.js'
@@ -65,10 +68,27 @@ import {
   type ProgressState
 } from './progress.js'
 import { verifyGoal, type VerificationResult } from './verification.js'
-import { deleteSessionTraces, writeTrace } from './trace.js'
+import { deleteSessionTraces, writeTrace, type TraceRetention } from './trace.js'
 import { attachmentPrompt, type LocalAttachment } from './attachments.js'
 import { localTimestamp, zonedTimestamp } from './time.js'
 import { budgetIsFinishing, RunBudget, type RunBudgetSpec } from './budget.js'
+import { ResourceBudget, withModelTimeouts, type ResourceLimits, type ResourceState } from './resources.js'
+import { withModelRetries } from './model.js'
+import type { ExecutionBackend, FridayPlugin } from './plugin-api.js'
+import { collectMessageObjects, readMessagePage, readRecord, recordSummary, writeRecord } from './records.js'
+import { dockerExecution } from './execution.js'
+
+/** Host configuration is independent from model/tool transport in Core. */
+export type SessionOptions = {
+  traceRetention?: TraceRetention
+  config?: ModelConfig
+  modelFactory?: (config: ModelConfig, thinking: string, outputLimit: number) => ChatModel
+  plugins?: readonly FridayPlugin[]
+  builtinCapabilities?: readonly string[]
+  execution?: ExecutionBackend
+  verifierConfig?: ModelConfig
+  resources?: ResourceLimits
+}
 
 export type TurnMetrics = {
   elapsed_ms: number
@@ -88,7 +108,7 @@ export type TurnMetrics = {
 export type TurnResult = {
   text: string
   metrics: TurnMetrics
-  status: 'done' | 'paused'
+  status: 'done' | 'paused' | 'incomplete'
   artifacts?: ArtifactInfo[]
   stop_reason?: string
   termination?: ModelTermination
@@ -108,7 +128,8 @@ export type GoalResult = TurnResult & {
 
 type AttemptVerification = VerificationResult & { attempt: number; stop_reason?: string }
 
-type SessionRunOptions = {
+export type SessionRunOptions = {
+  runId?: string
   input?: string
   mode?: 'normal' | 'goal'
   internal?: boolean
@@ -156,9 +177,17 @@ export class FridaySession {
   private memoryProvider: RegisteredMemoryProvider | undefined
   private compactor: RegisteredCompactor | undefined
   private activeBudget: RunBudget | undefined
+  private execution: Record<string, unknown> = { status: 'idle' }
+  private persistBoundary: (() => Promise<void>) | undefined
+  private pluginLifetime = new AbortController()
+  private reloading = false
+  private revision = 0
+  private releaseMutation: (() => Promise<void>) | undefined
+  private resources: ResourceBudget | undefined
+  private pluginPolicy = ''
   private readonly processes = new ManagedProcessRegistry()
 
-  private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext, external: LoadedPlugin[]) {
+  private constructor(workspace: string, sessionId: string, config: ModelConfig, context: RunContext, private readonly options: SessionOptions) {
     this.workspace = resolveWorkspace(workspace)
     this.sessionId = sessionId
     this.config = config
@@ -166,24 +195,27 @@ export class FridaySession {
     this.context = context
     this.plugins = []
     this.tools = []
-    this.registerPlugins(external)
     if (!context.messages.some(message => message.role === 'system')) {
       context.addMessage({ role: 'system', content: this.instructions() })
     }
-    context.onEvent = event => this.onEvent?.(event)
+    context.onEvent = event => {
+      if (event.type === 'tool.call') this.resources?.tool()
+      this.onEvent?.(event)
+    }
     context.onObservation = event => {
       observeContextUsage(context, event)
       // FRIDAY_TRACE_PAYLOADS=1 persists the exact request/response payloads
       // with the turn's trace (redacted, but never clipped), so any step's
       // precise prompt can be reconstructed later. Off by default: size.
       if (process.env.FRIDAY_TRACE_PAYLOADS === '1' && event.type.endsWith('.payload')) {
-        this.payloadEvents.push(event)
+        this.payloadEvents.push(structuredClone(event))
       }
     }
   }
 
   /** One registry supplies the Harness's narrow extension seams. */
   private registerPlugins(external: LoadedPlugin[]): void {
+    this.pluginPolicy = [...disabledPlugins(this.workspace)].sort().join(',')
     this.plugins = markDisabled([
       ...builtinPlugins(this.workspace, {
         sessionId: this.sessionId,
@@ -194,10 +226,11 @@ export class FridaySession {
         readPaths: () => [toolSpillDir(this.workspace, this.sessionId), ...this.readAllow],
         reviewCommand: (command, risk, signal) => this.reviewShell(command, risk, signal),
         processes: this.processes
-      }),
+        , ...(this.options.execution ? { execution: this.options.execution } : {})
+      }).filter(plugin => !this.options.builtinCapabilities || this.options.builtinCapabilities.includes(plugin.name)),
       ...external
     ], disabledPlugins(this.workspace))
-    this.tools = assembleTools(this.plugins, { workspace: this.workspace })
+    this.tools = assembleTools(this.plugins, { workspace: this.workspace, sessionId: this.sessionId, signal: this.pluginLifetime.signal })
     this.memoryProvider = assembleMemoryProvider(this.plugins)
     this.compactor = assembleCompactor(this.plugins)
   }
@@ -221,7 +254,7 @@ export class FridaySession {
       try {
         const options = thinkingOptions(this.config.provider, this.config.model)
         const effort = ['off', 'none', 'minimal', 'low'].find(value => options.includes(value)) ?? this.thinking
-        const response = await modelFor(this.config, effort, 60).complete({
+        const response = await this.createModel(this.config, effort, 60).complete({
           messages: [
             {
               role: 'system',
@@ -245,21 +278,45 @@ export class FridaySession {
 
   /** Re-read the disabled list and plugin directories, then rebuild the agent. */
   async reloadPlugins(): Promise<void> {
-    if (this.abort) throw new Error('Stop the running request before changing plugins.')
-    this.registerPlugins(await loadPlugins(this.workspace))
-    this.refreshInstructions()
-    this.agent = undefined
+    if (this.abort || this.reloading) throw new Error('Plugins can be changed at an idle execution boundary.')
+    this.reloading = true
+    const lifetime = new AbortController()
+    const previous = this.plugins
+    try {
+      const next = markDisabled([...(this.options.plugins ?? []).map(builtinPlugin), ...await loadPlugins(this.workspace)], disabledPlugins(this.workspace))
+      await activatePlugins(next, { workspace: this.workspace, sessionId: this.sessionId, signal: lifetime.signal })
+      if (next.some(plugin => !plugin.disabled && plugin.errors.length && previous.some(old => old.name === plugin.name && old.module && !old.disabled) && plugin.trusted !== false)) {
+        lifetime.abort()
+        await disposePlugins(next)
+        throw new Error('Plugin replacement failed to load or activate; the previous registry remains active.')
+      }
+      const oldLifetime = this.pluginLifetime
+      this.pluginLifetime = lifetime
+      this.registerPlugins(next)
+      this.refreshInstructions()
+      this.agent = undefined
+      oldLifetime.abort()
+      await disposePlugins(previous)
+    } finally { this.reloading = false }
   }
 
-  static async create(workspace = process.cwd(), sessionId = newSessionId()): Promise<FridaySession> {
+  static async create(workspace = process.cwd(), sessionId = newSessionId(), options: SessionOptions = {}): Promise<FridaySession> {
     if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) throw new Error(`Invalid session id: ${sessionId}`)
     const root = resolveWorkspace(workspace)
-    const config = loadModelConfig(root)
+    options = { ...options,
+      ...(!options.execution && process.env.FRIDAY_EXECUTION_IMAGE ? { execution: dockerExecution({ image: process.env.FRIDAY_EXECUTION_IMAGE }) } : {}),
+      ...(!options.verifierConfig && process.env.FRIDAY_VERIFIER_PROFILE ? { verifierConfig: loadModelConfig(root, process.env.FRIDAY_VERIFIER_PROFILE) } : {}) }
+    const config = options.config ?? loadModelConfig(root)
     const context = new RunContext()
     const snapshot = await readSnapshot(root, sessionId)
-    const plugins = await loadPlugins(root)
-    const session = new FridaySession(root, sessionId, config, context, plugins)
+    const plugins = markDisabled([...(options.plugins ?? []).map(builtinPlugin), ...await loadPlugins(root)], disabledPlugins(root))
+    const session = new FridaySession(root, sessionId, config, context, options)
+    await activatePlugins(plugins, { workspace: root, sessionId, signal: session.pluginLifetime.signal })
+    session.registerPlugins(plugins)
+    session.refreshInstructions()
     if (snapshot) {
+      session.revision = snapshot.revision ?? 0
+      if (snapshot.resources) session.resources = new ResourceBudget({}, undefined, snapshot.resources)
       for (const message of conversationBody(snapshot.messages)) context.addMessage(message)
       session.archived.push(...snapshot.archived)
       session.turns = snapshot.turns
@@ -267,6 +324,17 @@ export class FridaySession {
       session.title = typeof snapshot.title === 'string' ? snapshot.title : ''
       restoreProgress(context, snapshot.progress)
       session.refreshReadPaths()
+      const recover = snapshot.execution?.status === 'running'
+        ? await acquireStateLock(join(projectStateDir(root), `execution-${sessionId}`), false).catch(() => undefined)
+        : undefined
+      if (recover) {
+        try {
+        repairDanglingToolCalls(context.messages, 'interrupted')
+        finishProgress(context, 'blocked')
+        session.execution = { ...snapshot.execution, status: 'interrupted', recovery: 'Inspect workspace effects before retrying unfinished tools.' }
+        await session.save('', '', turnMetrics(snapshot.lastUsage) ?? emptyMetrics())
+        } finally { await recover() }
+      }
     }
     session.pending = await pendingApproval(root, sessionId)
     if (session.pending.pending === true) session.pendingMetrics = turnMetrics(snapshot?.lastUsage)
@@ -274,9 +342,13 @@ export class FridaySession {
   }
 
   async chat(text: string, onDelta?: (text: string) => void, options: SessionRunOptions = {}): Promise<TurnResult> {
-    if (this.abort) throw new Error('This session already has a request in progress.')
+    if (this.abort || this.reloading) throw new Error('This session already has a request in progress.')
     if (this.pending.pending === true) throw new Error('Resolve the pending approval before sending another message.')
+    if (this.pluginPolicy !== [...disabledPlugins(this.workspace)].sort().join(',')) await this.reloadPlugins()
     if (!options.internal) this.cancelRequested = false
+    if (!options.internal) this.resources = new ResourceBudget({ tokens: this.config.runTokenBudget ?? 40_000_000, ...this.options.resources }, options.budget)
+    this.agent = undefined
+    if (this.resources) options.budget ??= this.resources.state.deadline
     this.removeRuntimeMessages()
     this.context.messages.splice(0, this.context.messages.length, ...this.context.messages.filter(message => !message.friday_memory_recall))
     const mode = options.mode ?? 'normal'
@@ -287,6 +359,7 @@ export class FridaySession {
     const user = options.internal ? '' : display
     try {
       return await this.runTurn({
+        ...(options.runId ? { runId: options.runId } : {}),
         user,
         trace: mode,
         deferDone: options.deferCompletion === true,
@@ -304,6 +377,7 @@ export class FridaySession {
             workspace: session.workspace,
             text,
             sessionId: session.sessionId
+            , ...(session.abort ? { signal: session.abort.signal } : {})
           })
           const recalled = prepared?.recall || ''
           session.refreshInstructions()
@@ -337,11 +411,12 @@ export class FridaySession {
   async goal(
     goal: string,
     onDelta?: (text: string) => void,
-    options: { images?: string[]; attachments?: LocalAttachment[]; budget?: RunBudgetSpec } = {}
+    options: { images?: string[]; attachments?: LocalAttachment[]; budget?: RunBudgetSpec; runId?: string } = {}
   ): Promise<GoalResult> {
     const objective = goal.trim()
     if (!objective) throw new Error('Goal cannot be empty.')
     const turn = await this.chat(objective, onDelta, {
+      ...(options.runId ? { runId: options.runId } : {}),
       input: goalAttemptPrompt(objective), mode: 'goal', deferCompletion: true,
       ...(options.images ? { images: options.images } : {}),
       ...(options.attachments ? { attachments: options.attachments } : {}),
@@ -413,6 +488,8 @@ export class FridaySession {
   async close(): Promise<void> {
     if (this.abort) this.cancel()
     await this.processes.close()
+    this.pluginLifetime.abort()
+    await disposePlugins(this.plugins)
   }
 
   transcript(): Message[] {
@@ -445,7 +522,7 @@ export class FridaySession {
       tools: this.tools,
       config: this.config,
       settings: loadCompactionSettings(this.workspace),
-      model: modelFor(this.config, this.thinking),
+      model: this.createModel(this.config, this.thinking),
       archive: messages => this.archived.push(...structuredClone(messages)),
       force: true
     })
@@ -454,7 +531,7 @@ export class FridaySession {
   }
 
   async consolidateMemory(days: number): Promise<Record<string, unknown>> {
-    if (this.abort) throw new Error('This session already has a request in progress.')
+    if (this.abort || this.reloading) throw new Error('This session already has a request in progress.')
     if (!this.memoryProvider) throw new Error('Memory plugin is disabled.')
     if (!this.memoryProvider.memory.consolidate) {
       throw new Error(`Memory plugin '${this.memoryProvider.name}' does not support consolidation.`)
@@ -468,7 +545,7 @@ export class FridaySession {
         signal,
         review: async payload => {
           if (!this.config.apiKey) throw new Error(`Model '${this.config.profileName}' has no API key. Configure it in Friday Settings.`)
-          const response = await modelFor(this.config, this.thinking, 4_000).complete({
+          const response = await this.createModel(this.config, this.thinking, 4_000).complete({
             messages: [
               {
                 role: 'system',
@@ -543,7 +620,11 @@ export class FridaySession {
     let approval: Approval | undefined
     let checkpointId = ''
     let result: Record<string, unknown>
+    const budget = this.resources ? new RunBudget(this.resources.state.deadline, this.abort) : undefined
+    let release: (() => Promise<void>) | undefined
     try {
+      this.resources?.check()
+      release = await acquireStateLock(join(projectStateDir(this.workspace), 'workspace-execution'), false)
       approval = await claimApproval(this.workspace, this.sessionId)
       if (!approval) {
         this.pending = { pending: false }
@@ -557,17 +638,24 @@ export class FridaySession {
         tool_call_id: approval!.tool_call_id || '', name: 'Bash', content
       })
       const spillPath = join(toolSpillDir(this.workspace, this.sessionId), `${approval.tool_call_id || approval.id}.log`)
-      result = approval.background
+      if (this.options.execution && approval.background) throw new Error('This execution backend does not support background approvals.')
+      result = this.options.execution ? await this.options.execution.execute({ workspace: this.workspace, command: approval.command, timeoutSeconds: approval.timeout_seconds,
+        readOnly: false, signal: this.abort.signal, onProgress: progress, spillPath }) : approval.background
         ? await this.processes.start(this.workspace, approval.command, spillPath, this.abort.signal)
         : await this.processes.track(
           runShell(this.workspace, approval.command, approval.timeout_seconds, this.abort.signal, progress, spillPath)
         )
       progress(JSON.stringify(result))
+      this.replacePendingTool(approval, { approved: true, approval, result })
+      this.pending = { pending: false }
+      await this.save('', '', this.pendingMetrics ?? emptyMetrics())
     } catch (error) {
       if (approval) await this.cancelApprovalDecision(approval, checkpointId)
       throw error
     } finally {
       this.abort = undefined
+      budget?.dispose()
+      await release?.()
     }
     const outcome = { approved: true, approval, result }
     this.replacePendingTool(approval, outcome)
@@ -650,6 +738,7 @@ export class FridaySession {
       thinking_supported: thinkingOptions(this.config.provider, this.config.model).length > 1,
       progress: this.progress(),
       running: !!this.abort,
+      execution_backend: this.options.execution?.name ?? 'native',
       tools: this.tools.map(tool => tool.name),
       plugins: pluginInfo(this.plugins),
       memory: { provider: this.memoryProvider?.name || '' },
@@ -660,9 +749,14 @@ export class FridaySession {
 
   private async save(user: string, assistant: string, metrics: TurnMetrics): Promise<void> {
     const path = join(projectStateDir(this.workspace), 'sessions', `${this.sessionId}.json`)
+    await withStateLock(path, () => this.saveUnlocked(path, user, assistant, metrics))
+  }
+
+  private async saveUnlocked(path: string, user: string, assistant: string, metrics: TurnMetrics): Promise<void> {
     await mkdir(join(projectStateDir(this.workspace), 'sessions'), { recursive: true })
     const now = localTimestamp()
     const existing = await readObject(path)
+    if (Number(existing.revision ?? 0) !== this.revision) throw new Error('Session changed in another process. Reload before continuing.')
     const messages = persistedMessages(this.context.messages)
     const archived = persistedMessages(this.archived)
     const transcript = [
@@ -673,7 +767,7 @@ export class FridaySession {
     const latestAssistant = [...transcript].reverse().find(message =>
       message.role === 'assistant' && !message.friday_goal_draft && !message.friday_progress && messageText(message.content)
     )
-    await writeJsonAtomic(path, {
+    await writeRecord(this.workspace, path, {
       ...existing,
       // A manual rename on disk always outranks the generated name.
       ...(!existing.title && this.title ? { title: this.title } : {}),
@@ -690,8 +784,12 @@ export class FridaySession {
       progress: this.progress(),
       thinking_effort: this.thinking,
       last_usage: metrics.requests ? metrics : existing.last_usage || metrics,
+      execution: this.execution,
+      resources: this.resources?.state,
+      revision: this.revision + 1,
       ...legacySnapshotMetadata(transcript)
     })
+    this.revision += 1
   }
 
   /**
@@ -717,12 +815,19 @@ export class FridaySession {
     }
   }
 
+  private createModel(config: ModelConfig, thinking: string, outputLimit = config.maxOutputTokens): ChatModel {
+    if (!this.options.modelFactory) return modelFor(config, thinking, outputLimit, this.resources)
+    const model = withModelTimeouts(this.options.modelFactory(config, thinking, outputLimit), this.options.resources)
+    return withModelRetries(this.resources ? this.resources.wrap(model) : model)
+  }
+
   private ensureAgent(): Agent {
     if (this.agent) return this.agent
-    if (!this.config.apiKey) throw new Error(`Model '${this.config.profileName}' has no API key. Configure it in Friday Settings.`)
+    if (!this.config.apiKey && !this.options.modelFactory) throw new Error(`Model '${this.config.profileName}' has no API key. Configure it in Friday Settings.`)
     this.agent = new Agent({
-      model: modelFor(this.config, this.thinking),
+      model: this.createModel(this.config, this.thinking),
       tools: this.tools,
+      checkpoint: () => this.persistBoundary?.(),
       beforeStep: (_context, _step, signal) => {
         this.drainSteers()
         if (this.activeBudget?.finalizing) {
@@ -750,6 +855,7 @@ export class FridaySession {
       trace: goalMode ? 'goal-continuation' : 'continuation',
       deferDone: goalMode,
       saveOnError: true,
+      ...(this.resources ? { budget: this.resources.state.deadline } : {}),
       async prepare(session) {
         session.activeCheckpoint = await session.beginCheckpoint('', true)
         resumeProgress(session.context)
@@ -764,7 +870,7 @@ export class FridaySession {
     before: Usage,
     started: number,
     pendingMetrics: TurnMetrics | undefined,
-    stopReason: 'cancelled' | 'deadline'
+    stopReason: 'cancelled' | 'deadline' | 'error'
   ): Promise<void> {
     try {
       repairDanglingToolCalls(this.context.messages, stopReason)
@@ -774,24 +880,27 @@ export class FridaySession {
       this.pending = { pending: false }
       this.pendingMetrics = undefined
       finishProgress(this.context, 'blocked')
+      this.execution = { ...this.execution, status: stopReason }
       if (this.activeCheckpoint) await finishCheckpoint(this.workspace, this.activeCheckpoint, false).catch(() => {})
       this.attachTurnMetadata(metrics)
       await this.save(user, '', metrics)
       await this.recordTrace(trace, user, '', stopReason, metrics)
     } catch {
-      // Salvage is best-effort; it must never mask the cancellation itself.
+      // Preserve the original failure, but make persistence failures visible.
+      process.stderr.write('Friday: could not persist interrupted run. Inspect the last durable execution boundary.\n')
     }
   }
 
   /**
    * The one turn frame. Every way a turn runs - a fresh user message or a
    * continuation after an approval - shares this lifecycle: snapshot, run,
-   * measure, persist; roll everything back on failure; and always hand the
+   * measure and persist completed work even on failure; always hand the
    * turn's events to `lastEvents` so goal verification examines the work
    * that actually just happened.
    */
   private async runTurn(
     options: {
+      runId?: string
       user: string
       trace: string
       deferDone: boolean
@@ -812,13 +921,18 @@ export class FridaySession {
       turns: this.turns,
       thinkingEffort: this.thinking
     }
-    const readAllow = new Set(this.readAllow)
     const started = performance.now()
     this.abort = new AbortController()
     const budget = options.budget ? new RunBudget(options.budget, this.abort) : undefined
     this.activeBudget = budget
+    this.execution = { id: options.runId ?? randomUUID(), status: 'running', started: localTimestamp() }
+    this.context.beginRun(String(this.execution.id))
+    this.persistBoundary = () => this.save(options.user, '', this.measureTurn(before, started))
+    let releaseWorkspace: (() => Promise<void>) | undefined
     try {
+      releaseWorkspace = await acquireStateLock(join(projectStateDir(this.workspace), `execution-${this.sessionId}`), false)
       await options.prepare(this, snapshot)
+      await this.persistBoundary()
       const result = await this.ensureAgent().resume({
         signal: this.abort.signal,
         ...(budget ? { toolSignal: budget.toolSignal } : {}),
@@ -827,7 +941,7 @@ export class FridaySession {
       this.abort.signal.throwIfAborted()
       const current = this.measureTurn(before, started)
       const metrics = pendingMetrics ? addMetrics(pendingMetrics, current) : current
-      const stopReason = budget?.finalizing ? 'deadline' : ''
+      const stopReason = budget?.finalizing ? 'deadline' : result.status === 'incomplete' ? 'incomplete' : ''
       this.pending = result.status === 'paused' ? await pendingApproval(this.workspace, this.sessionId) : { pending: false }
       this.pendingMetrics = result.status === 'paused' ? metrics : undefined
       if (result.status === 'paused') finishProgress(this.context, 'waiting')
@@ -840,6 +954,7 @@ export class FridaySession {
         : []
       this.attachArtifacts(artifacts)
       this.attachTurnMetadata(metrics)
+      this.execution = { ...this.execution, status: result.status, termination: result.termination }
       await this.save(options.user, result.text, metrics)
       await this.recordTrace(options.trace, options.user, result.text, stopReason || result.status, metrics)
       this.abort.signal.throwIfAborted()
@@ -853,36 +968,31 @@ export class FridaySession {
       }
     } catch (error) {
       this.steers.length = 0
+      if (!releaseWorkspace) throw error
       if (isCancellation(error)) {
-        // An interrupt is not a failure: keep the user message and every
-        // completed tool exchange, repair the tail so the message array
-        // stays API-valid, and account for what was actually spent. Only
-        // real errors roll the turn back as if it never happened.
+        // Keep completed exchanges and repair an interrupted tail without
+        // guessing whether an unfinished tool already produced side effects.
         await this.salvageCancelledTurn(
           options.user, options.trace, before, started, pendingMetrics, cancellationReason(error)
         )
         throw error
       }
-      this.context.messages.splice(0, this.context.messages.length, ...snapshot.messages)
-      this.archived.splice(0, this.archived.length, ...snapshot.archived)
-      this.readAllow.clear()
-      for (const path of readAllow) this.readAllow.add(path)
-      Object.assign(this.context.usage, before)
-      this.turns = snapshot.turns
-      this.pendingMetrics = undefined
-      restoreProgress(this.context, snapshot.progress, true)
-      if (this.activeCheckpoint) await finishCheckpoint(this.workspace, this.activeCheckpoint, false).catch(() => {})
-      if (options.saveOnError) await this.save('', '', emptyMetrics())
+      this.context.emit('agent.error', 'runtime', { message: error instanceof Error ? error.message : String(error) })
+      await this.salvageCancelledTurn(options.user, options.trace, before, started, pendingMetrics, 'error')
       throw error
     } finally {
       budget?.dispose()
       this.activeBudget = undefined
+      this.persistBoundary = undefined
       this.abort = undefined
       this.checkpointSeed = undefined
       this.activeCheckpoint = ''
       this.lastEvents = structuredClone(this.context.events)
       this.context.events.length = 0
       this.payloadEvents.length = 0
+      await releaseWorkspace?.()
+      await this.releaseMutation?.()
+      this.releaseMutation = undefined
     }
   }
 
@@ -893,6 +1003,7 @@ export class FridaySession {
     onDelta?: (text: string) => void,
     budget?: RunBudgetSpec
   ): Promise<GoalResult> {
+    budget ??= this.resources?.state.deadline
     let answer = initial.text
     let metrics = initial.metrics
     const artifacts = [...initial.artifacts ?? []]
@@ -980,7 +1091,9 @@ export class FridaySession {
     this.abort = new AbortController()
     const activeBudget = budget ? new RunBudget(budget, this.abort) : undefined
     this.activeBudget = activeBudget
+    const release = await acquireStateLock(join(projectStateDir(this.workspace), 'workspace-execution'), false).catch(() => undefined)
     try {
+      if (!release) throw new Error('Workspace is being changed by another run. Retry verification when it is idle.')
       const history = this.transcript().flatMap(message => {
         if (message.role !== 'user' || message.friday_internal) return []
         const display = typeof message.friday_display_text === 'string' ? message.friday_display_text : messageText(message.content)
@@ -988,11 +1101,14 @@ export class FridaySession {
       }).slice(0, -1)
       const result = await verifyGoal({
         workspace: this.workspace,
-        config: this.config,
+        config: this.options.verifierConfig ?? this.config,
+        model: this.createModel(this.options.verifierConfig ?? this.config, this.options.verifierConfig ? defaultThinking(this.options.verifierConfig.provider, this.options.verifierConfig.model) : this.thinking, 4_000),
+        ...(this.options.execution ? { execution: this.options.execution } : {}),
         thinking: this.thinking,
         goal,
         events: this.lastEvents,
         history,
+        onEvent: event => this.context.emit('verification.event', 'verification', { attempt, event }),
         signal: this.abort.signal,
         ...(activeBudget ? { toolSignal: activeBudget.toolSignal } : {})
       })
@@ -1011,6 +1127,7 @@ export class FridaySession {
       activeBudget?.dispose()
       this.activeBudget = undefined
       this.abort = undefined
+      await release?.()
     }
   }
 
@@ -1097,6 +1214,7 @@ export class FridaySession {
         user,
         assistant,
         status,
+        ...(this.options.traceRetention ? { retention: this.options.traceRetention } : {}),
         metrics,
         progress: this.progress(),
         events: payloads.length
@@ -1121,6 +1239,10 @@ export class FridaySession {
     })
     if (!message) throw new Error('Pending approval no longer matches this conversation.')
     message.content = JSON.stringify(value)
+    if (value && typeof value === 'object') {
+      const outcome = value as { approved?: boolean; result?: { is_error?: boolean } }
+      message.is_error = outcome.approved === false || outcome.result?.is_error === true
+    }
   }
 
   private instructions(): string {
@@ -1182,7 +1304,7 @@ export class FridaySession {
         tools: this.tools,
         config: this.config,
         settings,
-        model: modelFor(this.config, this.thinking),
+        model: this.createModel(this.config, this.thinking),
         archive: messages => this.archived.push(...structuredClone(messages)),
         ...(signal ? { signal } : {})
       })
@@ -1216,7 +1338,7 @@ export class FridaySession {
     try {
       const options = thinkingOptions(this.config.provider, this.config.model)
       const effort = ['off', 'none', 'minimal', 'low'].find(value => options.includes(value)) ?? this.thinking
-      const response = await modelFor(this.config, effort, 600).complete({
+      const response = await this.createModel(this.config, effort, 600).complete({
         messages: [
           {
             role: 'system',
@@ -1256,6 +1378,7 @@ export class FridaySession {
   }
 
   private async ensureCheckpoint(): Promise<void> {
+    if (!this.releaseMutation) this.releaseMutation = await acquireStateLock(join(projectStateDir(this.workspace), 'workspace-execution'), false)
     if (this.activeCheckpoint) return
     const seed = this.checkpointSeed
     if (!seed) throw new Error('A mutating tool ran outside an active Friday turn.')
@@ -1273,6 +1396,9 @@ export class FridaySession {
 }
 
 type Snapshot = {
+  resources?: ResourceState
+  revision?: number
+  execution?: Record<string, unknown>
   archived: Message[]
   messages: Message[]
   progress: unknown
@@ -1398,11 +1524,13 @@ export async function renameSession(workspace: string, sessionId: string, value:
   if (!title) throw new Error('Session title cannot be empty.')
   if (title.length > 120) throw new Error('Session title cannot exceed 120 characters.')
   const path = sessionPath(workspace, sessionId)
-  const record = await readObject(path)
-  if (!record.session_id) throw new Error(`Session not found: ${sessionId}`)
-  const updated = { ...record, title, updated: now() }
-  await writeJsonAtomic(path, updated)
-  return updated
+  return withStateLock(path, async () => {
+    const record = await readObject(path)
+    if (!record.session_id) throw new Error(`Session not found: ${sessionId}`)
+    const updated = { ...record, title, updated: now() }
+    await writeJsonAtomic(path, updated, true)
+    return updated
+  })
 }
 
 export async function forkSession(
@@ -1411,7 +1539,7 @@ export async function forkSession(
   requestedIndex?: number,
   liveMessages?: Message[]
 ): Promise<Record<string, unknown>> {
-  const source = await readObject(sessionPath(workspace, sourceId))
+  const source = await readRecord(workspace, sessionPath(workspace, sourceId))
   if (!source.session_id) throw new Error(`Session not found: ${sourceId}`)
   const stored = Array.isArray(source.messages) ? source.messages.filter(isMessage) : []
   const archived = Array.isArray(source.archived_messages) ? source.archived_messages.filter(isMessage) : []
@@ -1451,7 +1579,7 @@ export async function forkSession(
     fork_source_text: sourceText,
     ...legacySnapshotMetadata(messages)
   }
-  await writeJsonAtomic(sessionPath(workspace, sessionId), snapshot)
+  await writeRecord(workspace, sessionPath(workspace, sessionId), snapshot)
   return snapshot
 }
 
@@ -1474,11 +1602,13 @@ export async function deleteSessionTree(workspace: string, sessionId: string, al
   }
   for (const id of [...deleted].reverse()) {
     await rm(sessionPath(workspace, id), { force: true })
+    await rm(join(projectStateDir(workspace), 'sessions', 'index', `${id}.json`), { force: true })
     await rm(join(projectStateDir(workspace), 'approvals', `${id}.json`), { force: true })
     await rm(join(projectStateDir(workspace), 'sessions', `${id}-tools`), { recursive: true, force: true })
   }
   await deleteSessionCheckpoints(workspace, deleted)
   await deleteSessionTraces(workspace, deleted)
+  await collectMessageObjects(workspace)
   return deleted
 }
 
@@ -1512,6 +1642,11 @@ export async function sessionExists(workspace: string, sessionId: string): Promi
   return !!(await readObject(sessionPath(workspace, sessionId))).session_id
 }
 
+export async function sessionMessagePage(workspace: string, sessionId: string, offset = 0, limit = 100): Promise<Message[]> {
+  const record = await readObject(sessionPath(workspace, sessionId))
+  return readMessagePage(workspace, record.messages ?? [], offset, Math.min(limit, 500))
+}
+
 async function sessionRecords(workspace: string): Promise<SessionRecord[]> {
   const directory = join(projectStateDir(resolve(workspace)), 'sessions')
   let names: string[]
@@ -1523,7 +1658,7 @@ async function sessionRecords(workspace: string): Promise<SessionRecord[]> {
   }
   const records = await Promise.all(names.filter(name => name.endsWith('.json')).map(async name => {
     try {
-      const value: unknown = JSON.parse(await readFile(join(directory, name), 'utf8'))
+      const value: unknown = await recordSummary(join(directory, name))
       return value && typeof value === 'object' && !Array.isArray(value) ? value as SessionRecord : undefined
     } catch {
       return undefined
@@ -1534,7 +1669,7 @@ async function sessionRecords(workspace: string): Promise<SessionRecord[]> {
 
 async function readSnapshot(workspace: string, sessionId: string): Promise<Snapshot | undefined> {
   try {
-    const value: unknown = JSON.parse(await readFile(join(projectStateDir(workspace), 'sessions', `${sessionId}.json`), 'utf8'))
+    const value: unknown = await readRecord(workspace, join(projectStateDir(workspace), 'sessions', `${sessionId}.json`))
     if (!value || typeof value !== 'object') return undefined
     const snapshot = value as Record<string, unknown>
     const messages = Array.isArray(snapshot.messages) ? snapshot.messages.filter(isMessage) : []
@@ -1542,6 +1677,9 @@ async function readSnapshot(workspace: string, sessionId: string): Promise<Snaps
     hydrateLegacySnapshot(snapshot, messages, archived)
     return {
       messages,
+      revision: Number(snapshot.revision ?? 0),
+      ...(snapshot.resources ? { resources: snapshot.resources as ResourceState } : {}),
+      ...(snapshot.execution && typeof snapshot.execution === 'object' ? { execution: snapshot.execution as Record<string, unknown> } : {}),
       archived,
       progress: snapshot.progress,
       thinkingEffort: snapshot.thinking_effort,
@@ -1779,7 +1917,7 @@ function parseJson(value: unknown): unknown {
  * Close each unanswered call with an explicit cancellation result so the kept
  * partial turn is a valid, honest conversation.
  */
-function repairDanglingToolCalls(messages: Message[], stopReason: 'cancelled' | 'deadline'): void {
+function repairDanglingToolCalls(messages: Message[], stopReason: 'cancelled' | 'deadline' | 'error' | 'interrupted'): void {
   const lastAssistant = messages.findLastIndex(message =>
     message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0)
   if (lastAssistant < 0) return
@@ -1791,11 +1929,13 @@ function repairDanglingToolCalls(messages: Message[], stopReason: 'cancelled' | 
     messages.push({
       role: 'tool',
       tool_call_id: call.id,
+      is_error: true,
       content: JSON.stringify({
         cancelled: true,
         message: stopReason === 'deadline'
           ? 'The run deadline was reached before this tool finished.'
-          : 'Interrupted by the user before this tool finished.'
+          : stopReason === 'cancelled' ? 'Interrupted by the user before this tool finished.'
+          : 'Execution stopped without a durable result. Effects may already exist: inspect the workspace before retrying.'
       })
     })
   }

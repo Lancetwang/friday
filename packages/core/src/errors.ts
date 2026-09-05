@@ -35,3 +35,14 @@ async function providerDetail(response: Response): Promise<string> {
   }
   return detail.slice(0, MAX_PROVIDER_DETAIL)
 }
+import type { AssistantMessage } from './types.js'
+
+/** Failed streams retain partial text for inspection, never executable calls. */
+export class ModelStreamError extends Error {
+  constructor(message: string, readonly partial: AssistantMessage) {
+    super(message)
+    this.name = 'ModelStreamError'
+    partial.termination = { reason: 'incomplete' }
+    delete partial.tool_calls
+  }
+}

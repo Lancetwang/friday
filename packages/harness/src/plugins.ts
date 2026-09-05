@@ -1,11 +1,13 @@
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import type { Tool } from 'friday-agent-core'
 import type { PluginInfo } from 'friday-agent-protocol'
 
-import { fridayHome } from './config.js'
+import { disabledPlugins, fridayHome, resolveWorkspace } from './config.js'
+import { withStateLock, writeJsonAtomic } from './storage.js'
 import type {
   ContextCompactor,
   FridayPlugin,
@@ -49,8 +51,8 @@ export type {
  *   }
  *
  * Plugins are local code executed with Friday's own privileges, exactly like
- * anything else on the user's machine; they are trusted by installation, not
- * sandboxed. The Goal-mode verifier assembles only from built-in plugins and
+ * anything else on the user's machine. User-directory installation is trusted;
+ * project entries require a manifest and explicit digest trust before import. The Goal-mode verifier assembles only from built-in plugins and
  * their declared read-only tools, so verification cannot be steered by the
  * code it is checking.
  */
@@ -62,6 +64,9 @@ type HostPlugin = FridayPlugin & {
 }
 
 export type LoadedPlugin = {
+  trusted?: boolean
+  digest?: string
+  dispose?: () => void | Promise<void>
   name: string
   version: string
   description: string
@@ -90,7 +95,7 @@ export function builtinPlugin(module: HostPlugin): LoadedPlugin {
 
 export function pluginRoots(workspace: string): Array<['project' | 'user', string]> {
   return [
-    ['project', join(resolve(workspace), '.friday', 'plugins')],
+    ['project', join(resolveWorkspace(workspace), '.friday', 'plugins')],
     ['user', join(fridayHome(), 'plugins')]
   ]
 }
@@ -102,7 +107,7 @@ export function pluginRoots(workspace: string): Array<['project' | 'user', strin
  * FRIDAY_DISABLE_PLUGINS=1 skips external plugins entirely (built-ins are
  * governed by the disabled-plugins list instead).
  */
-export async function loadPlugins(workspace: string): Promise<LoadedPlugin[]> {
+export async function loadPlugins(workspace: string, importModules = true): Promise<LoadedPlugin[]> {
   if (process.env.FRIDAY_DISABLE_PLUGINS === '1') return []
   const found = new Map<string, LoadedPlugin>()
   for (const [scope, root] of pluginRoots(workspace)) {
@@ -114,15 +119,18 @@ export async function loadPlugins(workspace: string): Promise<LoadedPlugin[]> {
     }
     for (const entry of entries) {
       const source = join(root, entry)
-      const loaded = await loadPlugin(source, scope)
+      const loaded = discoverPlugin(source, scope)
       const key = loaded.name.toLowerCase()
-      if (!found.has(key)) found.set(key, loaded)
+      if (found.has(key)) continue
+      found.set(key, loaded)
+      loaded.disabled = disabledPlugins(workspace).has(key)
+      if (importModules && !loaded.disabled && loaded.trusted && !loaded.errors.length) await loadPlugin(loaded)
     }
   }
   return [...found.values()].sort((left, right) => left.name.localeCompare(right.name))
 }
 
-async function loadPlugin(source: string, scope: 'project' | 'user'): Promise<LoadedPlugin> {
+function discoverPlugin(source: string, scope: 'project' | 'user'): LoadedPlugin {
   const fallbackName = source.split(/[\\/]/).pop()!.replace(/\.(mjs|js)$/, '')
   const entry: LoadedPlugin = {
     name: fallbackName,
@@ -136,14 +144,47 @@ async function loadPlugin(source: string, scope: 'project' | 'user'): Promise<Lo
     module: undefined
   }
   try {
-    // The mtime query defeats the ESM module cache so a fresh session sees
-    // edited plugin code without restarting the gateway process.
-    const stamp = statSync(source).mtimeMs
-    const imported: unknown = await import(`${pathToFileURL(source).href}?mtime=${stamp}`)
+    const manifestText = readFileSync(source.replace(/\.(mjs|js)$/, '.plugin.json'), 'utf8')
+    const manifest = JSON.parse(manifestText) as Record<string, unknown>
+    if (manifest.api_version !== 1 || typeof manifest.name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(manifest.name)) throw new Error('Plugin manifest requires api_version: 1 and a stable name.')
+    entry.name = manifest.name
+    entry.description = String(manifest.description ?? '')
+    entry.version = String(manifest.version ?? '')
+    entry.digest = createHash('sha256').update(manifestText).update(readFileSync(source)).digest('hex')
+    entry.trusted = scope === 'user' || readTrust()[source] === entry.digest
+    if (!entry.trusted) entry.errors.push('Project plugin requires explicit trust before its code can be imported.')
+  } catch (error) {
+    entry.trusted = false
+    entry.errors.push(`Discovery failed: ${error instanceof Error ? error.message : String(error)}. Add a .plugin.json manifest beside the module.`)
+  }
+  return entry
+}
+
+function readTrust(): Record<string, string> {
+  try { return JSON.parse(readFileSync(join(fridayHome(), 'plugin-trust.json'), 'utf8')) as Record<string, string> }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw error }
+}
+
+/** The caller must obtain explicit approval of this exact discovered entry digest. */
+export async function trustPlugin(workspace: string, name: string, digest: string): Promise<void> {
+  const entry = (await loadPlugins(workspace, false)).find(plugin => plugin.name === name)
+  if (!entry?.digest || entry.digest !== digest) throw new Error('Plugin changed since discovery. Review it again before trusting.')
+  const path = join(fridayHome(), 'plugin-trust.json')
+  await withStateLock(path, () => writeJsonAtomic(path, { ...readTrust(), [entry.source]: digest }, true))
+}
+
+async function loadPlugin(entry: LoadedPlugin): Promise<void> {
+  const { source } = entry
+  try {
+    // Content identity invalidates the entry cache without relying on mtime.
+    // Bundle transitive dependencies into the entry for hot updates.
+    const imported: unknown = await import(`${pathToFileURL(source).href}?digest=${entry.digest}`)
     const module = (imported as { default?: unknown }).default
     if (!module || typeof module !== 'object') throw new Error('default export must be a plugin object')
     const plugin = module as Partial<HostPlugin>
     if (typeof plugin.name !== 'string' || !plugin.name.trim()) throw new Error('plugin.name must be a non-empty string')
+    if (plugin.name !== entry.name) throw new Error('plugin.name must match its manifest identity.')
+    if (plugin.activate !== undefined && typeof plugin.activate !== 'function') throw new Error('plugin.activate must be a function')
     if (plugin.tools !== undefined && typeof plugin.tools !== 'function') throw new Error('plugin.tools must be a function returning tools')
     if (plugin.wrapTool !== undefined && typeof plugin.wrapTool !== 'function') throw new Error('plugin.wrapTool must be a function')
     if (plugin.memory !== undefined && (
@@ -164,7 +205,26 @@ async function loadPlugin(source: string, scope: 'project' | 'user'): Promise<Lo
   } catch (error) {
     entry.errors.push(error instanceof Error ? error.message : String(error))
   }
-  return entry
+}
+
+export async function activatePlugins(plugins: LoadedPlugin[], api: PluginApi): Promise<void> {
+  for (const plugin of plugins) {
+    if (plugin.disabled || !plugin.module) continue
+    try {
+      const dispose = await plugin.module.activate?.(api)
+      if (dispose) plugin.dispose = dispose
+    } catch (error) {
+      plugin.errors.push(`Activation failed: ${error instanceof Error ? error.message : String(error)}`)
+      plugin.module = undefined
+    }
+  }
+}
+
+export async function disposePlugins(plugins: LoadedPlugin[]): Promise<void> {
+  for (const plugin of [...plugins].reverse()) {
+    try { await plugin.dispose?.() } catch (error) { plugin.errors.push(`Cleanup failed: ${String(error)}`) }
+    delete plugin.dispose
+  }
 }
 
 /**
@@ -319,5 +379,6 @@ export function pluginInfo(plugins: LoadedPlugin[]): PluginInfo[] {
       ...(plugin.module?.compact ? ['compaction'] : [])
     ],
     errors: [...plugin.errors]
+    , ...(plugin.trusted === undefined ? {} : { trusted: plugin.trusted }), ...(plugin.digest ? { digest: plugin.digest } : {})
   }))
 }

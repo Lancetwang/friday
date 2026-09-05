@@ -293,7 +293,7 @@ function isApproval(value: unknown): value is Approval {
     && typeof item.timeout_seconds === 'number' && typeof item.reason === 'string'
 }
 
-const CREDENTIAL_PATH = /(^|[\\/\s'"])(\.env(?:\.\w+)?|\.ssh|\.aws|\.azure|\.kube|model-credentials\.json|credentials(?:\.json)?|id_rsa|id_ed25519)($|[\\/\s'"])/
+const CREDENTIAL_PATH = /(^|[\\/\s'"])(\.env(?:\.\w+)?|\.ssh|\.aws|\.azure|\.kube|model-credentials\.json|model-state\.json|credentials(?:\.json)?|id_rsa|id_ed25519)($|[\\/\s'"])/
 const EGRESS = /\b(curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm|scp|sftp|rsync|ssh|nc|ncat|netcat|telnet)\b|\bgit\s+push\b/
 const SECRET_READ = /\bprintenv\b|(^|[;&|]\s*)env\s*($|[;&|])|\b(get-childitem|gci|ls|dir)\s+env:\s*(?=$|[;&|])|\$env:\w*(key|token|secret|password|passwd|credential)\w*|\bgh\s+auth\s+token\b|\baws\s+configure\s+get\b|\bsecurity\s+find-generic-password\b|\bcmdkey\b|\bget-credential\b|\bkeyctl\b/
 const ROOT_PATH = /^(\/|~|\$home|\$env:(userprofile|home)|%userprofile%|[a-z]:[\\/])$/i

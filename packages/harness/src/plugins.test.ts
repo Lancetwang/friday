@@ -1,3 +1,4 @@
+import { installFixturePlugins } from './plugin-test-support.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -73,6 +74,7 @@ test('external plugins load from disk, contribute tools and sections, and report
     await writeFile(join(home, 'plugins', 'broken.mjs'), 'export default 42\n')
     await writeFile(join(home, 'plugins', 'syntax.mjs'), 'this is not javascript\n')
 
+    await installFixturePlugins(workspace)
     const external = await loadPlugins(workspace)
     assert.deepEqual(external.map(plugin => plugin.name).sort(), ['broken', 'greeter', 'syntax'])
 
@@ -122,6 +124,7 @@ test('tool collisions and schema-changing wrappers are rejected and recorded', a
       }
     }\n`)
 
+    await installFixturePlugins(workspace)
     const external = await loadPlugins(workspace)
     const read: Tool = { name: 'Read', description: 'read', parameters: {}, execute: () => 'real' }
     const tools = assembleTools([pack('core', [read], { required: true }), ...external], { workspace })
@@ -269,6 +272,7 @@ test('a session registers built-ins and external plugins in one registry', async
     await mkdir(join(workspace, '.friday', 'plugins'), { recursive: true })
     await writeFile(join(workspace, '.friday', 'plugins', 'greeter.mjs'), GOOD_PLUGIN)
 
+    await installFixturePlugins(workspace)
     const session = await FridaySession.create(workspace, 'plugin-session')
     const info = session.info()
     const tools = info.tools as string[]

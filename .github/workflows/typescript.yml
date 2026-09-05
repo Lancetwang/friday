@@ -41,6 +41,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - run: npm ci
       - run: npm test
+      - run: npm run smoke:cli
+      - run: npm run eval:runtime
       - run: npm ci --prefix ui-desktop
       - run: npm run test:math --prefix ui-desktop
       - run: npm run test:sources --prefix ui-desktop
@@ -75,6 +77,7 @@ jobs:
           npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE/$core" "$GITHUB_WORKSPACE/$full"
           node --input-type=module -e "const core = await import('friday-agent-core'); await import('friday-agent/plugin'); if (typeof core.Agent !== 'function') process.exit(1)"
+          node "$GITHUB_WORKSPACE/scripts/smoke-cli.mjs" "$sdk_dir/node_modules/friday-agent"
       - name: Check Harbor adapter syntax
         run: python -m py_compile integrations/harbor/friday.py
       - uses: actions/upload-artifact@v6

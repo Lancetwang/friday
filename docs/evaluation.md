@@ -64,7 +64,7 @@ trial:
 ```bash
 harbor run ... \
   --agent integrations.harbor.friday:FridayAgent \
-  --ae FRIDAY_NPM_SPEC=friday-agent@0.8.7
+  --ae FRIDAY_NPM_SPEC=friday-agent@0.9.0
 ```
 
 For reproducible results, also pin Harbor, the model, task dataset, environment,
@@ -73,3 +73,13 @@ and Friday version. Validate a produced trajectory with Harbor:
 ```bash
 python -m harbor.utils.trajectory_validator /path/to/trajectory.json
 ```
+
+## Offline runtime regression baseline
+
+`npm run eval:runtime` runs the versioned cases in
+`evaluations/runtime/baseline.json` through the public Harness SDK. It verifies
+write/read execution, durable results after a model failure, and rejection of
+truncated tool calls, with exact filesystem assertions. Results and request
+counts are written to `artifacts/evals/runtime-latest.json`; CI runs this baseline
+on Windows, macOS and Linux. This measures runtime invariants using a scripted
+model. Use the Harbor integration above to measure real model task performance.

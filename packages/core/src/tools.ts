@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 
 import type { JsonObject, Tool, ToolCall, ToolPreflight, ToolSchema } from './types.js'
+import { validateArguments } from './schema.js'
 
 export type ToolResult = {
   toolCallId: string
@@ -41,6 +42,7 @@ export class ToolExecutor {
 
   parse(message: { tool_calls?: ToolCall[] }): ToolCall[] {
     const calls = Array.isArray(message.tool_calls) ? message.tool_calls.filter(validCall) : []
+    if (message.tool_calls) message.tool_calls = calls
     // Providers occasionally omit or repeat call ids; downstream everything
     // pairs results to calls by id, and the next request echoes them back.
     // Synthesize unique ids in place so the stored assistant message and the
@@ -57,6 +59,12 @@ export class ToolExecutor {
     for (const call of calls) {
       if (signal?.aborted) return cancelledPreflight(calls, signal.reason)
       let decision: ToolPreflight | undefined
+      try {
+        this.arguments(call)
+      } catch (error) {
+        return { paused: false, results: calls.map(current => failure(current.id,
+          current.id === call.id ? `Invalid tool arguments: ${errorText(error)}` : 'Tool batch skipped because another call has invalid arguments.', performance.now())) }
+      }
       try {
         decision = await this.tools.get(call.function.name)?.preflight?.(call, signal)
       } catch (error) {
@@ -83,15 +91,21 @@ export class ToolExecutor {
   async executeAll(
     calls: readonly ToolCall[],
     signal?: AbortSignal,
-    onProgress?: (call: ToolCall, content: string) => void
+    onProgress?: (call: ToolCall, content: string) => void,
+    onResult?: (result: ToolResult) => void | Promise<void>
   ): Promise<ToolResult[]> {
     const results: ToolResult[] = []
+    const execute = async (call: ToolCall) => {
+      const result = await this.execute(call, signal, onProgress)
+      await onResult?.(result)
+      return result
+    }
     let parallel: ToolCall[] = []
     const flush = async () => {
       if (!parallel.length) return
       for (let index = 0; index < parallel.length; index += this.maxParallel) {
         results.push(...await Promise.all(parallel.slice(index, index + this.maxParallel)
-          .map(call => this.execute(call, signal, onProgress))))
+          .map(execute)))
       }
       parallel = []
     }
@@ -99,7 +113,7 @@ export class ToolExecutor {
       if (this.tools.get(call.function.name)?.parallel) parallel.push(call)
       else {
         await flush()
-        results.push(await this.execute(call, signal, onProgress))
+        results.push(await execute(call))
       }
     }
     await flush()
@@ -116,17 +130,27 @@ export class ToolExecutor {
     if (!tool) return failure(call.id, `Tool '${call.function.name}' not found.`, started)
     try {
       signal?.throwIfAborted()
-      const args = parseArguments(call.function.arguments)
+      const args = this.arguments(call)
       // The race is what keeps cancellation honest: a tool that ignores its
       // signal (or a child process the kernel will not release) must not hold
       // the whole turn hostage. On abort the tool's own promise is orphaned
       // and settles in the background.
       const work = Promise.resolve(currentCall.run(call, () => tool.execute(args, signal, content => onProgress?.(call, content))))
       const value = await raceAbort(work, signal)
-      return { toolCallId: call.id, content: stringify(value), isError: false, elapsedMs: performance.now() - started }
+      const envelope = value && typeof value === 'object' ? value as JsonObject : undefined
+      return { toolCallId: call.id, content: stringify(value), isError: envelope?.isError === true || envelope?.is_error === true, elapsedMs: performance.now() - started }
     } catch (error) {
       return failure(call.id, `Tool '${tool.name}' failed: ${errorText(error)}`, started)
     }
+  }
+
+  private arguments(call: ToolCall): JsonObject {
+    const tool = this.tools.get(call.function.name)
+    if (!tool) throw new Error(`Unknown tool: ${call.function.name}`)
+    const args = parseArguments(call.function.arguments)
+    if (tool.validate) tool.validate(args)
+    else validateArguments(args, tool.parameters)
+    return args
   }
 }
 
@@ -184,12 +208,9 @@ function validCall(value: unknown): value is ToolCall {
 }
 
 function parseArguments(value: string): JsonObject {
-  try {
-    const parsed: unknown = JSON.parse(value || '{}')
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as JsonObject : {}
-  } catch {
-    return {}
-  }
+  const parsed: unknown = JSON.parse(value)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Tool arguments must be a JSON object.')
+  return parsed as JsonObject
 }
 
 function stringify(value: unknown): string {

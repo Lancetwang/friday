@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "cases": [
+    { "id": "write-and-read", "mode": "normal", "expectedStatus": "done", "expectedFile": "persisted" },
+    { "id": "model-fails-after-write", "mode": "failure", "expectedStatus": "error", "expectedFile": "persisted" },
+    { "id": "truncated-tool-call", "mode": "truncated", "expectedStatus": "incomplete", "expectedFile": null }
+  ]
+}

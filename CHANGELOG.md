@@ -2,6 +2,30 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.9.0 (2026-09-05)
+
+### Added
+- The reusable Harness workspace SDK exposes session, model, capability, plugin lifecycle, execution backend, verifier and resource-budget injection. Agent Core stays a dependency-free model/tool loop; persistence and product policy use generic execution hooks, while search, memory, Skills and compaction remain optional Harness capabilities.
+- Plugins have static versioned manifests, explicit project-code trust, per-session activation and cleanup, and idle-boundary hot reload through the SDK, gateway and desktop settings. Disabled and untrusted modules are filtered before import; failed replacement activation preserves the active registry.
+- An optional Docker execution backend handles ordinary, approved and verifier shell calls with resource limits, networking disabled by default, and read-only verifier mounts. It requires an existing local image and never silently falls back to native execution.
+- Shared resource accounting bounds requests, tool calls, tokens and elapsed time across retries, compaction, approval review, goal repairs and verification. Transport activity drives first-byte and idle timeouts; unknown model profiles use conservative limits until configured or discovered.
+- An offline Runtime evaluation baseline now runs in CI alongside regression coverage for interrupted execution, cross-process writes, plugin trust/lifecycle, tool contracts, storage and verification evidence.
+
+### Fixed
+- Model responses and completed tool results are checkpointed before subsequent execution. Failed turns retain completed effects, usage and error traces. Interrupted sessions recover durable results and explicitly mark unknown tool outcomes without replaying their effects.
+- Session execution locks, workspace mutation leases and revision checks coordinate cooperating Friday processes. Model profiles and credentials commit atomically together; other shared settings and memory updates use cross-process locks.
+- SSE adapters reject incomplete transport termination, preserve partial responses on stream errors, and release readers at terminal events. Output truncation cannot dispatch tools or appear as successful completion. Anthropic prompt occupancy counts cache reads and writes, while cache-hit accounting counts reads only.
+- Tool arguments are validated before preflight or execution. Explicit failure envelopes survive transcript replay, nonzero shell exits are errors, atomic edits preserve executable permissions, and paginated reads make progress within oversized lines.
+- Verification passes require evidence referencing successful verifier tool results. A separate verifier profile is supported, and incomplete verifier output cannot produce a pass.
+- Session, fork and checkpoint records share immutable message pages, with bounded page reads, rebuildable summary indexes and garbage collection. Trace retention and parsed-trace caching bound storage and polling costs. Gateway validation rejects unsupported protocol versions and invalid parameter types, and session events carry run identifiers.
+- Gateway startup resolves symbolic links before checking its entry point, so installed or temporary paths cannot cause a silent exit. Release smoke checks exercise the installed CLI, session RPC, locked settings, plugin reload and graceful shutdown.
+
+### Upgrade notes
+- External plugins now require a neighboring `<entry>.plugin.json` containing `api_version: 1` and a stable `name` matching the exported plugin. Project plugins require explicit trust again when their entry or manifest changes. Use a bundled entry for reliable reload; transitive module dependencies are not hot reloaded. See [plugin authoring](docs/plugins.md).
+- Legacy model settings and inline session snapshots remain readable. Subsequent saves use private `model-state.json` and shared message pages; older Friday versions cannot read the new formats. Back up state before upgrading if rollback is required.
+- Core run results now include `status: 'incomplete'`; headless runs exit with code `2` for truncated completion. Default Harness runs now have a 15-minute deadline, 100-request and 400-tool-call limits; SDK hosts can configure these limits.
+- The Harness SDK is available from the repository workspace and is not a separate npm package yet. Native commands and in-process JavaScript plugins retain host privileges. Crash recovery does not guarantee exactly-once external effects. See [runtime integration and boundaries](docs/runtime-sdk.md).
+
 ## v0.8.7 (2026-08-23)
 
 ### Fixed

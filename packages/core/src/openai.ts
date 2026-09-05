@@ -1,4 +1,4 @@
-import { throwModelRequestError } from './errors.js'
+import { ModelStreamError, throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
 import { normalizeTermination } from './termination.js'
 import type { AssistantMessage, ChatModel, JsonObject, ModelRequest, ToolCall } from './types.js'
@@ -29,7 +29,7 @@ export class OpenAIModel implements ChatModel {
         stream_options: { include_usage: true },
         ...(request.tools?.length ? { tools: request.tools, tool_choice: request.toolChoice ?? 'auto' } : {}),
         ...(this.options.maxOutputTokens
-          ? { [this.options.maxTokensField ?? 'max_tokens']: this.options.maxOutputTokens }
+          ? { [this.options.maxTokensField ?? 'max_tokens']: Math.min(this.options.maxOutputTokens, request.maxOutputTokens ?? Infinity) }
           : {}),
         ...this.options.body
       }),
@@ -58,8 +58,11 @@ async function readStream(body: ReadableStream<Uint8Array>, request: ModelReques
   let finishReason: unknown
   const calls = new Map<number, ToolCall>()
   const state: MergeState = { lastSlot: -1 }
+  let done = false
 
-  for await (const chunk of readSseJson(body)) {
+  try {
+  for await (const chunk of readSseJson(body, { onDone: () => { done = true }, ...(request.onActivity ? { onActivity: request.onActivity } : {}) })) {
+    if (chunk.error) throw new Error(`Model stream error: ${JSON.stringify(chunk.error).slice(0, 2000)}`)
     if (isObject(chunk.usage)) usage = chunk.usage
     const choice = firstChoice(chunk)
     if (choice?.finish_reason != null) finishReason = choice.finish_reason
@@ -74,6 +77,10 @@ async function readStream(body: ReadableStream<Uint8Array>, request: ModelReques
       request.onReasoningDelta?.(delta.reasoning_content)
     }
     mergeToolCalls(calls, delta.tool_calls, state)
+  }
+  if (!done && finishReason == null) throw new Error('Model stream ended without a terminal event.')
+  } catch (error) {
+    throw new ModelStreamError(error instanceof Error ? error.message : String(error), { role: 'assistant', content, ...(usage ? { usage } : {}) })
   }
   const modelTermination = normalizeTermination(finishReason)
   return {

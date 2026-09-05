@@ -9,7 +9,8 @@ import type { Message } from 'friday-agent-core'
 import ignore, { type Ignore } from 'ignore'
 
 import { projectStateDir } from './config.js'
-import { writeJsonAtomic, writeTextAtomic } from './storage.js'
+import { withStateLock, writeJsonAtomic, writeTextAtomic } from './storage.js'
+import { readRecord, writeRecord } from './records.js'
 import { localTimestamp } from './time.js'
 
 const exec = promisify(execFile)
@@ -106,6 +107,10 @@ export async function restoreCheckpoint(
   requestedId?: string,
   force = false
 ): Promise<Checkpoint & { changed_paths: string[] }> {
+  return withStateLock(join(projectStateDir(workspace), 'workspace-execution'), () => restoreCheckpointUnlocked(workspace, requestedId, force), false)
+}
+
+async function restoreCheckpointUnlocked(workspace: string, requestedId: string | undefined, force: boolean): Promise<Checkpoint & { changed_paths: string[] }> {
   const root = resolve(workspace)
   const active = (await entries(root)).filter(entry => ACTIVE.has(entry.state))
   const target = requestedId ? active.find(entry => entry.id === requestedId) : active.at(-1)
@@ -423,7 +428,7 @@ async function entries(workspace: string): Promise<Checkpoint[]> {
   }
   const values = await Promise.all(names.filter(name => name.endsWith('.json')).sort().map(async name => {
     try {
-      const value: unknown = JSON.parse(await readFile(join(entriesDir(workspace), name), 'utf8'))
+      const value: unknown = await readRecord(workspace, join(entriesDir(workspace), name))
       return validEntry(value) ? value : undefined
     } catch { return undefined }
   }))
@@ -433,14 +438,14 @@ async function entries(workspace: string): Promise<Checkpoint[]> {
 async function readEntry(workspace: string, id: string): Promise<Checkpoint> {
   validateId(id)
   try {
-    const value: unknown = JSON.parse(await readFile(entryPath(workspace, id), 'utf8'))
+    const value: unknown = await readRecord(workspace, entryPath(workspace, id))
     if (validEntry(value)) return value
   } catch {}
   throw new Error(`Checkpoint not found: ${id}`)
 }
 
 async function writeEntry(workspace: string, entry: Checkpoint): Promise<void> {
-  await writeJsonAtomic(entryPath(workspace, entry.id), entry)
+  await writeRecord(workspace, entryPath(workspace, entry.id), entry)
   await syncEntryRefs(workspace, entry)
 }
 

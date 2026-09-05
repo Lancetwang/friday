@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import type { UserProfileSettings, WebSearchSettings } from 'friday-agent-protocol'
 
 import { fridayHome } from './config.js'
-import { writeJsonAtomic, writeTextAtomic } from './storage.js'
+import { withStateLock, writeJsonAtomic, writeTextAtomic } from './storage.js'
 
 const WEB_KEYS = { tavily: 'TAVILY_API_KEY', anysearch: 'ANYSEARCH_API_KEY' } as const
 const MEMORY_FILES = { user: ['USER.md', 1_500], global: ['MEMORY.md', 2_500] } as const
@@ -32,6 +32,10 @@ export function readWebSearchCredential(provider: string): string {
 }
 
 export async function saveWebSearchSettings(params: Record<string, unknown>): Promise<WebSearchSettings> {
+  return withStateLock(join(fridayHome(), 'web-credentials.json'), () => saveWebSearchSettingsUnlocked(params))
+}
+
+async function saveWebSearchSettingsUnlocked(params: Record<string, unknown>): Promise<WebSearchSettings> {
   const path = join(fridayHome(), 'web-credentials.json')
   const saved = readObject(path)
   for (const provider of Object.keys(WEB_KEYS) as Array<keyof typeof WEB_KEYS>) {
@@ -59,6 +63,10 @@ export function loadUserProfile(): UserProfile {
 }
 
 export async function saveUserProfile(value: unknown): Promise<UserProfile> {
+  return withStateLock(join(fridayHome(), 'memory-state'), () => saveUserProfileUnlocked(value))
+}
+
+async function saveUserProfileUnlocked(value: unknown): Promise<UserProfile> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('User profile settings must be an object.')
   const profile = value as Record<string, unknown>
   const current = loadUserProfile()
@@ -99,6 +107,10 @@ export async function memoryFile(workspace: string, scope: unknown, includeConte
 }
 
 export async function saveMemoryFile(workspace: string, scope: unknown, value: unknown): Promise<Record<string, unknown>> {
+  return withStateLock(join(fridayHome(), 'memory-state'), () => saveMemoryFileUnlocked(workspace, scope, value))
+}
+
+async function saveMemoryFileUnlocked(workspace: string, scope: unknown, value: unknown): Promise<Record<string, unknown>> {
   if (typeof value !== 'string') throw new Error('Memory file content must be text.')
   const { path, limit } = memoryPath(scope)
   if (value.length > limit) throw new Error(`Memory file exceeds ${limit} characters.`)

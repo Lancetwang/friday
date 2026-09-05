@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { readdir, readFile, rm } from 'node:fs/promises'
+import { readdir, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -8,11 +8,13 @@ import type { AgentEvent, Message } from 'friday-agent-core'
 import { loadModelCatalog, loadModelConfig, projectStateDir } from './config.js'
 import { modelFor } from './model.js'
 import { promptTemplate } from './prompts.js'
-import { writeJsonAtomic } from './storage.js'
+import { withStateLock, writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
 import { localTimestamp } from './time.js'
 
 export type TraceServer = { server: Server; url: string }
+export type TraceRetention = { maxFiles?: number; maxBytes?: number; maxAgeDays?: number }
+const traceCache = new Map<string, { modified: number; size: number; value: unknown }>()
 
 type AnalysisMessage = { role: 'user' | 'assistant'; content: string }
 type AnalysisRecord = { analysis_id: string; updated_at: string; messages: AnalysisMessage[] }
@@ -31,6 +33,7 @@ const ANALYSIS_HISTORY_LIMIT = 12
 const REQUEST_BODY_LIMIT = 64 * 1024
 
 export async function writeTrace(options: {
+  retention?: TraceRetention
   workspace: string
   sessionId: string
   mode: string
@@ -60,12 +63,36 @@ export async function writeTrace(options: {
         type: event.type,
         category: event.category,
         seq: event.seq,
+        run_id: event.runId,
         step: event.step,
         timestamp: event.timestamp,
         // Payload observations exist to reconstruct the exact prompt later:
         // secrets are still redacted, but nothing is clipped.
         data: event.type.endsWith('.payload') ? lossless(event.data) : safe(event.data)
       }))
+  })
+  await pruneTraces(options.workspace, options.retention)
+}
+
+export async function pruneTraces(workspace: string, policy: TraceRetention = {}): Promise<void> {
+  const maxFiles = policy.maxFiles ?? 1_000
+  const maxBytes = policy.maxBytes ?? 256 * 1024 * 1024
+  const maxAgeDays = policy.maxAgeDays ?? 30
+  if (![maxFiles, maxBytes, maxAgeDays].every(value => Number.isFinite(value) && value > 0)) throw new Error('Trace retention limits must be positive.')
+  await withStateLock(join(traceDir(workspace), 'retention'), async () => {
+    let bytes = 0
+    let count = 0
+    for (const name of (await traceNames(workspace)).reverse()) {
+      const path = join(traceDir(workspace), name)
+      const info = await stat(path).catch(() => undefined)
+      if (!info) continue
+      bytes += info.size
+      count += 1
+      if (count > maxFiles || bytes > maxBytes || info.mtimeMs < Date.now() - maxAgeDays * 86_400_000) {
+        await rm(path, { force: true })
+        traceCache.delete(path)
+      }
+    }
   })
 }
 
@@ -212,7 +239,16 @@ export async function listAnalyses(workspace: string, sessionId: string): Promis
 async function loadTraces(workspace: string): Promise<unknown[]> {
   const names = (await traceNames(workspace)).reverse().slice(0, 200)
   return (await Promise.all(names.map(async name => {
-    try { return JSON.parse(await readFile(join(traceDir(workspace), name), 'utf8')) as unknown } catch { return undefined }
+    try {
+      const path = join(traceDir(workspace), name)
+      const info = await stat(path)
+      const cached = traceCache.get(path)
+      if (cached?.modified === info.mtimeMs && cached.size === info.size) return cached.value
+      const value: unknown = JSON.parse(await readFile(path, 'utf8'))
+      traceCache.set(path, { modified: info.mtimeMs, size: info.size, value })
+      while (traceCache.size > 200 || [...traceCache.values()].reduce((sum, item) => sum + item.size, 0) > 32 * 1024 * 1024) traceCache.delete(traceCache.keys().next().value!)
+      return value
+    } catch { return undefined }
   }))).filter(value => value !== undefined)
 }
 

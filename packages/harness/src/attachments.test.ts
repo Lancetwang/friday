@@ -113,7 +113,7 @@ test('desktop images and selected local files reach the model and resumable hist
   }
 })
 
-test('an upstream image rejection rolls back the turn and exposes only a stable Harness error', async () => {
+test('an upstream image rejection retains the failed turn and exposes only a stable Harness error', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'friday-image-rejection-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
@@ -160,7 +160,7 @@ test('an upstream image rejection rolls back the turn and exposes only a stable 
     output.length = 0
     await gateway.handle({ id: 'current-after-rejection', method: 'session.current' })
     const history = (response(output, 'current-after-rejection') as { history: Array<Record<string, unknown>> }).history
-    assert(!history.some(item => item.kind === 'user' && item.text === 'What is in this image?'))
+    assert(history.some(item => item.kind === 'user' && item.text === 'What is in this image?'))
   } finally {
     if (previous === undefined) delete process.env.FRIDAY_HOME
     else process.env.FRIDAY_HOME = previous

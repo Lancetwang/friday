@@ -1,4 +1,4 @@
-import { throwModelRequestError } from './errors.js'
+import { ModelStreamError, throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
 import { normalizeTermination } from './termination.js'
 import type { AssistantMessage, ChatModel, JsonObject, Message, ModelRequest, ToolCall, ToolSchema } from './types.js'
@@ -38,7 +38,7 @@ export class AnthropicModel implements ChatModel {
       body: JSON.stringify({
         model: this.options.model,
         messages,
-        max_tokens: this.options.maxOutputTokens ?? 4_096,
+        max_tokens: Math.min(this.options.maxOutputTokens ?? 4_096, request.maxOutputTokens ?? Infinity),
         stream: true,
         ...(system
           ? { system: cached ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system }
@@ -70,7 +70,7 @@ export function anthropicMessages(source: readonly Message[]): { system: string;
       continue
     }
     if (message.role === 'tool') {
-      results.push({ type: 'tool_result', tool_use_id: String(message.tool_call_id ?? ''), content: textContent(message.content) })
+      results.push({ type: 'tool_result', tool_use_id: String(message.tool_call_id ?? ''), content: textContent(message.content), ...(message.is_error === true ? { is_error: true } : {}) })
       continue
     }
     flushResults()
@@ -106,8 +106,12 @@ async function readAnthropicStream(body: ReadableStream<Uint8Array>, request: Mo
   // usage this returns stays a faithful copy of what Anthropic reported.
   let cacheUsage: JsonObject = {}
   const blocks = new Map<number, JsonObject>()
-  for await (const event of readSseJson(body)) {
+  let stopped = false
+  try {
+  for await (const event of readSseJson(body, request)) {
     const type = String(event.type ?? '')
+    if (type === 'error') throw new Error(`Anthropic stream error: ${JSON.stringify(event.error).slice(0, 2000)}`)
+    if (type === 'message_stop') { stopped = true; break }
     if (type === 'message_start' && isObject(event.message) && isObject(event.message.usage)) {
       inputTokens = integer(event.message.usage.input_tokens)
       cacheUsage = cacheFields(event.message.usage)
@@ -135,6 +139,13 @@ async function readAnthropicStream(body: ReadableStream<Uint8Array>, request: Mo
       if (isObject(event.usage)) outputTokens = integer(event.usage.output_tokens)
     }
   }
+  if (!stopped) throw new Error('Anthropic stream ended without message_stop.')
+  } catch (error) {
+    throw new ModelStreamError(error instanceof Error ? error.message : String(error), {
+      role: 'assistant', content,
+      usage: { ...(inputTokens === undefined ? {} : { input_tokens: inputTokens }), ...(outputTokens === undefined ? {} : { output_tokens: outputTokens }), ...cacheUsage }
+    })
+  }
   const reasoning: JsonObject[] = []
   const calls: ToolCall[] = []
   for (const [, block] of [...blocks].sort(([left], [right]) => left - right)) {
@@ -155,7 +166,7 @@ async function readAnthropicStream(body: ReadableStream<Uint8Array>, request: Mo
     ...(reasoning.length ? { reasoning_content: reasoning } : {}),
     ...(calls.length ? { tool_calls: calls } : {}),
     ...(inputTokens !== undefined || outputTokens !== undefined
-      ? { usage: { input_tokens: inputTokens ?? 0, output_tokens: outputTokens ?? 0, ...cacheUsage } }
+      ? { usage: { ...(inputTokens === undefined ? {} : { input_tokens: inputTokens }), ...(outputTokens === undefined ? {} : { output_tokens: outputTokens }), ...cacheUsage } }
       : {}),
     ...(modelTermination ? { termination: modelTermination } : {})
   }

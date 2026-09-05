@@ -11,8 +11,10 @@ import {
 
 import type { ModelConfig } from './config.js'
 import { thinkingBody } from './thinking.js'
+import { ResourceBudget, withModelTimeouts } from './resources.js'
 
-export function modelFor(config: ModelConfig, thinking: string, outputLimit = config.maxOutputTokens): ChatModel {
+export function modelFor(config: ModelConfig, thinking: string, outputLimit = config.maxOutputTokens, resources?: ResourceBudget): ChatModel {
+  const wrap = (model: ChatModel) => withModelRetries(resources ? resources.wrap(withModelTimeouts(model, resources.state.limits)) : withModelTimeouts(model))
   const common = {
     apiKey: config.apiKey,
     model: config.model,
@@ -23,12 +25,12 @@ export function modelFor(config: ModelConfig, thinking: string, outputLimit = co
   if (config.provider === 'anthropic' || (config.provider === 'opencode-go' && /^(minimax-|qwen3\.)/.test(config.model))) {
     // Explicit prompt-cache breakpoints only against the real Anthropic API;
     // Anthropic-compatible proxies may reject the cache_control field.
-    return withModelRetries(new AnthropicModel({ ...common, cacheControl: config.provider === 'anthropic' }))
+    return wrap(new AnthropicModel({ ...common, cacheControl: config.provider === 'anthropic' }))
   }
   if (config.provider === 'opencode-go' && config.model.startsWith('gpt-5.6')) {
-    return withModelRetries(new ResponsesModel(common))
+    return wrap(new ResponsesModel(common))
   }
-  return withModelRetries(new OpenAIModel({
+  return wrap(new OpenAIModel({
     ...common,
     maxTokensField: ['openai', 'mimo'].includes(config.provider) ? 'max_completion_tokens' : 'max_tokens'
   }))
@@ -76,5 +78,5 @@ function trackOutput(request: ModelRequest, emitted: () => void): ModelRequest {
 
 function isRetryableModelError(error: unknown): boolean {
   if (error instanceof ModelRequestError) return RETRYABLE_HTTP_STATUS.has(error.status)
-  return error instanceof Error && error.name !== 'AbortError' && error.name !== 'TimeoutError'
+  return error instanceof Error && !['AbortError', 'TimeoutError', 'ModelStreamError', 'ResourceLimitError'].includes(error.name)
 }

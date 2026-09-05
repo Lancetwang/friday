@@ -42,7 +42,7 @@ the sixth failed attempt stops it.
 
 ## Runtime limits and no-progress guard
 
-Limits are fault containment, not spend budgets:
+Loop bounds and a shared resource budget both constrain execution:
 
 | Scope | Current bound |
 | --- | ---: |
@@ -51,10 +51,17 @@ Limits are fault containment, not spend budgets:
 | One Goal run | 6 verification attempts |
 | Parallel tool batch | 4 explicitly parallel-safe calls at a time |
 
-`run_token_budget` remains accepted in configuration for compatibility and is
-not enforced. Provider input, output, request, and cache totals are recorded as
-usage; they do not stop a turn. A provider can still reject a request whose
-configured context or output limits exceed its real capabilities.
+`run_token_budget` is enforced across model requests, compaction, permission
+review, verification and retries. Missing usage is estimated and marked in the
+ledger. Default runs also have a 100-request limit, 400-tool-call limit and a
+15-minute deadline. SDK hosts can override these limits. See [runtime policy](runtime-sdk.md).
+
+A pass requires non-empty evidence referencing successful verifier tool results
+as `[tool:call_id]`; invented references and incomplete responses become
+`inconclusive`. Verifier tool events are included in the run trace.
+`verifierConfig` or `FRIDAY_VERIFIER_PROFILE` selects an independent model.
+`FRIDAY_EXECUTION_IMAGE` opts into the Docker shell backend with a read-only
+verifier workspace mount; native shell filtering remains command policy.
 
 The Core fingerprints tool name and normalized arguments separately from the
 result. The same call appearing three times in one model response, or the same
