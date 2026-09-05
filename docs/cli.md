@@ -58,6 +58,10 @@ The trajectory path is updated atomically during the run (tool completions are
 flushed immediately and streaming-only changes are debounced), then written
 once more before the gateway exits. A timeout or signal therefore retains the
 latest complete observations instead of losing the entire in-memory trace.
+The atomic rename briefly retries when the destination is momentarily locked,
+for example by a Windows indexer or scanner. A failed background snapshot is
+reported on stderr and cannot disable later saves, while a permanent failure
+keeps the previous snapshot intact.
 
 TUI slash commands:
 

@@ -31,7 +31,8 @@ same model can summarize evidence and persist state before the hard stop. If
 `--finish-reserve-seconds` is omitted, Friday chooses up to 90 seconds (20% for
 shorter runs). Set it to `0` when the evaluator owns finalization and tools should
 use the entire hard deadline. Trajectory snapshots are replaced atomically throughout
-the run.
+the run. The replacement briefly retries while the destination file is locked,
+and a failed save is reported on stderr without losing the previous snapshot.
 
 The file follows ATIF-v1.7 and records user input, tool calls and observations,
 the final response, model identity, and available token metrics. `friday run`
