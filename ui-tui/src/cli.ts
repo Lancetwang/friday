@@ -1,11 +1,12 @@
-import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { stat } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import type { GatewayEvent, MessageMetrics, ModelTermination, SessionInfo } from './types.js'
 import { GatewayClient } from './gatewayClient.js'
+import { TrajectoryWriter } from './trajectory.js'
 
-export const VERSION = '0.9.1'
+export const VERSION = '0.9.2'
 
 export type CliOptions = {
   command: 'ask' | 'goal' | 'help' | 'run' | 'tui' | 'version'
@@ -254,35 +255,6 @@ export function atif(instruction: string, info: SessionInfo, events: TimedEvent[
   }
 }
 
-class TrajectoryWriter {
-  private queued = Promise.resolve()
-  private timer: ReturnType<typeof setTimeout> | undefined
-
-  constructor(private readonly path: string, private readonly snapshot: () => unknown) {}
-
-  schedule(immediate = false): void {
-    if (immediate) {
-      if (this.timer) clearTimeout(this.timer)
-      this.timer = undefined
-      void this.flush().catch(() => {})
-      return
-    }
-    if (this.timer) return
-    this.timer = setTimeout(() => {
-      this.timer = undefined
-      void this.flush().catch(() => {})
-    }, 200)
-  }
-
-  flush(): Promise<void> {
-    if (this.timer) clearTimeout(this.timer)
-    this.timer = undefined
-    const value = this.snapshot()
-    this.queued = this.queued.then(() => writeTrajectory(this.path, value))
-    return this.queued
-  }
-}
-
 function positiveInteger(value: string, name: string): number {
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer.`)
@@ -307,18 +279,6 @@ function toolArguments(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : { value }
-}
-
-async function writeTrajectory(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  const temporary = `${path}.${randomUUID()}.tmp`
-  try {
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-    await rename(temporary, path)
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => {})
-    throw error
-  }
 }
 
 async function readStdin(): Promise<string> {

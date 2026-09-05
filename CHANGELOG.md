@@ -2,6 +2,12 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.9.2 (2026-09-05)
+
+### Fixed
+- Headless trajectory snapshots survive Windows file locking. The atomic rename now retries briefly when the destination is momentarily held by an indexer or scanner (`EBUSY`, `EPERM`, `EACCES`), a failed background snapshot can no longer disable later saves, and permanent failures are reported on stderr while the previous snapshot stays intact. This resolves the Windows release-test failure where the signalled headless run could exit without its latest trajectory.
+- The headless cancellation regression now also covers slow gateway startup and exhausted rename retries, and measures cancellation responsiveness separately from cold-start time on every platform.
+
 ## v0.9.1 (2026-09-05)
 
 This release includes the composable Runtime changes and [upgrade requirements from v0.9.0](https://github.com/Lancetwang/friday/blob/v0.9.1/CHANGELOG.md#v090-2026-09-05).

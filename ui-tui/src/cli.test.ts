@@ -97,18 +97,22 @@ test('gateway close waits for graceful stdin shutdown', async () => {
   }
 })
 
-test('a signalled headless process keeps its latest trajectory and exits 130', async () => {
+for (const scenario of [
+  { name: 'a signalled headless process keeps its latest trajectory and exits 130', startupDelayMs: 0, renameFailures: 0 },
+  { name: 'headless cancellation recovers snapshots after slow startup and exhausted rename retries', startupDelayMs: 2_300, renameFailures: 6 }
+]) test(scenario.name, { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'friday-cli-signal-'))
   const entry = join(root, 'gateway.mjs')
   const runner = join(root, 'runner.mjs')
   const trajectory = join(root, 'trajectory.json')
-  await writeFile(entry, fakeGateway())
+  await writeFile(entry, fakeGateway(scenario.startupDelayMs))
   const cli = fileURLToPath(new URL('./entry.js', import.meta.url))
-  await writeFile(runner, signalRunner(cli, root, trajectory))
+  await writeFile(runner, signalRunner(cli, root, trajectory, scenario.renameFailures))
   const child = spawn(process.execPath, [runner], {
     env: { ...process.env, FRIDAY_GATEWAY_ENTRY: entry },
     stdio: ['ignore', 'pipe', 'pipe']
   })
+  const closed = new Promise<number | null>(resolveClose => child.once('close', resolveClose))
   let stdout = ''
   let stderr = ''
   child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk })
@@ -118,15 +122,16 @@ test('a signalled headless process keeps its latest trajectory and exits 130', a
       const timer = setTimeout(() => {
         child.kill('SIGKILL')
         rejectExit(new Error('Timed out waiting for headless CLI exit.'))
-      }, 3_000)
-      child.once('error', rejectExit)
-      child.once('exit', value => {
+      }, 25_000)
+      child.once('error', error => { clearTimeout(timer); rejectExit(error) })
+      void closed.then(value => {
         clearTimeout(timer)
         resolveExit(value)
       })
     })
 
     assert.equal(code, 130, stderr)
+    if (scenario.renameFailures) assert.match(stderr, /could not save trajectory/)
     const result = JSON.parse(stdout) as Record<string, unknown>
     assert.equal(result.stop_reason, 'cancelled')
     assert.equal(result.text, 'partial-before-signal')
@@ -134,14 +139,16 @@ test('a signalled headless process keeps its latest trajectory and exits 130', a
     assert.equal((saved.extra as Record<string, unknown>).stop_reason, 'cancelled')
     assert.match(JSON.stringify(saved), /observed-before-signal/)
   } finally {
-    if (child.exitCode === null) child.kill('SIGKILL')
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    await closed
     await rm(root, { recursive: true, force: true })
   }
 })
 
-function fakeGateway(): string {
+function fakeGateway(startupDelayMs = 0): string {
   return `
 import { createInterface } from 'node:readline'
+await new Promise(resolve => setTimeout(resolve, ${startupDelayMs}))
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity })
 let chat = ''
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n')
@@ -162,18 +169,50 @@ for await (const line of input) {
 `
 }
 
-function signalRunner(cli: string, workspace: string, trajectory: string): string {
+function signalRunner(cli: string, workspace: string, trajectory: string, renameFailures: number): string {
   return `
-import { readFile } from 'node:fs/promises'
+import fs, { readFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
+const originalRename = fs.rename
+let failures = ${renameFailures}
+fs.rename = async (source, destination) => {
+  if (destination === ${JSON.stringify(trajectory)} && failures-- > 0) {
+    throw Object.assign(new Error('trajectory temporarily locked'), { code: 'EBUSY' })
+  }
+  return originalRename(source, destination)
+}
+syncBuiltinESMExports()
 const { headless, parseArgs } = await import(pathToFileURL(${JSON.stringify(cli)}).href.replace(/entry\\.js$/, 'cli.js'))
 const pending = headless(parseArgs(['run', '--cwd', ${JSON.stringify(workspace)}, '--trajectory', ${JSON.stringify(trajectory)}, '--json', '--', 'keep partial evidence']))
-const deadline = Date.now() + 2000
-while (!(await readFile(${JSON.stringify(trajectory)}, 'utf8').catch(() => '')).includes('observed-before-signal')) {
-  if (Date.now() >= deadline) throw new Error('trajectory was not updated')
-  await new Promise(resolve => setTimeout(resolve, 20))
+let ended = false
+let earlyError
+void pending.then(code => { ended = true; earlyError = new Error('headless exited before cancellation: ' + code) }, error => { ended = true; earlyError = error })
+const deadline = Date.now() + 15000
+let lastSnapshot = ''
+try {
+  while (true) {
+    lastSnapshot = await readFile(${JSON.stringify(trajectory)}, 'utf8').catch(error => {
+      if (error.code === 'ENOENT') return ''
+      throw error
+    })
+    if (lastSnapshot.includes('observed-before-signal')) break
+    if (ended) throw earlyError
+    if (Date.now() >= deadline) throw new Error('trajectory was not updated; latest snapshot: ' + lastSnapshot.slice(-1000))
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+} finally {
+  // Startup and filesystem readiness have their own deadline. Responsiveness is
+  // measured only after cancellation, instead of including a cold Windows spawn.
+  const cancelledAt = performance.now()
+  process.emit('SIGTERM', 'SIGTERM')
+  try {
+    process.exitCode = await pending
+    if (performance.now() - cancelledAt >= 5000) throw new Error('headless cancellation took more than 5 seconds')
+  } finally {
+    fs.rename = originalRename
+    syncBuiltinESMExports()
+  }
 }
-process.emit('SIGTERM', 'SIGTERM')
-process.exitCode = await pending
 `
 }

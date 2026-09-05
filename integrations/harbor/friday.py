@@ -30,7 +30,7 @@ class FridayAgent(BaseInstalledAgent):
         await self.ensure_system_dependencies(
             environment, ("bash", "curl", "nodejs", "npm")
         )
-        package = self._get_env("FRIDAY_NPM_SPEC") or "friday-agent@0.9.1"
+        package = self._get_env("FRIDAY_NPM_SPEC") or "friday-agent@0.9.2"
         install_command = f"npm install --global {shlex.quote(package)}"
         installed = await self.exec_as_agent(
             environment,

@@ -1,4 +1,4 @@
-# Composable Harness SDK (v0.9.1)
+# Composable Harness SDK (v0.9.2)
 
 `friday-agent-core` remains a dependency-free model/tool loop. It has no Friday
 configuration, filesystem persistence, permissions, search, memory, Skills or
