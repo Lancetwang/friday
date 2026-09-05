@@ -1,6 +1,6 @@
 {
   "name": "friday-agent",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Friday, a local-first general-purpose agent.",
   "license": "MIT",
   "repository": {
@@ -48,7 +48,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "friday-agent-core": "0.9.0"
+    "friday-agent-core": "0.9.1"
   },
   "devDependencies": {
     "@types/node": "24.13.2",

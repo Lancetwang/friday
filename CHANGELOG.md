@@ -2,6 +2,14 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.9.1 (2026-09-05)
+
+This release includes the composable Runtime changes and [upgrade requirements from v0.9.0](https://github.com/Lancetwang/friday/blob/v0.9.1/CHANGELOG.md#v090-2026-09-05).
+
+### Fixed
+- Cancelled and timed-out shell calls wait for both process-tree termination and the command's `close` event before completing cleanup. This fixes the Windows race where `taskkill` returned while the workspace was still held open, causing `EBUSY` during cleanup and intermittently blocking release tests. The existing bounded fallback remains for processes that cannot be stopped.
+- A deterministic lifecycle regression now checks the termination-before-close ordering on every CI platform, including the distinction between process `exit` and closed inherited pipes.
+
 ## v0.9.0 (2026-09-05)
 
 ### Added

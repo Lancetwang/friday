@@ -340,6 +340,7 @@ export async function runShell(
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   })
+  const closed = new Promise<void>(resolveClosed => child.once('close', () => resolveClosed()))
   const streams = { stdout: streamState(), stderr: streamState() }
   let liveTail = ''
   let lastProgress = 0
@@ -378,7 +379,10 @@ export async function runShell(
   const stop = () => {
     if (stopping) return
     stopping = true
-    void terminateProcessTree(child).then(() => settleOutcome?.({ code: exitCode }))
+    // taskkill can return before the command has released its process and pipe
+    // handles. Cleanup completes only after both boundaries; the grace below
+    // still bounds the wait for an unkillable process or a surviving pipe holder.
+    void Promise.all([terminateProcessTree(child), closed]).then(() => settleOutcome?.({ code: exitCode }))
     // SIGKILL cannot free a process stuck in uninterruptible I/O and cannot
     // reach a survivor that re-parented out of the group; the wait below must
     // not depend on either of them dying.

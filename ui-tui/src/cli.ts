@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type { GatewayEvent, MessageMetrics, ModelTermination, SessionInfo } from './types.js'
 import { GatewayClient } from './gatewayClient.js'
 
-export const VERSION = '0.9.0'
+export const VERSION = '0.9.1'
 
 export type CliOptions = {
   command: 'ask' | 'goal' | 'help' | 'run' | 'tui' | 'version'

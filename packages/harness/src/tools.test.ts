@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import childProcess, { ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { test } from 'node:test'
 
 import { ToolExecutor, type ToolCall } from 'friday-agent-core'
@@ -169,6 +172,47 @@ test('cancelling a shell command settles quickly instead of waiting for the tree
     assert(performance.now() - started < 4_000)
   } finally {
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('cancelled shell cleanup waits for command close after termination is dispatched', async context => {
+  const child = new ChildProcess()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  Object.defineProperty(child, 'pid', { value: 42 })
+  context.mock.method(child, 'kill', () => true)
+  context.mock.method(process, 'kill', () => true)
+  context.mock.method(childProcess, 'spawn', (file: string) => {
+    if (file === 'taskkill.exe') {
+      const killer = new ChildProcess()
+      queueMicrotask(() => killer.emit('close', 0))
+      return killer
+    }
+    return child
+  })
+  syncBuiltinESMExports()
+
+  const controller = new AbortController()
+  let settled = false
+  const pending = runShell(process.cwd(), 'controlled-process', 60, controller.signal)
+    .then(() => new Error('Expected cancellation'), error => error as Error)
+    .finally(() => { settled = true })
+  try {
+    controller.abort()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(settled, false, 'dispatching termination does not release process handles')
+    child.emit('exit', null)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(settled, false, 'exit alone does not confirm the inherited pipes have closed')
+    child.emit('close', null)
+    assert.equal((await pending).name, 'AbortError')
+  } finally {
+    child.emit('close', null)
+    await pending
+    child.stdout.destroy()
+    child.stderr.destroy()
+    context.mock.restoreAll()
+    syncBuiltinESMExports()
   }
 })
 
