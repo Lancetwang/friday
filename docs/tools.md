@@ -25,11 +25,12 @@ described in [Plugins](plugins.md).
 `Read` accepts paths inside the workspace, user-selected attachment paths, and
 the active session's Friday-managed tool-spill directory. It resolves symlinks
 before checking the boundary. Arbitrary sibling directories and files such as
-`~/.friday/model-credentials.json` are not readable through this tool unless the
+`~/.friday/model-state.json` are not readable through this tool unless the
 user explicitly supplied the path as an attachment.
 
 One Read returns at most 2,000 lines and 50,000 characters. A truncated result
-contains `next_start_line`. Read treats files as UTF-8 text. In the desktop app,
+contains `next_start_line` and, when a long line is split, `next_start_column`;
+pass both back to continue without skipping text. Read treats files as UTF-8 text. In the desktop app,
 clipboard images and selected PNG, JPEG, WebP, or GIF files are normalized into
 the same model image input; selected non-image files and folders remain local
 attachments for Read. File signatures, rather than extensions, determine which

@@ -17,10 +17,11 @@ registry; this page describes the built-in implementation.
 Compaction bounds the model-facing prompt, not stored history: the session
 snapshot retains archived messages so resume, UI history, and forks remain
 complete. Long conversations and branches therefore continue to consume disk.
-Episodic notes and trace records also have no automatic age-based expiry;
+Sessions and forks share immutable message pages. Episodic notes have no
+automatic age-based expiry;
 consolidation removes only episode entries used by accepted merge or promotion
-operations. See [Checkpoints](checkpoints.md) for the additional cost of copied
-conversation arrays and [Observability](observability.md) for trace retention.
+operations. See [Checkpoints](checkpoints.md) for shared conversation
+storage and garbage collection and [Observability](observability.md) for trace retention.
 
 `friday.progress` inside `RunContext.artifacts` is the live task-state record. It
 holds the objective, latest request, mode, plan, status, next action, and a small

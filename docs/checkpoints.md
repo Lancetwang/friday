@@ -36,12 +36,18 @@ Workspace file content is content-addressed in the private backend, so unchanged
 files are not copied for every checkpoint. Friday never changes the workspace's
 own Git index, branch, commits, stash, or object database.
 
-Conversation state is different: every checkpoint entry currently stores its
-own `before_messages` and `before_archived` arrays rather than referencing the
-trace store. Long conversations can therefore multiply checkpoint disk usage.
+Conversation state uses shared immutable pages of 32 messages in the sibling
+`message-objects/` directory. Checkpoint `before_messages` and `before_archived`
+fields reference those pages, as do sessions and forks; identical pages share
+storage. Legacy inline arrays remain readable and migrate on their next save.
+Changed pages and retained history still consume disk space.
+
 Friday retains the latest 50 active checkpoints per project; pruning removes
 older or superseded entries, unreachable file snapshots, and private Git
-objects.
+objects. Message pages have separate garbage collection:
+`collectMessageObjects(workspace)` removes unreferenced pages under the record
+publication lock, and session deletion also invokes it. Checkpoint pruning
+alone does not collect message pages.
 
 ## Restore safety
 

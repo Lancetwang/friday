@@ -1,4 +1,4 @@
-import { normalizeUsage, type ChatModel, type ModelRequest } from 'friday-agent-core'
+import { ModelStreamError, normalizeUsage, type AssistantMessage, type ChatModel, type ModelRequest } from 'friday-agent-core'
 import type { RunBudgetSpec } from './budget.js'
 
 export type ResourceLimits = {
@@ -35,16 +35,29 @@ export class ResourceBudget {
       const remaining = (this.state.limits.tokens ?? 40_000_000) - this.state.tokens - estimatedInput
       if (remaining < 1) throw new ResourceLimitError('The remaining token budget cannot cover the next prompt.')
       this.state.requests += 1
-      let output = ''
-      let usage: unknown
+      let textChars = 0
+      let reasoningChars = 0
+      let completed: AssistantMessage | undefined
       try {
-        const response = await model.complete({ ...request, maxOutputTokens: Math.min(request.maxOutputTokens ?? Infinity, remaining), onDelta: text => { output += text; request.onDelta?.(text) } })
-        usage = response.usage
-        return response
+        completed = await model.complete({
+          ...request,
+          maxOutputTokens: Math.min(request.maxOutputTokens ?? Infinity, remaining),
+          onDelta: text => { textChars += text.length; request.onDelta?.(text) },
+          onReasoningDelta: text => { reasoningChars += text.length; request.onReasoningDelta?.(text) }
+        })
+        return completed
+      } catch (error) {
+        if (error instanceof ModelStreamError) completed = error.partial
+        throw error
       } finally {
-        const counts = normalizeUsage(usage)
+        const counts = normalizeUsage(completed?.usage)
         if (counts.input === undefined || counts.output === undefined) this.state.estimated = true
-        this.state.tokens += (counts.input ?? Math.ceil(JSON.stringify([request.messages, request.tools]).length / 3)) + (counts.output ?? Math.ceil(output.length / 3))
+        // Final messages include non-streamed text and tool arguments. Take the
+        // larger text/reasoning count so deltas are not charged a second time.
+        const outputChars = Math.max(textChars, completed?.content.length ?? 0)
+          + Math.max(reasoningChars, typeof completed?.reasoning_content === 'string' ? completed.reasoning_content.length : 0)
+          + (completed?.tool_calls ? JSON.stringify(completed.tool_calls).length : 0)
+        this.state.tokens += (counts.input ?? estimatedInput) + (counts.output ?? Math.ceil(outputChars / 3))
       }
     } }
   }

@@ -10,6 +10,7 @@ Start here:
 - [Changelog](../CHANGELOG.md)
 - [Quick Start](quick-start.md)
 - [Architecture](architecture.md)
+- [Composable Harness SDK, durability and migration](runtime-sdk.md)
 - [Model Configuration](model-configuration.md)
 - [CLI Commands](cli.md)
 - [Tools](tools.md)
@@ -20,5 +21,3 @@ Start here:
 - [Evaluations](evaluation.md)
 - [Observability](observability.md)
 - [Checkpoints](checkpoints.md)
-
-- [Composable Harness SDK, durability and migration](runtime-sdk.md)

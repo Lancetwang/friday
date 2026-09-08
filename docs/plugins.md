@@ -18,7 +18,7 @@ imports none of it. See the [Harness SDK](runtime-sdk.md) for host composition.
 
 | Plugin | Contributes | Notes |
 | --- | --- | --- |
-| `workspace` | Read, Write, Edit, Glob, Grep, Bash, UpdatePlan | Required; cannot be disabled |
+| `workspace` | Read, Write, Edit, Glob, Grep, Bash, UpdatePlan | Required in Friday; embedded SDK hosts may omit it |
 | `web` | WebSearch, WebFetch | |
 | `memory` | Memory tool, durable profile/memory prompt, and memory provider | The provider owns per-turn recall/capture and consolidation |
 | `skills` | Skill tool, plus the routing prompt section | Routing re-evaluates every turn |

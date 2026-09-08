@@ -56,10 +56,12 @@ Deleting a conversation removes its trace records, analyses, checkpoints, and
 session tool-spill directory. Resetting a project removes the project-scoped
 trace directory with the rest of that project's Friday state.
 
-The default projection bounds each trace record, but Friday does not currently
-apply a project-wide trace count or byte quota. Records remain until their
-conversation is deleted or the project is reset. Exact payload mode can make
-individual records much larger.
+After each trace write, Friday prunes project trace JSON files to defaults of
+1,000 files, 30 days, and 256 MiB, keeping newer records within all three limits.
+SDK hosts can override these values with `traceRetention`. This is write-time
+pruning, not a background expiry service. Analyst conversations in `analyses/`
+are outside this quota and are removed with their session. Exact payload mode
+can make individual records much larger and shorten the retained history.
 
 ## Exact payload mode
 

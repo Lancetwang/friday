@@ -95,11 +95,17 @@ Friday combines a guarded model/tool loop with workspace tools for reading, sear
 
 ### Context, memory, and skills
 
-Stable instructions precede volatile state for provider prefix caching. Context compaction is a Harness plugin with a configurable threshold and automatic/manual policy. Its compatibility default is automatic insert-and-compact at 85%: Friday replaces older dialogue with a structured summary and replays the largest complete recent tail within its target, retaining a minimum tail even when that target cannot be met. An optional two-stage strategy first replaces sufficiently old tool results with deterministic receipts, while retaining the exact results for the UI, resume, and forks; if that cannot free enough room, it rolls back before semantic compaction. Durable facts, project knowledge, episodic recall, and live task progress are stored separately. Skills are discovered from compact metadata and loaded only when selected.
+Stable instructions precede volatile state for provider prefix caching. Automatic
+context compaction defaults to 85% occupancy; an optional two-stage strategy
+tries compact tool receipts before semantic summarization. Original history
+remains available for the UI, resume, and forks. See [compaction settings](docs/plugins.md#configuring-compaction)
+for thresholds and retention details. Durable facts, project knowledge,
+episodic recall, and live task progress are stored separately. Skills are
+discovered from compact metadata and loaded when selected.
 
 ### Verification and recovery
 
-Goal mode checks the deliverable through a separate verifier and can feed concrete failures back into another attempt. Checkpoints materialized before a mutating turn can restore changed files together with the conversation boundary and task progress without modifying the project's Git history or index.
+Goal mode checks the deliverable through a separate verifier and can feed concrete failures back into another attempt. Checkpoints materialized before a mutating turn can restore changed files together with the conversation boundary and task progress without modifying the project's Git history or index. Model responses and completed tool results are saved at execution boundaries; recovery marks unfinished calls as uncertain instead of replaying side effects.
 
 ### Observability
 
@@ -109,30 +115,59 @@ The trace workbench records model requests, tool calls and results, timing, prov
 
 ```mermaid
 flowchart TB
-    subgraph Surfaces["Surfaces — protocol clients, no agent logic"]
-        direction LR
-        Desktop["Desktop (Tauri)"]
-        TUI["TUI / CLI"]
-        Headless["friday run · Harbor / evaluators"]
+    subgraph clients["CLIENTS"]
+        desktop["Desktop<br/>React + Tauri"]
+        terminal["Terminal<br/>TUI · ask · goal · run"]
     end
-    Surfaces --> Gateway["Gateway — NDJSON JSON-RPC"]
-    Gateway --> Session["Session — one turn frame:<br/>checkpoints · approvals · compaction · goal verification"]
-    subgraph Registry["Harness plugin registry — tools · prompts · services"]
-        direction LR
-        Workspace["workspace*<br/>files · shell · plan"]
-        Web["web<br/>search · fetch"]
-        Memory["memory<br/>recall · store"]
-        Skills["skills<br/>procedures"]
-        Compaction["compaction<br/>context policy"]
-        External["your plugins<br/>.friday/plugins"]
+    sdk["Embedded host<br/>Harness SDK"]
+
+    subgraph harness["HARNESS · Friday product runtime"]
+        gateway["Gateway<br/>NDJSON JSON-RPC · stdio"]
+        session["FridaySession<br/>turns · approvals · budgets · verification"]
+        capabilities["Capability registry<br/>tools · prompts · memory · compaction"]
+        state[("Local state<br/>sessions · checkpoints · traces")]
+        gateway --> session
+        session --- capabilities
+        session --> state
     end
-    Registry -- "narrow typed seams" --> Session
-    Session --> Core["Core — reusable runtime:<br/>guarded model ⇄ tools loop"]
-    Core --> Providers["Model providers<br/>Anthropic · OpenAI · compatible"]
+
+    subgraph core["CORE · reusable agent engine"]
+        agent["Agent + RunContext<br/>model / tool loop<br/>events · cancellation"]
+    end
+    model["Model providers<br/>OpenAI · Anthropic · compatible"]
+    tools["Registered tools<br/>workspace · shell · web · extensions"]
+
+    desktop --> gateway
+    terminal --> gateway
+    sdk --> session
+    session --> agent
+    capabilities -. tool bindings .-> agent
+    agent <--> model
+    agent <--> tools
+
+    style clients fill:#f8fafc,stroke:#cbd5e1,color:#334155
+    style harness fill:#f8faff,stroke:#a5b4fc,color:#312e81
+    style core fill:#f0fdf4,stroke:#86efac,color:#14532d
+    classDef client fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef runtime fill:#eef2ff,stroke:#6366f1,color:#312e81
+    classDef engine fill:#ecfdf5,stroke:#059669,color:#064e3b
+    classDef endpoint fill:#fffbeb,stroke:#d97706,color:#78350f
+    class desktop,terminal,sdk client
+    class gateway,session,capabilities,state runtime
+    class agent engine
+    class model,tools endpoint
 ```
 
-`*` required; every other plugin — built-in or yours — can be switched off in
-the TUI (`/plugins`), desktop Settings, or `disabled_plugins`.
+The arrows show runtime calls and data flow, not package imports. Clients use
+`packages/protocol`'s type-only contract; embedded hosts can call `FridaySession`
+directly. Harbor launches `friday run` through the same CLI path.
+
+The registry supplies five built-in packs: `workspace`, `web`, `memory`,
+`skills`, and `compaction`, plus trusted local plugins. Friday requires
+`workspace`; SDK hosts can explicitly select a smaller capability set.
+Optional packs can be disabled in `/plugins`, desktop Settings, or
+`disabled_plugins`. Shell execution is native by default; an opt-in Docker
+backend isolates shell commands. See the [Harness SDK](docs/runtime-sdk.md).
 
 - `packages/core` contains the public `Agent`, `RunContext`, provider adapters, tool execution, events, usage, cancellation, and preflight contracts.
 - `packages/harness` owns the Friday product: plugins, prompts, tools, model profiles, sessions, permissions, compaction, memory, skills, checkpoints, traces, and verification.
@@ -185,7 +220,7 @@ The CI matrix validates Core, Harness, CLI, desktop frontend, standalone sidecar
 - [Installation](docs/install.md)
 - [Model configuration](docs/model-configuration.md)
 - [CLI reference](docs/cli.md)
-- [Architecture](docs/architecture.md)
+- [Architecture](docs/architecture.md) and [Harness SDK](docs/runtime-sdk.md)
 - [Tools and permissions](docs/tools.md)
 - [Memory](docs/memory.md) and [Skills](docs/skills.md)
 - [Verification](docs/verification.md) and [Checkpoints](docs/checkpoints.md)

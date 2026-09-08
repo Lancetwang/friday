@@ -95,11 +95,11 @@ Friday 将受保护的模型/工具 Loop 与文件读取、搜索、编辑、She
 
 ### 上下文、记忆与 Skill
 
-稳定指令位于动态状态之前，以利用供应商的 Prefix Cache。上下文压缩是 Harness 插件，可配置触发阈值及自动或手动策略。兼容默认值是在 85% 时自动执行 insert-and-compact：用结构化摘要替换较早对话，并在目标预算内重放尽可能大的完整近期尾部；即使无法满足目标预算，也会保留最小近期尾部。可选的两阶段策略会先把足够旧的工具结果换成确定性收据，同时为 UI、Resume 和 Fork 保留精确原文；如果释放空间不足，会先完整回滚，再做语义压缩。长期事实、项目知识、情景记忆和当前任务进度彼此分离；Skill 先通过精简元数据发现，只在选中后加载正文与引用资源。
+稳定指令位于动态状态之前，以利用供应商的 Prefix Cache。上下文压缩默认在占用达到 85% 时自动触发；可选的两阶段策略会先尝试精简工具结果收据，再进行语义摘要。原始历史仍可用于 UI、Resume 和 Fork，具体阈值和保留策略见[压缩设置](docs/plugins.md#configuring-compaction)。长期事实、项目知识、情景记忆和当前任务进度彼此分离；Skill 先通过精简元数据发现，只在选中后加载正文与引用资源。
 
 ### 验证与恢复
 
-Goal Mode 使用独立验证器检查交付物，并能把具体失败反馈给下一次尝试。修改型 Turn 在执行前物化的检查点可以同时恢复被修改的文件、对话边界和任务进度，不改动项目自身的 Git 历史或 Index。
+Goal Mode 使用独立验证器检查交付物，并能把具体失败反馈给下一次尝试。修改型 Turn 在执行前物化的检查点可以同时恢复被修改的文件、对话边界和任务进度，不改动项目自身的 Git 历史或 Index。模型响应与已完成的工具结果在执行边界落盘；中断恢复会标记结果不确定的调用，不自动重放可能已有副作用的操作。
 
 ### 可观测性
 
@@ -109,29 +109,57 @@ Trace Workbench 记录模型请求、工具调用与结果、耗时、供应商 
 
 ```mermaid
 flowchart TB
-    subgraph Surfaces["界面层 — 纯协议客户端，不含 Agent 逻辑"]
-        direction LR
-        Desktop["桌面端 (Tauri)"]
-        TUI["TUI / CLI"]
-        Headless["friday run · Harbor / 评测器"]
+    subgraph clients["客户端"]
+        desktop["Desktop<br/>React + Tauri"]
+        terminal["Terminal<br/>TUI · ask · goal · run"]
     end
-    Surfaces --> Gateway["Gateway — NDJSON JSON-RPC"]
-    Gateway --> Session["会话 — 统一 Turn 框架：<br/>检查点 · 审批 · 压缩 · Goal 验证"]
-    subgraph Registry["Harness 插件注册表 — 工具 · 提示 · 服务"]
-        direction LR
-        Workspace["workspace*<br/>文件 · Shell · 计划"]
-        Web["web<br/>搜索 · 抓取"]
-        Memory["memory<br/>召回 · 存储"]
-        Skills["skills<br/>技能"]
-        Compaction["compaction<br/>上下文策略"]
-        External["你的插件<br/>.friday/plugins"]
+    sdk["嵌入式宿主<br/>Harness SDK"]
+
+    subgraph harness["HARNESS · Friday 产品运行时"]
+        gateway["Gateway<br/>NDJSON JSON-RPC · stdio"]
+        session["FridaySession<br/>Turn · 审批 · 预算 · 验证"]
+        capabilities["能力注册表<br/>工具 · 提示词 · 记忆 · 压缩"]
+        state[("本地状态<br/>会话 · 检查点 · Trace")]
+        gateway --> session
+        session --- capabilities
+        session --> state
     end
-    Registry -- "窄类型接口" --> Session
-    Session --> Core["Core — 可复用运行时：<br/>带守护的 模型 ⇄ 工具 循环"]
-    Core --> Providers["模型供应商<br/>Anthropic · OpenAI · 兼容端点"]
+
+    subgraph core["CORE · 可复用 Agent 引擎"]
+        agent["Agent + RunContext<br/>模型 / 工具循环<br/>事件 · 取消"]
+    end
+    model["模型供应商<br/>OpenAI · Anthropic · compatible"]
+    tools["注册工具<br/>文件 · Shell · Web · 扩展"]
+
+    desktop --> gateway
+    terminal --> gateway
+    sdk --> session
+    session --> agent
+    capabilities -. 工具绑定 .-> agent
+    agent <--> model
+    agent <--> tools
+
+    style clients fill:#f8fafc,stroke:#cbd5e1,color:#334155
+    style harness fill:#f8faff,stroke:#a5b4fc,color:#312e81
+    style core fill:#f0fdf4,stroke:#86efac,color:#14532d
+    classDef client fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef runtime fill:#eef2ff,stroke:#6366f1,color:#312e81
+    classDef engine fill:#ecfdf5,stroke:#059669,color:#064e3b
+    classDef endpoint fill:#fffbeb,stroke:#d97706,color:#78350f
+    class desktop,terminal,sdk client
+    class gateway,session,capabilities,state runtime
+    class agent engine
+    class model,tools endpoint
 ```
 
-`*` 为必需插件；其余每一个——内置或自建——都可在 TUI（`/plugins`）、桌面设置或 `disabled_plugins` 中关闭。
+图中箭头表示运行时调用和数据流，不代表包依赖。客户端共用
+`packages/protocol` 的纯类型契约；嵌入式宿主可以直接调用 `FridaySession`。
+Harbor 则通过 CLI 启动 `friday run`。
+
+注册表提供 `workspace`、`web`、`memory`、`skills`、`compaction` 五个内置能力包，
+也可加载受信任的本地插件。Friday 产品要求保留 `workspace`，SDK 宿主可显式选择更小的能力集合。
+可选包可通过 `/plugins`、桌面设置或 `disabled_plugins` 关闭。
+Shell 默认在本机执行，也可显式选择 Docker 后端隔离命令。详见 [Harness SDK](docs/runtime-sdk.md)。
 
 - `packages/core` 包含公开的 `Agent`、`RunContext`、供应商适配器、工具执行、事件、用量、取消与预检契约。
 - `packages/harness` 构成 Friday 产品层，负责插件、提示词、工具、模型配置、会话、权限、压缩、记忆、Skill、检查点、Trace 和验证。
@@ -184,7 +212,7 @@ CI 会在 Windows、macOS 和 Linux 上验证 Core、Harness、CLI、桌面前�
 - [安装](docs/install.zh-CN.md)
 - [模型配置](docs/model-configuration.md)
 - [CLI 参考](docs/cli.md)
-- [架构](docs/architecture.md)
+- [架构](docs/architecture.md)与 [Harness SDK](docs/runtime-sdk.md)
 - [工具与权限](docs/tools.md)
 - [记忆](docs/memory.md)与 [Skill](docs/skills.md)
 - [验证](docs/verification.md)与[检查点](docs/checkpoints.md)
