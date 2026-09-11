@@ -8,6 +8,7 @@ import type { AgentEvent, Message } from 'friday-agent-core'
 import { loadModelCatalog, loadModelConfig, projectStateDir } from './config.js'
 import { modelFor } from './model.js'
 import { promptTemplate } from './prompts.js'
+import { readRecord } from './records.js'
 import { withStateLock, writeJsonAtomic } from './storage.js'
 import { defaultThinking, normalizeThinking, thinkingOptions } from './thinking.js'
 import { localTimestamp } from './time.js'
@@ -103,6 +104,7 @@ export async function startTraceServer(workspace: string): Promise<TraceServer> 
       const url = new URL(request.url || '/', 'http://127.0.0.1')
       const analyses = url.pathname.match(/^\/api\/sessions\/([A-Za-z0-9_-]{1,128})\/analyses$/)
       const analyze = url.pathname.match(/^\/api\/sessions\/([A-Za-z0-9_-]{1,128})\/analyze\/stream$/)
+      const sessionExport = url.pathname.match(/^\/api\/sessions\/([A-Za-z0-9_-]{1,128})\/export$/)
       if (request.method === 'GET' && url.pathname === '/api/traces') {
         return send(response, 200, 'application/json; charset=utf-8', JSON.stringify(await loadTraces(workspace)))
       }
@@ -125,6 +127,7 @@ export async function startTraceServer(workspace: string): Promise<TraceServer> 
       if (request.method === 'GET' && analyses) {
         return send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ analyses: await listAnalyses(workspace, analyses[1]!) }))
       }
+      if (request.method === 'GET' && sessionExport) return await exportSession(response, workspace, sessionExport[1]!)
       if (request.method === 'POST' && analyze) return streamAnalysis(request, response, workspace, analyze[1]!)
       if (['GET', 'POST'].includes(request.method || '') === false) {
         return send(response, 405, 'text/plain; charset=utf-8', 'Method not allowed.')
@@ -372,8 +375,28 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   return value
 }
 
-function send(response: ServerResponse, status: number, type: string, body: string): void {
-  response.writeHead(status, responseHeaders(type))
+async function exportSession(response: ServerResponse, workspace: string, sessionId: string): Promise<void> {
+  requireId(sessionId, 'session')
+  let record: Record<string, unknown>
+  try {
+    record = await readRecord(workspace, join(projectStateDir(workspace), 'sessions', `${sessionId}.json`))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw httpError(404, `Session not found: ${sessionId}`)
+    throw error
+  }
+  send(response, 200, 'application/json; charset=utf-8', `${JSON.stringify(record, null, 2)}\n`, {
+    'content-disposition': `attachment; filename="friday-session-${sessionId}.json"`
+  })
+}
+
+function send(
+  response: ServerResponse,
+  status: number,
+  type: string,
+  body: string,
+  headers: Record<string, string> = {}
+): void {
+  response.writeHead(status, { ...responseHeaders(type), ...headers })
   response.end(body)
 }
 
@@ -476,6 +499,10 @@ header b{font-size:14px}header .sub{color:var(--faint);font-style:italic}header 
 main{display:grid;grid-template-columns:240px minmax(360px,1fr) minmax(400px,520px);height:calc(100% - 42px)}
 .pane{min-width:0;overflow:auto;border-right:1px solid var(--line)}
 .pane h2{position:sticky;top:0;z-index:2;margin:0;padding:9px 12px;background:var(--bg);border-bottom:1px solid var(--line);color:var(--faint);font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase}
+.pane h2.log-head{display:flex;align-items:center;gap:8px}
+.log-head #logtitle{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.session-export{flex:none;margin-left:auto;padding:2px 7px;border:1px solid var(--line);border-radius:4px;color:var(--mut);text-decoration:none;letter-spacing:0}
+.session-export:hover{color:var(--ink)}.session-export[aria-disabled="true"]{pointer-events:none;opacity:.45}
 .sess{display:block;width:100%;text-align:left;padding:8px 12px;border-bottom:1px solid var(--line)}
 .sess:hover{background:var(--sel)}.sess.on{background:var(--sel);box-shadow:inset 2px 0 0 var(--user)}
 .sess b{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-weight:600}
@@ -553,7 +580,7 @@ white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;font:1
 <button class="tbtn" id="theme">theme</button></header>
 <main>
 <section class="pane"><h2>sessions</h2><div id="sessions" class="empty">loading…</div></section>
-<section class="pane" id="log"><h2 id="logtitle">log</h2><div id="rows" class="empty">select a session</div></section>
+<section class="pane" id="log"><h2 class="log-head"><span id="logtitle">log</span><a id="session-export" class="session-export" aria-disabled="true" title="Download complete session JSON (not redacted)">export</a></h2><div id="rows" class="empty">select a session</div></section>
 <section class="pane" id="insp">
   <div id="tabs"><button id="tab-i" class="on">inspect</button><button id="tab-a">analyst</button></div>
   <div id="detail"><div class="empty">click a row</div></div>
@@ -735,6 +762,8 @@ function renderDetail(row,force){const el=document.querySelector('#detail');
 function renderRows(session){const key=session.id+':'+session.turns.length+':'+String(session.turns.map(t=>t.id).join(','));
   const el=document.querySelector('#rows');
   document.querySelector('#logtitle').textContent='log · '+one(session.title).slice(0,60);
+  const exportLink=document.querySelector('#session-export');
+  exportLink.href='/api/sessions/'+encodeURIComponent(session.id)+'/export';exportLink.setAttribute('aria-disabled','false');
   if(key!==renderedKey){renderedKey=key;rows=buildRows(session);el.className='';
     el.innerHTML=rows.map(r=>'<button class="row '+r.role+(r.err?' err':'')+(r.warn?' warn':'')+(r.turn0?' turn0':'')+(r.key===selectedKey?' on':'')+'" data-key="'+esc(r.key)+'">'
       +'<span class="n">'+r.n+'</span><span class="t">'+esc(hms(r.time))+'</span><span class="role">'+(r.role==='assistant'?'ASST':r.role.toUpperCase())+'</span>'
@@ -752,7 +781,8 @@ function renderSessions(){const el=document.querySelector('#sessions');el.classN
       document.querySelector('#msgs').innerHTML='';enableAnalyst();renderSessions()};
     el.appendChild(b)}
   const sel=sessions.find(s=>s.id===sessionId);
-  if(sessionId&&!sel){sessionId='';selectedKey='';renderedKey='';const r=document.querySelector('#rows');r.className='empty';r.textContent='select a session'}
+  if(sessionId&&!sel){sessionId='';selectedKey='';renderedKey='';const x=document.querySelector('#session-export');x.removeAttribute('href');x.setAttribute('aria-disabled','true');
+    const r=document.querySelector('#rows');r.className='empty';r.textContent='select a session'}
   else if(!sessionId&&sessions[0]){sessionId=sessions[0].id;enableAnalyst();renderSessions();return}
   else if(sel)renderRows(sel)}
 async function load(){sessions=grouped(await api('/api/traces'));renderSessions()}

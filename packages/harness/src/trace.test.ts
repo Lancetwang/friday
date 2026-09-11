@@ -6,10 +6,12 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Script } from 'node:vm'
 
+import { projectStateDir } from './config.js'
 import { Gateway } from './gateway.js'
+import { writeRecord } from './records.js'
 import { writeTrace } from './trace.js'
 
-test('trace RPC serves local structured records and stops idempotently', async () => {
+test('trace RPC serves local records, exports sessions, and stops idempotently', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'friday-trace-'))
   const home = join(temporary, 'home')
   const workspace = join(temporary, 'workspace')
@@ -49,20 +51,25 @@ test('trace RPC serves local structured records and stops idempotently', async (
         { type: 'tool.result', category: 'tool', runId: 'r1', seq: 1, timestamp: 2, data: { authorization: 'Bearer private-token', content: 'API_KEY=private-key' } }
       ]
     })
+    await writeRecord(workspace, join(projectStateDir(workspace), 'sessions', 's1.json'), {
+      session_id: 's1', title: 'Export test', messages: [{ role: 'user', content: 'complete source message' }]
+    })
     gateway = new Gateway(workspace, value => output.push(value))
     await gateway.start()
     output.length = 0
     await gateway.handle({ id: 'serve', method: 'trace.serve' })
     const url = (result(output, 'serve') as { url: string }).url
     assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/)
-    const [page, traces] = await Promise.all([
+    const [page, traces, exported] = await Promise.all([
       fetch(url).then(response => response.text()),
-      fetch(`${url}/api/traces`).then(response => response.json()) as Promise<Array<Record<string, unknown>>>
+      fetch(`${url}/api/traces`).then(response => response.json()) as Promise<Array<Record<string, unknown>>>,
+      fetch(`${url}/api/sessions/s1/export`)
     ])
     assert.match(page, /friday trace/)
     assert.match(page, /execution log/)
     assert.match(page, /id="detail"/)
     assert.match(page, /id="aform"/)
+    assert.match(page, /id="session-export"/)
     assert.match(page, /analyst/)
     for (const match of page.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Script(match[1]!)
     assert.equal(traces[0]?.user, 'inspect [redacted]')
@@ -72,6 +79,14 @@ test('trace RPC serves local structured records and stops idempotently', async (
     assert(!serialized.includes('private-key'))
     assert(!serialized.includes('example-secret'))
     assert(serialized.includes('[redacted]'))
+    assert.equal(exported.status, 200)
+    assert.equal(exported.headers.get('content-disposition'), 'attachment; filename="friday-session-s1.json"')
+    assert.match(exported.headers.get('content-type') || '', /application\/json/)
+    const session = await exported.json() as { messages: Array<{ role: string; content: string }> }
+    assert.deepEqual(session.messages, [{ role: 'user', content: 'complete source message' }])
+    const missing = await fetch(`${url}/api/sessions/missing/export`)
+    assert.equal(missing.status, 404)
+    await missing.text()
 
     const firstStream = await fetch(`${url}/api/sessions/s1/analyze/stream`, {
       method: 'POST', headers: { 'content-type': 'application/json' },

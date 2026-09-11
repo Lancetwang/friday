@@ -47,6 +47,12 @@ turn records by session and renders a flat execution log of user, assistant,
 tool, verification, approval, guard, and compaction activity. Selecting a row
 shows its stored data.
 
+After selecting a session, **Export** downloads a self-contained JSON copy of
+the corresponding Friday session record. Message pages are expanded into the
+file so it can be used without Friday's local object store. This is the original
+session content, not the redacted and bounded Trace projection, and it may
+therefore contain private workspace or conversation data.
+
 Trace Analyst receives a bounded, redacted JSON projection of the selected
 session: at most 180,000 characters overall, 12,000 per projected item, and 12
 stored analysis messages. Its conversations are saved under `analyses/` and do
