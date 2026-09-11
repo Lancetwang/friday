@@ -1,6 +1,6 @@
 {
   "name": "friday-agent-harness",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "private": true,
   "type": "module",
   "bin": {
@@ -22,8 +22,8 @@
     "test": "npm run build && node --test dist/*.test.js"
   },
   "dependencies": {
-    "friday-agent-core": "0.9.2",
-    "friday-agent-protocol": "0.9.2",
+    "friday-agent-core": "0.9.3",
+    "friday-agent-protocol": "0.9.3",
     "ignore": "7.0.6",
     "proper-lockfile": "^4.1.2"
   },

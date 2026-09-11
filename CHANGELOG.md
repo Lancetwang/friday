@@ -2,6 +2,14 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.9.3 (2026-09-11)
+
+### Added
+- The Trace Workbench can export the selected conversation as a self-contained `friday-session-<id>.json` file. Friday expands its content-addressed message pages during export, so the downloaded session can be inspected or processed without the local object store; the UI and observability guide make clear that this original session content is not trace-redacted.
+
+### Fixed
+- Shared resource budgets now charge partial responses from interrupted model streams, include reasoning and tool-call payloads when provider usage is unavailable, and prefer exact reported usage without double-counting streamed deltas. A failed request can therefore no longer leave its consumed tokens available to a later request.
+
 ## v0.9.2 (2026-09-05)
 
 ### Fixed

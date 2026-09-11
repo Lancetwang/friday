@@ -6,7 +6,7 @@ import type { GatewayEvent, MessageMetrics, ModelTermination, SessionInfo } from
 import { GatewayClient } from './gatewayClient.js'
 import { TrajectoryWriter } from './trajectory.js'
 
-export const VERSION = '0.9.2'
+export const VERSION = '0.9.3'
 
 export type CliOptions = {
   command: 'ask' | 'goal' | 'help' | 'run' | 'tui' | 'version'
