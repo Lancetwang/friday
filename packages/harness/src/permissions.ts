@@ -53,7 +53,7 @@ export async function preflightShell(call: ToolCall, options: PermissionOptions,
   if (matches(command, rules.deny)) return denied('matched deny rule')
   if (options.mode === 'bypass' || options.sessionAllowed || matches(command, rules.allow)) return { action: 'allow' }
 
-  const reason = matches(command, rules.require_approval) ? 'matched approval rule' : dangerous(command)
+  const reason = matches(command, rules.require_approval) ? 'matched approval rule' : dangerous(command) || scriptRisk(command)
   if (!reason) return { action: 'allow' }
   if (options.mode === 'auto') {
     if (!options.review) return denied(`automatic review is unavailable for a command that ${reason}`)
@@ -82,7 +82,8 @@ export async function preflightShell(call: ToolCall, options: PermissionOptions,
   }
 }
 
-export async function preflightVerifierShell(call: ToolCall, workspace: string): Promise<ToolPreflight> {
+export async function preflightVerifierShell(call: ToolCall, workspace: string, isolated = false): Promise<ToolPreflight> {
+  if (!isolated) return denied('verifier shell execution requires a backend with enforced read-only filesystem and network isolation')
   const args = argumentsOf(call)
   const command = typeof args.command === 'string' ? args.command.trim() : ''
   if (!command) return denied('shell command cannot be empty')
@@ -92,6 +93,16 @@ export async function preflightVerifierShell(call: ToolCall, workspace: string):
   if (matches(command, rules.deny)) return denied('matched deny rule')
   const mutation = dangerous(command) || verifierMutation(command)
   return mutation ? denied(`the verifier is read-only and this command ${mutation}`) : { action: 'allow' }
+}
+
+function scriptRisk(command: string): string {
+  // Quoted executable names and script bodies are still executable code.
+  const raw = command.toLowerCase().replace(/["']/g, '')
+  if (/\b(?:node(?:js)?|deno|bun|python(?:\d(?:\.\d+)?)?|ruby|perl|php|lua|powershell|pwsh|bash|sh|zsh|cmd)(?:\.exe)?\b/.test(raw)
+    || /\b(?:npm|pnpm|yarn)\s+(?:run|test|start|build|exec)\b/.test(raw)
+    || /\.(?:ps1|bat|cmd|mjs|cjs|py)\b/.test(raw)) return 'executes scripts with potentially arbitrary filesystem or network effects'
+  if (/[;&|\n]|\$\(|`|\[[^\]]+\]::/.test(command)) return 'executes compound or dynamic shell code'
+  return ''
 }
 
 export async function pendingApproval(workspace: string, sessionId: string): Promise<Record<string, unknown>> {

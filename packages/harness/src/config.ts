@@ -7,12 +7,14 @@ import type {
   CompactionSettings,
   DiscoveredModel,
   ModelCatalog,
+  ModelCapabilities,
   ModelProfile,
   ModelProvider
 } from 'friday-agent-protocol'
 
 import { writeJsonAtomic, withStateLock } from './storage.js'
 import { localTimestamp } from './time.js'
+import { validateCapabilities, resolveCapabilities } from './model-capabilities.js'
 
 export type { CompactionSettings, DiscoveredModel, ModelCatalog, ModelProfile, ModelProvider } from 'friday-agent-protocol'
 
@@ -24,6 +26,7 @@ export type ModelConfig = {
   baseUrl: string
   /** Advisory positive hint; the provider remains the authority for images. */
   vision?: boolean
+  capabilities?: ModelCapabilities
   contextWindow: number
   maxOutputTokens: number
   apiKey: string
@@ -37,6 +40,7 @@ type StoredProfile = {
   model?: unknown
   base_url?: unknown
   vision?: unknown
+  capabilities?: unknown
   context_window?: unknown
   max_output_tokens?: unknown
   run_token_budget?: unknown
@@ -105,7 +109,8 @@ export function loadModelConfig(workspace: string, requestedProfile?: string): M
     provider: profile.provider,
     model: profile.model,
     baseUrl: profile.base_url,
-    ...(profile.vision === true ? { vision: true } : {}),
+    ...(typeof profile.vision === 'boolean' ? { vision: profile.vision } : {}),
+    ...(profile.capabilities ? { capabilities: profile.capabilities } : {}),
     contextWindow: profile.context_window,
     maxOutputTokens: profile.max_output_tokens,
     runTokenBudget: profile.run_token_budget,
@@ -355,8 +360,11 @@ export async function fetchProviderModels(provider: string, baseUrl: string, api
     if (!isObject(item) || typeof item.id !== 'string' || !item.id.trim()) continue
     const id = item.id.trim()
     const vision = discoveredVision(item)
+    let capabilities: ModelCapabilities | undefined
+    try { capabilities = validateCapabilities(item.capabilities); resolveCapabilities(provider, id, capabilities) } catch { capabilities = undefined }
     const existing = models.get(id)
     if (!existing || vision) models.set(id, { id, ...(vision ? { vision: true } : {}),
+      ...(capabilities ? { capabilities } : {}),
       ...(positive(item.context_window ?? item.context_length, 0) ? { context_window: positive(item.context_window ?? item.context_length, 0) } : {}),
       ...(positive(item.max_output_tokens, 0) ? { max_output_tokens: positive(item.max_output_tokens, 0) } : {}) })
   }
@@ -533,18 +541,21 @@ function validateProfile(value: StoredProfile | Record<string, unknown>, base: t
   if (!definition.builtin && !model) throw new Error('Model configuration model is required.')
   validateUrl(baseUrl)
   // Unknown models start conservatively; explicit profile limits remain authoritative.
-  const contextWindow = positive(value.context_window, 32_768)
-  const maxOutputTokens = positive(value.max_output_tokens, Math.min(contextWindow, 4_096))
-  const runTokenBudget = positive(value.run_token_budget, base.run_token_budget)
+  const contextWindow = profileLimit(value.context_window, 'context_window', 32_768)
+  const maxOutputTokens = profileLimit(value.max_output_tokens, 'max_output_tokens', Math.min(contextWindow, 4_096))
+  const runTokenBudget = profileLimit(value.run_token_budget, 'run_token_budget', base.run_token_budget)
   if (maxOutputTokens > contextWindow) throw new Error('Maximum output tokens cannot exceed the context window.')
-  const vision = value.vision === true || supportsVision(provider, model) === true
+  const vision = typeof value.vision === 'boolean' ? value.vision : supportsVision(provider, model)
+  const capabilities = validateCapabilities(value.capabilities)
+  resolveCapabilities(provider, model, capabilities)
   return {
     id,
     name,
     provider,
     model,
     base_url: baseUrl,
-    ...(vision ? { vision: true } : {}),
+    ...(typeof vision === 'boolean' ? { vision } : {}),
+    ...(capabilities ? { capabilities } : {}),
     context_window: contextWindow,
     max_output_tokens: maxOutputTokens,
     run_token_budget: runTokenBudget,
@@ -574,20 +585,23 @@ function syncBuiltin(
     const model = discovered.id
     const vision = discovered.vision === true || supportsVision(provider.id, model) === true
     let profile = next.find(item => item.provider === provider.id && item.model === model)
+      ?? removed.find(item => item.model === model)
     if (profile) {
-      const { vision: _oldVision, ...rest } = profile
+      const { vision: oldVision, ...rest } = profile
       profile = {
         ...rest,
         auto: true,
-        name: model,
-        base_url: provider.base_url,
-        ...(vision ? { vision: true } : {})
+        ...(typeof oldVision === 'boolean' ? { vision: oldVision } : vision ? { vision: true } : {}),
+        ...(profile.capabilities ? { capabilities: profile.capabilities } : discovered.capabilities ? { capabilities: discovered.capabilities } : {})
       }
-      next[next.findIndex(item => item.id === profile!.id)] = profile
+      const index = next.findIndex(item => item.id === profile!.id)
+      if (index < 0) next.push(profile)
+      else next[index] = profile
     } else {
       profile = validateProfile({
         id: profileId(`${provider.id}-${model}`), name: model, provider: provider.id, model,
         base_url: provider.base_url, auto: true, ...(vision ? { vision: true } : {})
+        , ...(discovered.capabilities ? { capabilities: discovered.capabilities } : {})
         , ...(discovered.context_window ? { context_window: discovered.context_window } : {}),
         ...(discovered.max_output_tokens ? { max_output_tokens: discovered.max_output_tokens } : {})
       }, base)
@@ -757,6 +771,12 @@ function text(value: unknown, fallback = ''): string {
 
 function positive(value: unknown, fallback: number): number {
   return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : fallback
+}
+
+function profileLimit(value: unknown, name: string, fallback: number): number {
+  if (value === undefined) return fallback
+  if (!Number.isSafeInteger(value) || Number(value) <= 0) throw new Error(`${name} must be a positive integer.`)
+  return Number(value)
 }
 
 function compactionSettings(value: Record<string, unknown>, base: CompactionSettings): CompactionSettings {

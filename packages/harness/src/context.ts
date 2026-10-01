@@ -317,15 +317,24 @@ async function compactConversation(
   // The replayed request is prompt scaffolding. Archive its original so the
   // product transcript keeps one real user message while the cloned replay is hidden.
   const keptSet = new Set(recent)
-  options.archive(body.filter(message => !keptSet.has(message) && !message.friday_compaction_artifact))
   const replacement: Message[] = [{
     role: 'assistant', content: `## Session Summary\n${summary.trim()}`, friday_compaction_artifact: true
   }]
   if (request) replacement.push({ ...structuredClone(request), friday_compaction_artifact: true })
   replacement.push(...recent)
   options.context.messages.splice(prefixLength, body.length, ...replacement)
+  const anchor = options.context.metadata[ANCHOR]
   delete options.context.metadata[ANCHOR]
   const after = Number(tokenMeasurement(options.context, options.tools).tokens)
+  if (after >= before) {
+    options.context.messages.splice(prefixLength, replacement.length, ...body)
+    if (anchor !== undefined) options.context.metadata[ANCHOR] = anchor
+    const record = recordFor('conversation', before, before, window, kept, 'none',
+      [reason, 'Summary did not reduce context; the original conversation was retained.'].filter(Boolean).join('; '), false, [], fallback)
+    options.context.emit('context.compacted', 'context', record)
+    return { record, summary: '' }
+  }
+  options.archive(body.filter(message => !keptSet.has(message) && !message.friday_compaction_artifact))
   const record = recordFor('conversation', before, after, window, kept, strategy, reason, true, memories, fallback)
   options.context.emit('context.compacted', 'context', record)
   return { record, summary }

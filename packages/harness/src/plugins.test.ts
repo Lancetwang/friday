@@ -207,11 +207,11 @@ test('the verifier assembles from built-in read-only declarations and honors dis
   const { workspace, restore } = await makeWorkspace()
   try {
     assert.deepEqual(buildVerifierTools(workspace).map(tool => tool.name), [
-      'Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch', 'Skill'
+      'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Skill'
     ])
     process.env.FRIDAY_DISABLED_PLUGINS = 'web,skills'
     try {
-      assert.deepEqual(buildVerifierTools(workspace).map(tool => tool.name), ['Read', 'Glob', 'Grep', 'Bash'])
+      assert.deepEqual(buildVerifierTools(workspace).map(tool => tool.name), ['Read', 'Glob', 'Grep'])
     } finally {
       delete process.env.FRIDAY_DISABLED_PLUGINS
     }

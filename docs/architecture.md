@@ -7,7 +7,8 @@ Harness to the reusable Agent Core.
 
 `packages/core` is the reusable unit. `Agent` owns the bounded
 model → tools → model loop and accepts an `AbortSignal`. `ToolExecutor` parses
-calls, runs tool preflight, races execution against cancellation, preserves
+calls, runs tool preflight, awaits cleanup for cooperative tools (and races
+uncooperative tools against cancellation), preserves
 serial barriers, and executes explicitly parallel tools in batches of at most
 four. Provider adapters implement one `ChatModel` contract.
 
@@ -42,6 +43,18 @@ mutate a running `Agent` directly.
 Harness and both clients compile against that one wire contract, so a status or
 event shape cannot drift independently in the TUI and desktop. Protocol imports
 neither Core nor Harness and emits no JavaScript into the product bundles.
+
+Session orchestration remains in `session.ts`. `session-store.ts` owns persisted
+history, forks and legacy hydration; `session-metrics.ts` owns spend and activity
+aggregation; `maintenance.ts` gives idle maintenance its own budget and handles
+optional memory failures. `model-capabilities.ts` owns model compatibility and
+explicit capability overrides. `acceptance.ts` owns the immutable goal contract.
+
+Desktop transport is in `GatewayClient.ts`, using the shared method-to-parameter
+and result mapping, bounded pending requests and workspace-scoped replies.
+`RunEventFence.ts` keeps old events and buffered deltas from changing a newer
+run. Settings, capability editing, execution settings and remote icons are
+separate components from `App.tsx`.
 
 ## Capability registry
 

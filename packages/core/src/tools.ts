@@ -31,7 +31,8 @@ export function toolSchema(tool: Tool): ToolSchema {
 export class ToolExecutor {
   private readonly tools: Map<string, Tool>
 
-  constructor(tools: readonly Tool[] = [], private readonly maxParallel = 4) {
+  constructor(tools: readonly Tool[] = [], private readonly maxParallel = 4,
+    private readonly beforeExecute?: (call: ToolCall, signal?: AbortSignal) => void | Promise<void>) {
     if (!Number.isSafeInteger(maxParallel) || maxParallel < 1) throw new Error('maxParallel must be a positive integer.')
     this.tools = new Map()
     for (const tool of tools) {
@@ -131,14 +132,17 @@ export class ToolExecutor {
     try {
       signal?.throwIfAborted()
       const args = this.arguments(call)
-      // The race is what keeps cancellation honest: a tool that ignores its
-      // signal (or a child process the kernel will not release) must not hold
-      // the whole turn hostage. On abort the tool's own promise is orphaned
-      // and settles in the background.
-      const work = Promise.resolve(currentCall.run(call, () => tool.execute(args, signal, content => onProgress?.(call, content))))
-      const value = await raceAbort(work, signal)
+      await this.beforeExecute?.(call, signal)
+      signal?.throwIfAborted()
+      // Cooperative mutation tools own their cleanup. Uncooperative extensions
+      // retain bounded cancellation, with no late progress after abort.
+      const work = Promise.resolve(currentCall.run(call, () => tool.execute(args, signal, content => {
+        if (!signal?.aborted) onProgress?.(call, content)
+      })))
+      const value = await (tool.abortMode === 'settle' ? work : raceAbort(work, signal))
+      signal?.throwIfAborted()
       const envelope = value && typeof value === 'object' ? value as JsonObject : undefined
-      return { toolCallId: call.id, content: stringify(value), isError: envelope?.isError === true || envelope?.is_error === true, elapsedMs: performance.now() - started }
+      return { toolCallId: call.id, content: stringify(value), isError: envelope?.isError === true || envelope?.is_error === true || !!envelope?.error, elapsedMs: performance.now() - started }
     } catch (error) {
       return failure(call.id, `Tool '${tool.name}' failed: ${errorText(error)}`, started)
     }

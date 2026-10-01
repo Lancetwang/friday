@@ -3,6 +3,7 @@ export { AnthropicModel, anthropicMessages, type AnthropicModelOptions } from '.
 export { RunContext, type Usage } from './context.js'
 export { ModelRequestError, ModelStreamError } from './errors.js'
 export { normalizeUsage } from './usage.js'
+export { modelOrigin, projectMessages } from './messages.js'
 export { OpenAIModel, type OpenAIModelOptions } from './openai.js'
 export { ResponsesModel, responsesInput, responsesMessage, type ResponsesModelOptions } from './responses.js'
 export { getCurrentToolCall, ToolExecutor, toolSchema, type ToolBatchPreflight, type ToolResult } from './tools.js'
@@ -14,6 +15,7 @@ export type {
   Message,
   ModelFinishReason,
   ModelRequest,
+  ModelOrigin,
   ModelTermination,
   Tool,
   ToolCall,

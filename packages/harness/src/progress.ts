@@ -1,4 +1,6 @@
 import type { RunContext } from 'friday-agent-core'
+import type { AcceptanceCriterion } from 'friday-agent-protocol'
+import { acceptanceFor, validateAcceptance } from './acceptance.js'
 
 import { localTimestamp } from './time.js'
 
@@ -10,6 +12,7 @@ export type ProgressState = {
   mode: 'normal' | 'goal'
   status: 'working' | 'waiting' | 'blocked' | 'done'
   steps: ProgressStep[]
+  acceptance?: AcceptanceCriterion[]
   next_action: string
   verification: Record<string, unknown>
   updated: string
@@ -27,7 +30,8 @@ export function beginProgress(
   context: RunContext,
   request: string,
   mode: 'normal' | 'goal' = 'normal',
-  continuation = false
+  continuation = false,
+  acceptance?: AcceptanceCriterion[]
 ): ProgressState {
   const previous = currentProgress(context)
   const objective = request.trim()
@@ -44,6 +48,7 @@ export function beginProgress(
     steps: [],
     next_action: '',
     verification: {},
+    ...(mode === 'goal' ? { acceptance: acceptance ?? acceptanceFor(objective) } : {}),
     updated: ''
   }
   return store(context, state)
@@ -61,7 +66,7 @@ export function updatePlan(
   const nextAction = optionalText(value.next_action, 'next_action', 2_000)
   return store(context, {
     ...state,
-    ...(objective ? { objective } : {}),
+    ...(objective && state.mode !== 'goal' ? { objective } : {}),
     steps,
     status: 'working',
     next_action: nextAction
@@ -77,7 +82,7 @@ export function recordVerificationProgress(context: RunContext, value: Record<st
   const state = currentProgress(context)
   if (!state) return undefined
   const verification = Object.fromEntries(
-    ['attempt', 'stop_reason', 'verdict'].flatMap(key => value[key] === undefined ? [] : [[key, value[key]]])
+    ['attempt', 'stop_reason', 'verdict', 'criteria'].flatMap(key => value[key] === undefined ? [] : [[key, value[key]]])
   )
   return store(context, { ...state, verification })
 }
@@ -90,7 +95,7 @@ export function finishProgress(
   const state = currentProgress(context)
   if (!state) return undefined
   const summary = Object.fromEntries(
-    ['attempt', 'stop_reason', 'verdict'].flatMap(key => verification[key] === undefined ? [] : [[key, verification[key]]])
+    ['attempt', 'stop_reason', 'verdict', 'criteria'].flatMap(key => verification[key] === undefined ? [] : [[key, verification[key]]])
   )
   if (status === 'done') {
     return store(context, {
@@ -119,6 +124,11 @@ export function restoreProgress(context: RunContext, value: unknown, emit = fals
   }
   let steps: ProgressStep[] = []
   try { steps = validatePlan(value.steps) } catch {}
+  let acceptance: AcceptanceCriterion[] | undefined
+  if (value.mode === 'goal') {
+    const extra = Array.isArray(value.acceptance) ? value.acceptance.filter(item => isObject(item) && item.id !== 'goal') : undefined
+    try { acceptance = acceptanceFor(value.objective, validateAcceptance(extra)) } catch { acceptance = acceptanceFor(value.objective) }
+  }
   const state: ProgressState = {
     objective: value.objective.trim(),
     latest_request: typeof value.latest_request === 'string' ? value.latest_request.trim() : '',
@@ -127,6 +137,7 @@ export function restoreProgress(context: RunContext, value: unknown, emit = fals
       ? value.status as ProgressState['status']
       : 'working',
     steps,
+    ...(acceptance ? { acceptance } : {}),
     next_action: typeof value.next_action === 'string' ? value.next_action.trim() : '',
     verification: isObject(value.verification) ? structuredClone(value.verification) : {},
     updated: typeof value.updated === 'string' ? value.updated : ''

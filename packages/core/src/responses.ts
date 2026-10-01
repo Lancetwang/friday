@@ -1,12 +1,16 @@
 import { ModelStreamError, throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
 import { normalizeTermination, termination } from './termination.js'
+import { outputTokenLimit } from './output-limit.js'
+import { modelOrigin, projectMessages, withModelOrigin } from './messages.js'
 import type { AssistantMessage, ChatModel, JsonObject, Message, ModelRequest, ToolCall, ToolSchema } from './types.js'
 
 export type ResponsesModelOptions = {
   apiKey: string
   model: string
   baseUrl?: string
+  provider?: string
+  vision?: boolean
   maxOutputTokens?: number
   body?: JsonObject
 }
@@ -18,7 +22,9 @@ export class ResponsesModel implements ChatModel {
   }
 
   async complete(request: ModelRequest): Promise<AssistantMessage> {
-    const { instructions, input } = responsesInput(request.messages)
+    const origin = modelOrigin('responses', this.options)
+    const limit = outputTokenLimit(this.options.maxOutputTokens, request.maxOutputTokens)
+    const { instructions, input } = responsesInput(projectMessages(request.messages, origin, this.options.vision))
     const response = await fetch(`${normalizeBaseUrl(this.options.baseUrl)}/responses`, {
       method: 'POST',
       headers: { authorization: `Bearer ${this.options.apiKey}`, 'content-type': 'application/json' },
@@ -28,8 +34,8 @@ export class ResponsesModel implements ChatModel {
         stream: true,
         ...(instructions ? { instructions } : {}),
         ...(request.tools?.length ? { tools: request.tools.map(responsesTool), tool_choice: request.toolChoice ?? 'auto' } : {}),
-        ...(this.options.maxOutputTokens ? { max_output_tokens: Math.min(this.options.maxOutputTokens, request.maxOutputTokens ?? Infinity) } : {}),
-        ...this.options.body
+        ...this.options.body,
+        ...(limit !== undefined ? { max_output_tokens: limit } : {})
       }),
       ...(request.signal ? { signal: request.signal } : {})
     })
@@ -55,7 +61,7 @@ export class ResponsesModel implements ChatModel {
     } catch (error) {
       throw new ModelStreamError(error instanceof Error ? error.message : String(error), { role: 'assistant', content })
     }
-    return responsesMessage(completed)
+    return withModelOrigin(responsesMessage(completed), origin)
   }
 }
 
@@ -73,7 +79,7 @@ export function responsesInput(source: readonly Message[]): { instructions: stri
     }
     if (message.role !== 'user' && message.role !== 'assistant') continue
     if (message.role === 'assistant' && Array.isArray(message.reasoning_content)) {
-      input.push(...message.reasoning_content.filter(isObject).map(value => ({ ...value })))
+      input.push(...message.reasoning_content.filter(isObject).filter(value => value.type === 'reasoning').map(value => ({ ...value })))
     }
     const content = responsesContent(message.content)
     if (content && (!Array.isArray(content) || content.length)) input.push({ role: message.role, content })

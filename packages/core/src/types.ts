@@ -6,6 +6,14 @@ export type Message = {
   [key: string]: unknown
 }
 
+/** Identity of the adapter that produced provider-specific replay data. */
+export type ModelOrigin = {
+  api: 'chat-completions' | 'responses' | 'anthropic'
+  provider: string
+  model: string
+  endpoint: string
+}
+
 export type ToolCall = {
   id: string
   type: 'function'
@@ -31,6 +39,7 @@ export type AssistantMessage = Message & {
   role: 'assistant'
   content: string
   reasoning_content?: unknown
+  model_origin?: ModelOrigin
   tool_calls?: ToolCall[]
   usage?: JsonObject
   termination?: ModelTermination
@@ -74,6 +83,8 @@ export type Tool = {
   description: string
   parameters: JsonObject
   parallel?: boolean
+  /** Cooperative tools settle their cleanup before cancellation returns. */
+  abortMode?: 'race' | 'settle'
   preflight?(call: ToolCall, signal?: AbortSignal): ToolPreflight | Promise<ToolPreflight>
   execute(args: JsonObject, signal?: AbortSignal, onProgress?: (content: string) => void): unknown | Promise<unknown>
 }

@@ -830,10 +830,12 @@ dependencies = [
 name = "friday-desktop"
 version = "0.9.3"
 dependencies = [
+ "libc",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -25,8 +25,8 @@ export class ResourceBudget {
     }
   }
   tool(): void {
+    if (this.state.toolCalls >= (this.state.limits.toolCalls ?? 400)) throw new ResourceLimitError('Run tool-call limit exceeded.')
     this.state.toolCalls += 1
-    if (this.state.toolCalls > (this.state.limits.toolCalls ?? 400)) throw new ResourceLimitError('Run tool-call limit exceeded.')
   }
   wrap(model: ChatModel): ChatModel {
     return { complete: async request => {

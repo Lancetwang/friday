@@ -209,7 +209,10 @@ approval continuations do not recall or capture again. Its optional `recall`
 string is prepended to that same user message, preserving the existing append-
 only conversation shape. Its optional `capture` object is an observability
 receipt emitted as `memory.updated`; the provider performs any durable write
-itself. `consolidate()` is optional. The Harness supplies the requested window,
+itself. User input is durably saved before this optional preparation; recall or
+capture failure emits `memory.warning` and leaves the main turn available.
+Providers can return `warnings: string[]` for partial failures. Observe the
+supplied signal when acquiring resources. `consolidate()` is optional. The Harness supplies the requested window,
 an abort signal, and a security-scoped model `review(payload)` callback, while
 the provider owns candidate selection and validated storage changes.
 

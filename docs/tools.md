@@ -42,6 +42,10 @@ replacement, and serialize concurrent changes to the same resolved file.
 or overlapping matches, and preserves a UTF-8 BOM and the existing line-ending
 style.
 
+Write/Edit cancellation waits for cooperative file locking and atomic-write
+cleanup before releasing the run's mutation lock. A queued cancelled write
+cannot commit later against the next turn's workspace state.
+
 `Glob` and `Grep` remain inside the workspace even when symlinks point outward.
 They skip `.git` and common generated directories unless the requested pattern
 explicitly names a generated directory. Long scans check cancellation while
@@ -52,6 +56,15 @@ walking and reading files.
 Every Bash call starts in the workspace. The command itself is not path-
 confined: shell syntax and absolute paths can reach anything allowed to the
 launching user after permission preflight.
+
+Manual mode also treats quoted interpreter scripts, package scripts, compound
+commands and dynamic evaluation as potentially mutating. Executable verifier
+checks require an isolated backend; native verifier mode exposes no Bash.
+Under **Settings > General > Execution backend**, a workspace can select a
+preinstalled Docker image and agent network policy. Verifier mounts always stay
+read-only with networking disabled. Environment `FRIDAY_EXECUTION_IMAGE` takes
+precedence over the saved workspace setting. Missing Docker or an image fails
+without falling back to native execution.
 
 Each of the stdout and stderr streams is bounded separately before it enters
 the conversation:
@@ -82,6 +95,10 @@ tree until the session is deleted, evicted, reset, or the gateway closes. This
 explicit contract lets a completed turn and CLI exit without inheriting a
 service's pipes. A command that daemonizes itself outside this contract cannot
 be given the same lifecycle guarantee.
+
+Desktop shutdown requests gateway cleanup before its bounded termination
+fallback. On Windows, a Job Object also owns detached descendants and kills
+remaining processes when the gateway ownership is closed.
 
 When a request has an overall run budget, that remaining work window is also a
 hard cap on Bash: the per-call `timeout_seconds` may be larger, but the shared
@@ -141,10 +158,11 @@ Persistent Bash rules live at:
 }
 ```
 
-The Goal verifier receives a separate Bash preflight that rejects the normal
-dangerous set plus common Git, packaging, redirection, file-creation, and move
-commands. It still runs a real shell and is not an OS-enforced read-only
-environment.
+The Goal verifier exposes Bash only when the execution backend enforces
+read-only filesystem access and network isolation. Its separate preflight also
+rejects common mutating commands. With the default native backend, verification
+uses the provided read-only tools and reports blocked or inconclusive when
+executable evidence is required.
 
 ## Network and credentials
 

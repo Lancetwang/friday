@@ -16,13 +16,23 @@ requirements for acceptance context, and bounded delivery hints derived from
 recent `Write`, `Edit`, and `Bash` calls. It does not receive the main Agent's
 answer or natural-language claim that the work is complete.
 
-Its prompt asks it to derive acceptance criteria from the user goal, challenge
-each criterion, and avoid inventing requirements. The available built-in tools
-are `Read`, `Glob`, `Grep`, and a mutation-filtered `Bash`; enabled `web` and
+Before the first model request, Friday saves an acceptance contract containing
+the complete goal (`goal`) and optional user criteria. Desktop Goal mode accepts
+one extra criterion per line; SDK `session.goal(..., { criteria })` and gateway
+`goal.run` accept `{ id, description }` items. Planner edits, repairs, compaction
+and resume retain the contract. Each verifier must cover every id exactly once.
+A global pass is rejected if any check is missing, duplicated, failed, or lacks
+a reference to a successful tool result from that verifier. Ordinary artifact
+goals cannot use the main agent's answer as evidence. The SDK may explicitly
+enable answer evidence for text-only goals.
+
+The built-in read-only tools are `Read`, `Glob`, and `Grep`; enabled `web` and
 `skills` packs can additionally contribute `WebSearch`, `WebFetch`, and `Skill`.
-External plugins never enter the verifier. Bash filtering rejects common
-mutation commands, but it is command policy, not an operating-system read-only
-sandbox.
+External plugins never enter the verifier. `Bash` is available only when the
+host execution backend guarantees read-only isolation. The shipped Docker
+backend mounts the workspace read-only and always disables verifier networking.
+Native verification has no shell; requirements needing executable proof must
+report blocked or inconclusive. A command filter cannot enforce read-only access.
 
 ### Verdicts
 

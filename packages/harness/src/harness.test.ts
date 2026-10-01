@@ -713,6 +713,7 @@ test('compaction shrinks the model prompt without shrinking resumable UI history
   await mkdir(workspace)
   const previousHome = process.env.FRIDAY_HOME
   process.env.FRIDAY_HOME = home
+  const firstAnswer = 'first answer ' + 'historical detail '.repeat(150)
   const summary = [
     '## Current Goal', 'Finish the migration while preserving the complete conversation.',
     '## Completed', '- First task', '## Open Items', '- Second task',
@@ -740,7 +741,7 @@ test('compaction shrinks the model prompt without shrinking resumable UI history
     await writeFile(join(home, 'model-credentials.json'), JSON.stringify({ local: 'secret' }))
     const session = await FridaySession.create(workspace, 'compact-session')
     session.context.addMessage({ role: 'user', content: 'first question' })
-    session.context.addMessage({ role: 'assistant', content: 'first answer' })
+    session.context.addMessage({ role: 'assistant', content: firstAnswer })
     session.context.addMessage({ role: 'user', content: 'second question' })
     session.context.addMessage({ role: 'assistant', content: 'second answer' })
     const before = sessionHistory(session)
@@ -762,7 +763,7 @@ test('compaction shrinks the model prompt without shrinking resumable UI history
     const fork = await forkSession(workspace, 'compact-session', Number(firstReply.message_index))
     const forked = await FridaySession.create(workspace, String(fork.session_id))
     assert.deepEqual(sessionHistory(forked).map(item => [item.kind, item.text]), [
-      ['user', 'first question'], ['assistant', 'first answer']
+      ['user', 'first question'], ['assistant', firstAnswer]
     ])
   } finally {
     if (previousHome === undefined) delete process.env.FRIDAY_HOME
@@ -1501,11 +1502,12 @@ test('the gateway announces a suspended turn and keeps continuation events order
     await gateway.handle({ id: 'chat', method: 'chat.send', params: { text: 'write a file' } })
 
     assert.deepEqual(eventTypes(output), [
-      'message.start', 'session.updated', 'progress.update', 'tool.start', 'tool.complete',
+      'message.start', 'session.updated', 'run.start', 'progress.update', 'tool.start', 'tool.complete',
       'progress.update', 'approval.pending', 'message.suspended', 'session.updated'
     ])
     assert.deepEqual(sessionRunningStates(output), [true, false])
     assert.equal(eventPayload(output, 'approval.pending').pending, true)
+    assert.equal(eventPayload(output, 'run.start').run_id, eventPayload(output, 'message.start').run_id)
     assert.equal((eventPayload(output, 'tool.complete').approval as { approval_required?: boolean }).approval_required, true)
     await assert.rejects(readFile(join(workspace, 'gateway-approved.txt'), 'utf8'), { code: 'ENOENT' })
     output.length = 0
@@ -1513,7 +1515,7 @@ test('the gateway announces a suspended turn and keeps continuation events order
     await gateway.handle({ id: 'approve', method: 'approval.approve' })
 
     assert.deepEqual(eventTypes(output), [
-      'session.updated', 'tool.update', 'approval.resolved', 'progress.update', 'message.delta',
+      'run.start', 'session.updated', 'tool.update', 'approval.resolved', 'run.start', 'progress.update', 'message.delta',
       'progress.update', 'message.complete', 'session.updated'
     ])
     assert.deepEqual(sessionRunningStates(output), [true, false])

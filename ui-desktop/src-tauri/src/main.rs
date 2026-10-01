@@ -1,25 +1,28 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     env,
     fs,
     path::PathBuf,
-    sync::Mutex,
+    sync::{Mutex, atomic::Ordering},
 };
 use tauri::{webview::PageLoadEvent, Emitter, Manager};
 use tauri_plugin_shell::{
-    process::{Command, CommandChild, CommandEvent},
+    process::{Command, CommandEvent},
     ShellExt,
 };
 
+mod gateway_process;
+use gateway_process::{ManagedGateway, stop_gateways};
+
 #[derive(Default)]
 struct GatewayState {
-    children: Mutex<HashMap<PathBuf, CommandChild>>,
+    children: Mutex<HashMap<PathBuf, ManagedGateway>>,
     /// Pids this window stopped on purpose, so their exit is not reported as a
     /// crash. Keyed by workspace; an entry is consumed when the exit event for
     /// that pid is emitted.
-    stopped: Mutex<HashMap<PathBuf, u32>>,
+    stopped: Mutex<HashSet<(PathBuf, u32)>>,
 }
 
 fn workspace_root(requested: Option<String>) -> Result<PathBuf, String> {
@@ -139,6 +142,8 @@ fn gateway_start(
         .spawn()
         .map_err(|error| error.to_string())?;
     let child_pid = child.pid();
+    let child = ManagedGateway::new(child)?;
+    let exited = child.exited.clone();
 
     let workspace_label = workspace.display().to_string();
     let event_workspace = workspace_label.clone();
@@ -176,6 +181,7 @@ fn gateway_start(
                     }
                 }
                 CommandEvent::Terminated(payload) => {
+                    exited.store(true, Ordering::Release);
                     termination = match (payload.code, payload.signal) {
                         (Some(code), _) => format!("process exited with code {code}"),
                         (None, Some(signal)) => {
@@ -224,8 +230,7 @@ fn gateway_start(
             .stopped
             .lock()
             .ok()
-            .and_then(|mut stopped| stopped.remove(&process_workspace))
-            == Some(child_pid);
+            .is_some_and(|mut stopped| stopped.remove(&(process_workspace, child_pid)));
         let _ = app.emit(
             if stopped_by_us { "gateway-stopped" } else { "gateway-exit" },
             (event_workspace, detail),
@@ -248,6 +253,7 @@ fn gateway_send(
         .get_mut(&workspace)
         .ok_or("Friday gateway is not running for this project.")?;
     child
+        .child
         .write(format!("{message}\n").as_bytes())
         .map_err(|error| error.to_string())
 }
@@ -257,20 +263,17 @@ fn gateway_stop(
     workspace: Option<String>,
     state: tauri::State<'_, GatewayState>,
 ) -> Result<(), String> {
-    let mut current = state.children.lock().map_err(|error| error.to_string())?;
-    let mut stopped = state.stopped.lock().map_err(|error| error.to_string())?;
-    if let Some(workspace) = workspace {
-        let workspace = canonical_directory(PathBuf::from(workspace))?;
-        if let Some(child) = current.remove(&workspace) {
-            stopped.insert(workspace, child.pid());
-            let _ = child.kill();
-        }
-    } else {
-        for (workspace, child) in current.drain() {
-            stopped.insert(workspace, child.pid());
-            let _ = child.kill();
-        }
-    }
+    let selected = workspace.map(|path| canonical_directory(PathBuf::from(path))).transpose()?;
+    let gateways = {
+        let mut current = state.children.lock().map_err(|error| error.to_string())?;
+        let mut stopped = state.stopped.lock().map_err(|error| error.to_string())?;
+        let targets: Vec<_> = match selected {
+            Some(workspace) => current.remove(&workspace).map(|child| vec![(workspace, child)]).unwrap_or_default(),
+            None => current.drain().collect(),
+        };
+        targets.into_iter().map(|(workspace, child)| { stopped.insert((workspace, child.pid())); child }).collect()
+    };
+    stop_gateways(gateways);
     Ok(())
 }
 
@@ -360,11 +363,8 @@ fn main() {
             // die with the window on their own; without this hook every quit
             // leaked them. Exit is the one path every shutdown funnels through.
             if matches!(event, tauri::RunEvent::Exit) {
-                if let Ok(mut children) = app.state::<GatewayState>().children.lock() {
-                    for (_, child) in children.drain() {
-                        let _ = child.kill();
-                    }
-                }
+                let gateways = app.state::<GatewayState>().children.lock().map(|mut children| children.drain().map(|(_, child)| child).collect()).unwrap_or_default();
+                stop_gateways(gateways);
             }
         });
 }

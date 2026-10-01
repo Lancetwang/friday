@@ -44,12 +44,28 @@ try {
   })
   child.stdin.write(`${JSON.stringify({ id: 'smoke-1', jsonrpc: '2.0', method: 'session.current', params: {} })}\n`)
   await answer
+  await new Promise((resolveShutdown, reject) => {
+    let acknowledged = false
+    const timeout = setTimeout(() => reject(new Error('Sidecar did not shut down cleanly within 6 seconds.')), 6_000)
+    createInterface({ input: child.stdout }).on('line', line => {
+      try {
+        const message = JSON.parse(line)
+        if (message.id === 'smoke-shutdown' && message.result?.stopped === true) acknowledged = true
+      } catch {}
+    })
+    child.once('exit', code => {
+      clearTimeout(timeout)
+      if (code === 0 && acknowledged) resolveShutdown()
+      else reject(new Error(`Sidecar shutdown was not acknowledged (${code}).`))
+    })
+    child.stdin.write(`${JSON.stringify({ id: 'smoke-shutdown', jsonrpc: '2.0', method: 'gateway.shutdown' })}\n`)
+  })
   process.stdout.write('Friday sidecar smoke test passed.\n')
 } catch (error) {
   if (stderr.length && error instanceof Error) error.message += `\n${stderr.slice(-40).join('\n')}`
   throw error
 } finally {
-  child.kill()
+  if (child.exitCode === null && child.signalCode === null) child.kill()
   if (child.exitCode === null && child.signalCode === null) await new Promise(resolveExit => child.once('exit', resolveExit))
   await rm(temporary, { recursive: true, force: true })
 }

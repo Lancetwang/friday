@@ -10,6 +10,7 @@ import type {
   GatewayEvent,
   MessageMetrics,
   ModelTermination,
+  SessionInfo,
   VerificationResult
 } from 'friday-agent-protocol'
 
@@ -43,6 +44,8 @@ import {
   sessionTree
 } from './session.js'
 import { thinkingOptions } from './thinking.js'
+import { validateAcceptance } from './acceptance.js'
+import { loadExecutionSettings, saveExecutionSettings } from './execution-settings.js'
 import { discoverSkills, skillDetail } from './skills.js'
 import type { PermissionMode } from './permissions.js'
 import { checkpointChoices, restoreCheckpoint } from './checkpoint.js'
@@ -88,6 +91,7 @@ export class Gateway {
   private reasoningSequence = 0
   private permissionMode: PermissionMode | undefined
   private traceServer: TraceServer | undefined
+  private closing: Promise<void> | undefined
   private readonly workspace: string
   private readonly send: (value: unknown) => void
 
@@ -110,7 +114,9 @@ export class Gateway {
     let requestFinalized = false
     try {
       validateRpcRequest(request)
-      if (method === 'session.info') this.ok(id, this.sessionInfo())
+      if (this.closing && method !== 'gateway.shutdown') throw new RpcError(-32000, 'Gateway is closing.')
+      if (method === 'gateway.shutdown') { await this.close(); this.ok(id, { stopped: true }) }
+      else if (method === 'session.info') this.ok(id, this.sessionInfo())
       else if (method === 'session.list') {
         const offset = Number(params.offset ?? 0)
         const limit = Math.min(200, Number(params.limit ?? 50))
@@ -204,6 +210,17 @@ export class Gateway {
       else if (method === 'settings.compaction.save') {
         this.ok(id, await this.runGlobal(() => saveCompactionSettings(this.workspace, params)))
       }
+      else if (method === 'settings.execution.save') {
+        const result = await this.runGlobal(async () => {
+          const sessionId = this.session.sessionId
+          const execution = await saveExecutionSettings(this.workspace, params)
+          await this.releaseSessions()
+          this.session = await this.loadSession(sessionId)
+          this.event('session.info', this.sessionInfo())
+          return execution
+        })
+        this.ok(id, result)
+      }
       else if (method === 'settings.web.key.get') {
         this.ok(id, { api_key: readWebSearchCredential(String(params.provider || '')) })
       } else if (method === 'settings.web.save') {
@@ -223,6 +240,7 @@ export class Gateway {
         this.ok(id, {
           memory_files: { user, global },
           compaction: loadCompactionSettings(this.workspace),
+          execution: loadExecutionSettings(this.workspace),
           web_search: loadWebSearchSettings(),
           user_profile: loadUserProfile()
         })
@@ -308,6 +326,7 @@ export class Gateway {
       } else if (method === 'goal.run') {
         const text = typeof params.text === 'string' ? params.text.trim() : ''
         if (!text) throw new Error('Goal cannot be empty.')
+        const criteria = validateAcceptance(params.criteria)
         const session = this.session
         const selected = await prepareLocalAttachments(params.attachments)
         const images = imageUrls([...imageUrls(params.images), ...selected.images.map(image => image.data_url)])
@@ -321,7 +340,7 @@ export class Gateway {
             const result = await session.goal(
               text,
               chunk => this.event('message.delta', { text: chunk, session_id: session.sessionId }),
-              { images, attachments, runId: session.context.runId, ...(budget ? { budget } : {}) }
+              { images, attachments, criteria, runId: session.context.runId, ...(budget ? { budget } : {}) }
             )
             this.emitTurn(session, result)
             this.titleSession(session)
@@ -511,6 +530,11 @@ export class Gateway {
   }
 
   async close(): Promise<void> {
+    this.closing ??= this.closeSessions()
+    return this.closing
+  }
+
+  private async closeSessions(): Promise<void> {
     await stopTraceServer(this.traceServer)
     this.traceServer = undefined
     for (const session of this.sessions.values()) session.cancel()
@@ -579,6 +603,8 @@ export class Gateway {
     finalized: () => void
   ): Promise<void> {
     const outcome = await this.runSession(session, `Approval: ${decision}`, async () => {
+      session.context.beginRun()
+      this.event('run.start', { session_id: session.sessionId })
       this.event('session.updated', { running: true, session_id: session.sessionId })
       try {
         let announced = false
@@ -805,7 +831,7 @@ export class Gateway {
     if (this.globalRun) throw new Error('A workspace-wide operation is in progress.')
   }
 
-  private sessionInfo(session = this.session): Record<string, unknown> {
+  private sessionInfo(session = this.session): SessionInfo {
     return {
       ...session.info(),
       running: session.running || this.activeRuns.has(session.sessionId)
@@ -895,13 +921,18 @@ export class Gateway {
 
   private useAvailableModel(catalog: ModelCatalog, preferActive = false): void {
     const enabled = new Set(catalog.profiles.filter(profile => profile.enabled).map(profile => profile.id))
-    if (preferActive || !enabled.has(this.session.config.profileId)) this.session.selectModel(catalog.active)
+    for (const session of this.sessions.values()) {
+      const target = session === this.session && preferActive || !enabled.has(session.config.profileId) ? catalog.active : session.config.profileId
+      session.selectModel(target)
+    }
   }
 
   private eventFromCore(event: AgentEvent, session: FridaySession): void {
     const sessionId = session.sessionId
     const reasoningKey = `${sessionId}:${event.runId}:${event.step ?? 0}`
-    if (event.type === 'model.reasoning.delta') {
+    if (event.type === 'execution.started') {
+      this.event('run.start', { session_id: sessionId })
+    } else if (event.type === 'model.reasoning.delta') {
       let active = this.reasoning.get(reasoningKey)
       if (!active) {
         active = { id: `reasoning-${++this.reasoningSequence}`, started: event.timestamp }
@@ -951,6 +982,7 @@ export class Gateway {
       })
     } else if (event.type === 'context.compacted') this.event('context.compacted', { ...event.data, session_id: sessionId })
     else if (event.type === 'memory.updated') this.event('memory.updated', { ...event.data, session_id: sessionId })
+    else if (event.type === 'memory.warning') this.event('memory.warning', { message: String(event.data.message || 'Automatic memory was skipped.'), session_id: sessionId })
     else if (event.type === 'progress.updated') this.event('progress.update', { ...event.data, session_id: sessionId })
     else if (event.type === 'verification.start') this.event('verification.start', { session_id: sessionId })
     else if (event.type === 'verification.result') this.event('verification.complete', { ...event.data, session_id: sessionId })
@@ -1038,7 +1070,7 @@ function modelCatalog(workspace: string): ModelCatalog & { profiles: Array<Model
     ...catalog,
     profiles: catalog.profiles.map(profile => ({
       ...profile,
-      thinking_options: thinkingOptions(profile.provider, profile.model)
+      thinking_options: thinkingOptions(profile.provider, profile.model, profile.capabilities)
     }))
   }
 }
@@ -1053,13 +1085,16 @@ export async function runGateway(): Promise<void> {
   // even if a stuck request or a runtime stdin quirk would keep the event
   // loop alive (the compiled Bun sidecar exhibited exactly that).
   let closing = false
-  const shutdown = (code: number): void => {
+  const shutdown = (code: number, id?: unknown): void => {
     if (closing) return
     closing = true
     setTimeout(() => process.exit(code), 3_000).unref()
     void gateway.close()
       .catch(() => {})
-      .finally(() => process.exit(code))
+      .finally(() => {
+        if (id !== undefined) writeLine({ jsonrpc: '2.0', id, result: { stopped: true } })
+        process.exit(code)
+      })
   }
   process.once('SIGTERM', () => shutdown(0))
   process.once('SIGINT', () => shutdown(0))
@@ -1071,7 +1106,10 @@ export async function runGateway(): Promise<void> {
         if (Buffer.byteLength(line) > MAX_RPC_BYTES) throw new RpcError(-32600, 'Request exceeds the 32 MiB limit.')
         const value: unknown = JSON.parse(line.replace(/^\uFEFF/, ''))
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('expected an object')
-        void gateway.handle(value as Request)
+        if ((value as Request).method === 'gateway.shutdown') {
+          validateRpcRequest(value)
+          shutdown(0, (value as Request).id)
+        } else if (!closing) void gateway.handle(value as Request)
       } catch (error) {
         writeLine({ jsonrpc: '2.0', id: null, error: { code: -32700, message: `Invalid JSON-RPC request: ${error instanceof Error ? error.message : String(error)}` } })
       }

@@ -39,6 +39,7 @@
     "sidecar": "npm run build:runtime && node scripts/build-sidecar.mjs",
     "smoke:sidecar": "node scripts/smoke-sidecar.mjs",
     "smoke:cli": "node scripts/smoke-cli.mjs",
+    "smoke:types": "node scripts/smoke-plugin-types.mjs",
     "bundle:desktop": "npm run sidecar && npm run bundle --prefix ui-desktop",
     "pack:release": "node -e \"require('node:fs').mkdirSync('artifacts/npm',{recursive:true})\" && npm pack --pack-destination artifacts/npm && npm pack -w friday-agent-core --pack-destination artifacts/npm",
     "prepare": "npm run build:cli",

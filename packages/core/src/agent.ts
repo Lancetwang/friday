@@ -13,6 +13,8 @@ export type AgentOptions = {
   maxEmptyRetries?: number
   /** Awaited at execution boundaries. Hosts may durably record progress here. */
   checkpoint?(context: RunContext, boundary: 'model' | 'tool'): void | Promise<void>
+  /** Host accounting runs only for calls that reach execution, after preflight. */
+  beforeTool?(call: ToolCall, signal?: AbortSignal): void | Promise<void>
   beforeStep?(
     context: RunContext,
     step: number,
@@ -40,7 +42,7 @@ export class Agent {
   constructor(private readonly options: AgentOptions, context = new RunContext()) {
     this.context = context
     this.tools = options.tools ?? []
-    this.executor = new ToolExecutor(this.tools)
+    this.executor = new ToolExecutor(this.tools, 4, options.beforeTool)
     if (options.instructions && !context.messages.some(message => message.role === 'system')) {
       context.addMessage({ role: 'system', content: options.instructions })
     }

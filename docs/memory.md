@@ -86,6 +86,10 @@ prepends returned recall to the same user message, emits capture receipts, and
 exposes optional consolidation through the same gateway. See
 [Plugins](plugins.md#memory-service-contract).
 
+Automatic preparation is best effort. The public request is saved first;
+oversized capture or a provider error produces a warning without cancelling
+the chat. Manual consolidation uses a fresh maintenance deadline and budget.
+
 ## Context lifecycle
 
 While the memory capability is enabled, its plugin-owned system-prompt section

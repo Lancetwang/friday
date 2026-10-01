@@ -8,6 +8,7 @@ import { ModelRequestError } from './errors.js'
 import { OpenAIModel } from './openai.js'
 import { ResponsesModel, responsesMessage } from './responses.js'
 import { ToolExecutor } from './tools.js'
+import { modelOrigin } from './messages.js'
 import type { JsonObject, Tool, ToolCall } from './types.js'
 
 test('streams through a model-tool-model turn', async () => {
@@ -286,6 +287,7 @@ test('Anthropic Messages preserves signed thinking and tool turns', async () => 
         { role: 'user', content: 'Inspect the file.' },
         {
           role: 'assistant', content: 'I will inspect it.',
+          model_origin: modelOrigin('anthropic', { model: 'claude-test', baseUrl: `http://127.0.0.1:${address.port}` }),
           reasoning_content: [{ type: 'thinking', thinking: 'prior', signature: 'prior-signature' }],
           tool_calls: [call('Read', 0)]
         },
@@ -300,6 +302,7 @@ test('Anthropic Messages preserves signed thinking and tool turns', async () => 
     assert.equal(payload?.system, 'System rules.')
     const messages = payload?.messages as JsonObject[]
     assert.deepEqual(messages.map(message => message.role), ['user', 'assistant', 'user'])
+    assert.equal((messages[1]?.content as JsonObject[])[0]?.signature, 'prior-signature')
     assert.deepEqual((messages[2]?.content as JsonObject[]).map(block => block.type), ['tool_result'])
     assert.deepEqual(reasoning, ['considering'])
     assert.deepEqual(result.reasoning_content, [{ type: 'thinking', thinking: 'considering', signature: 'signed' }])
@@ -405,6 +408,7 @@ test('OpenAI Responses replays typed items and normalizes completed output', asy
         { role: 'user', content: 'Continue.' },
         {
           role: 'assistant', content: '', reasoning_content: [{ type: 'reasoning', id: 'reasoning-1', summary: [] }],
+          model_origin: modelOrigin('responses', { model: 'gpt-test', baseUrl: `http://127.0.0.1:${address.port}/v1` }),
           tool_calls: [call('Read', 0)]
         },
         { role: 'tool', tool_call_id: '0', content: 'file contents' }

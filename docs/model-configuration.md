@@ -14,20 +14,48 @@ Friday supports two kinds of entries:
   API key, and limits. Each profile is independent, so several compatible
   services can coexist.
 
-The selected provider/model pair also determines which thinking controls
-Friday offers. Models without a known mapping have no thinking selector;
-mapped models show only the values the runtime knows how to send.
+API routing and reasoning compatibility defaults live in one capability
+registry. Under **Settings > Models > Model configurations**, every profile can
+override the API (`chat-completions`, `responses`, or `anthropic`), reasoning
+format/options/default, tool support, image support and token limits. Unknown
+models can therefore be configured without adding name-based rules. Provider
+discovery may advertise the same `capabilities` metadata; saved overrides survive
+catalog refresh. An API override disables incompatible inherited reasoning
+unless reasoning is explicitly configured.
 
-Vision capability is deliberately a positive hint, not a local permission
-check. Friday marks models when its bundled catalog or a provider's `/models`
+Missing vision capability remains unknown. Friday marks models when its bundled catalog or a provider's `/models`
 metadata positively advertises image input, but missing or stale metadata means
 "unknown", not "text-only". Clipboard and selected-file images are therefore
-sent to the chosen provider even for a newly released or manually configured
-model. The provider remains the authority; if it rejects image input, the
+sent to an unknown model. Explicit `vision: false` rejects fresh image input
+before changing the conversation. Images already in history are replaced with
+an explanatory placeholder in the outgoing projection; stored originals remain
+available. The provider remains the authority for unknown/supported models; if it rejects image input, the
 Harness preserves the failed request and completed effects, and returns a stable, actionable Friday
 error instead of exposing the provider's response payload. This classification
 is deliberately narrow: other provider failures keep their normal error after
 the Harness has retried transient HTTP or network failures.
+
+Example capability override in a saved profile:
+
+```json
+{
+  "capabilities": {
+    "api": "responses",
+    "reasoning": { "mode": "effort", "options": ["low", "high"], "default": "low" },
+    "tools": true
+  },
+  "vision": true,
+  "context_window": 32768,
+  "max_output_tokens": 4096
+}
+```
+
+Reasoning modes are `none`, `effort`, `adaptive` (Anthropic), `toggle` (thinking
+enabled/disabled), and `disabled-toggle` (only send an explicit disable).
+Chat APIs can also override `max_tokens_field` to `max_completion_tokens`.
+Original reasoning is stored with its API, provider, endpoint and model origin;
+only a matching destination replays it. Switching models keeps visible answers
+and tool results, while removing incompatible private reasoning from the wire.
 
 ## Files and precedence
 
@@ -116,7 +144,7 @@ or `/compaction` can change the threshold, disable automatic compaction while
 retaining manual compaction, or enable the two-stage tool-receipt strategy. A
 normal Agent attempt has a 100-step guard, an independent verifier has 40
 steps, and Goal mode can make at most six attempts. Provider usage is measured
-and reported but is not stopped by `run_token_budget`. See [Verification, Run
+and capped by the shared `run_token_budget`. See [Verification, Run
 Guards, and Compaction](verification.md) for the complete behavior.
 
 Newly discovered models use their reported context/output limits. Unknown new

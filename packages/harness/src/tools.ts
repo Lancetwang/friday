@@ -10,7 +10,7 @@ import { getCurrentToolCall, type JsonObject, type Tool } from 'friday-agent-cor
 import { disabledPlugins, projectStateDir } from './config.js'
 import { defaultPermissionMode, preflightShell, preflightVerifierShell, type PermissionMode } from './permissions.js'
 import { assembleTools, builtinPlugin, markDisabled, type LoadedPlugin } from './plugins.js'
-import { withStateLock, writeTextAtomic } from './storage.js'
+import { waitForSignal, withStateLock, writeTextAtomic } from './storage.js'
 import { buildSkillTool, skillRouting } from './skills.js'
 import { buildWebTools } from './web.js'
 import {
@@ -90,9 +90,14 @@ export function builtinPlugins(workspace: string, options: ToolOptions = {}): Lo
         async prepare({ workspace, text, sessionId }) {
           // Preserve the existing order: recall observes the prior memory set;
           // capture writes the current public message only afterwards.
-          const recall = await relevantMemory(workspace, text)
-          const capture = await captureUserMemory(workspace, text, sessionId)
-          return { recall, ...(capture ? { capture } : {}) }
+          const warnings: string[] = []
+          const attempt = async <T>(work: () => Promise<T>): Promise<T | undefined> => {
+            try { return await work() }
+            catch (error) { warnings.push(`Automatic memory skipped: ${error instanceof Error ? error.message : String(error)}`); return undefined }
+          }
+          const recall = await attempt(() => relevantMemory(workspace, text))
+          const capture = await attempt(() => captureUserMemory(workspace, text, sessionId))
+          return { ...(recall ? { recall } : {}), ...(capture ? { capture } : {}), ...(warnings.length ? { warnings } : {}) }
         },
         consolidate: ({ workspace, days, review }) => consolidateMemory(workspace, days, review)
       }
@@ -134,20 +139,22 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
     },
     {
       name: 'Write', description: 'Create or replace a UTF-8 text file inside the workspace.',
+      abortMode: 'settle',
       parameters: object({ path: string('Path relative to the workspace.'), content: string('Full file content.') }, ['path', 'content']),
       async preflight() {
         await options.beforeMutation?.()
         return { action: 'allow' }
       },
-      async execute(args) {
+      async execute(args, signal) {
         if (typeof args.content !== 'string') throw new Error('content must be a string')
         const path = paths.writable(args.path)
-        await withFileLock(path, () => writeTextAtomic(path, args.content as string))
+        await withFileLock(path, () => writeTextAtomic(path, args.content as string, false, signal), signal)
         return { path, chars: args.content.length, lines: args.content.split(/\r?\n/).length }
       }
     },
     {
       name: 'Edit', description: 'Apply disjoint exact-text replacements to a UTF-8 file inside the workspace.',
+      abortMode: 'settle',
       parameters: object({
         path: string('Path relative to the workspace.'),
         edits: {
@@ -159,15 +166,15 @@ function workspaceTools(root: string, options: ToolOptions): Tool[] {
         await options.beforeMutation?.()
         return { action: 'allow' }
       },
-      async execute(args) {
+      async execute(args, signal) {
         const path = paths.existing(args.path)
         const edits = parseEdits(args.edits)
         return withFileLock(path, async () => {
           const original = await readFile(path, 'utf8')
           const { content, firstChangedLine } = applyEdits(original, edits, path)
-          await writeTextAtomic(path, content)
+          await writeTextAtomic(path, content, false, signal)
           return { path, replacements: edits.length, first_changed_line: firstChangedLine }
-        })
+        }, signal)
       }
     },
     {
@@ -299,10 +306,11 @@ function memoryTool(root: string): Tool {
 export function buildVerifierTools(workspace: string, execution?: ExecutionBackend): Tool[] {
   const packs = markDisabled(builtinPlugins(workspace, { readOnly: true, ...(execution ? { execution } : {}) }), disabledPlugins(workspace))
   const allowed = packs.flatMap(pack => pack.disabled ? [] : [...pack.module?.verifierTools ?? []])
+    .filter(name => name !== 'Bash' || execution?.readOnlyIsolation === true)
   const tools = assembleTools(packs, { workspace: resolve(workspace) }).filter(tool => allowed.includes(tool.name))
   const missing = allowed.filter(name => !tools.some(tool => tool.name === name))
   if (missing.length) throw new Error(`Verifier tools are declared but not assembled: ${missing.join(', ')}`)
-  return tools.map(tool => tool.name === 'Bash' ? { ...tool, preflight: call => preflightVerifierShell(call, workspace) } : tool)
+  return tools.map(tool => tool.name === 'Bash' ? { ...tool, preflight: call => preflightVerifierShell(call, workspace, execution?.readOnlyIsolation === true) } : tool)
 }
 
 /**
@@ -847,19 +855,19 @@ function applyEdits(original: string, edits: Edit[], path: string): { content: s
   return { content: bom + updated, firstChangedLine: normalized.slice(0, matches[0]!.start).split('\n').length }
 }
 
-async function withFileLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+async function withFileLock<T>(path: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const key = process.platform === 'win32' ? path.toLowerCase() : path
   const previous = fileLocks.get(key) ?? Promise.resolve()
   let release = () => {}
   const gate = new Promise<void>(resolveGate => { release = resolveGate })
   const tail = previous.then(() => gate)
   fileLocks.set(key, tail)
-  await previous
   try {
-    return await withStateLock(path, work)
+    await waitForSignal(previous, signal)
+    return await withStateLock(path, async () => { signal?.throwIfAborted(); return work() }, true, signal)
   } finally {
     release()
-    if (fileLocks.get(key) === tail) fileLocks.delete(key)
+    void tail.then(() => { if (fileLocks.get(key) === tail) fileLocks.delete(key) })
   }
 }
 

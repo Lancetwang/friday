@@ -26,7 +26,8 @@ test('verification JSON is strict and verifier shell access is read-only', async
     })
     assert.equal(parseVerification('looks good').verdict, 'inconclusive')
 
-    const bash = buildVerifierTools(workspace).find(tool => tool.name === 'Bash')
+    assert.equal(buildVerifierTools(workspace).find(tool => tool.name === 'Bash'), undefined)
+    const bash = buildVerifierTools(workspace, { name: 'isolated-test', readOnlyIsolation: true, async execute() { return {} } }).find(tool => tool.name === 'Bash')
     assert(bash?.preflight)
     const denied = await bash.preflight({
       id: 'write', type: 'function', function: { name: 'Bash', arguments: JSON.stringify({ command: "Set-Content x.txt 'x'" }) }
@@ -37,7 +38,7 @@ test('verification JSON is strict and verifier shell access is read-only', async
     assert.equal(denied.action, 'deny')
     assert.equal(allowed.action, 'allow')
     assert.deepEqual(buildVerifierTools(workspace).map(tool => tool.name), [
-      'Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch', 'Skill'
+      'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Skill'
     ])
   } finally {
     if (previous === undefined) delete process.env.FRIDAY_HOME

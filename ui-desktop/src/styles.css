@@ -5086,3 +5086,13 @@ html.scrolling *::-webkit-scrollbar-thumb:hover,
     border-color: var(--ink);
   }
 }
+/* Goal contracts and model overrides reuse the settings' compact field layout. */
+.goal-criteria { display: grid; gap: 6px; margin: 4px 0 10px; font-size: 12px; }
+.goal-criteria textarea { width: 100%; resize: vertical; min-height: 54px; padding: 8px; background: var(--field); color: inherit; border: 1px solid var(--line); border-radius: 8px; }
+.model-capabilities { margin-top: 14px; }
+.model-capabilities summary { cursor: pointer; }
+.model-capabilities p { font-size: 12px; opacity: .7; margin: 10px 0; }
+.model-capabilities .line-field { grid-template-columns: minmax(130px, .8fr) minmax(0, 1fr); margin-block: 8px; }
+.model-capabilities .line-field > span:first-child { white-space: normal; }
+.line-field > input, .line-field > select { min-width: 0; width: 100%; min-height: 32px; padding: 4px 2px; color: var(--ink); background: transparent; border: 0; border-bottom: 1px solid var(--line-strong); font: inherit; font-size: var(--text-control); }
+.line-field > input:focus-visible, .line-field > select:focus-visible { outline: 1px solid var(--ring); outline-offset: 2px; }

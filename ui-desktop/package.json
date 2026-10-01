@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "test:math": "node --experimental-strip-types scripts/test-markdown.ts",
     "test:sources": "node --experimental-strip-types scripts/test-sources.ts",
+    "test:runtime": "node --experimental-strip-types scripts/test-runtime.ts",
     "desktop": "tauri dev",
     "bundle": "node ../scripts/bundle-desktop.mjs",
     "tauri": "tauri"

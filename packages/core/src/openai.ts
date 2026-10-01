@@ -1,12 +1,16 @@
 import { ModelStreamError, throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
 import { normalizeTermination } from './termination.js'
+import { outputTokenLimit } from './output-limit.js'
+import { modelOrigin, projectMessages, withModelOrigin } from './messages.js'
 import type { AssistantMessage, ChatModel, JsonObject, ModelRequest, ToolCall } from './types.js'
 
 export type OpenAIModelOptions = {
   apiKey: string
   model: string
   baseUrl?: string
+  provider?: string
+  vision?: boolean
   maxOutputTokens?: number
   maxTokensField?: 'max_tokens' | 'max_completion_tokens'
   body?: JsonObject
@@ -19,25 +23,25 @@ export class OpenAIModel implements ChatModel {
   }
 
   async complete(request: ModelRequest): Promise<AssistantMessage> {
+    const origin = modelOrigin('chat-completions', this.options)
+    const limit = outputTokenLimit(this.options.maxOutputTokens, request.maxOutputTokens)
     const response = await fetch(`${normalizeBaseUrl(this.options.baseUrl)}/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${this.options.apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: this.options.model,
-        messages: openaiMessages(request.messages),
+        messages: openaiMessages(projectMessages(request.messages, origin, this.options.vision)),
         stream: true,
         stream_options: { include_usage: true },
         ...(request.tools?.length ? { tools: request.tools, tool_choice: request.toolChoice ?? 'auto' } : {}),
-        ...(this.options.maxOutputTokens
-          ? { [this.options.maxTokensField ?? 'max_tokens']: Math.min(this.options.maxOutputTokens, request.maxOutputTokens ?? Infinity) }
-          : {}),
-        ...this.options.body
+        ...this.options.body,
+        ...(limit !== undefined ? { [this.options.maxTokensField ?? 'max_tokens']: limit } : {})
       }),
       ...(request.signal ? { signal: request.signal } : {})
     })
     if (!response.ok) await throwModelRequestError(response)
     if (!response.body) throw new Error('Model response had no body.')
-    return readStream(response.body, request)
+    return withModelOrigin(await readStream(response.body, request), origin)
   }
 }
 
@@ -46,7 +50,7 @@ export function openaiMessages(messages: ModelRequest['messages']): JsonObject[]
     role: message.role,
     content: message.content,
     ...(message.role === 'assistant' && Array.isArray(message.tool_calls) ? { tool_calls: message.tool_calls } : {}),
-    ...(message.role === 'assistant' && message.reasoning_content !== undefined ? { reasoning_content: message.reasoning_content } : {}),
+    ...(message.role === 'assistant' && typeof message.reasoning_content === 'string' ? { reasoning_content: message.reasoning_content } : {}),
     ...(message.role === 'tool' ? { tool_call_id: String(message.tool_call_id ?? '') } : {})
   }))
 }

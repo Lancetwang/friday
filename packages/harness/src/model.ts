@@ -11,28 +11,35 @@ import {
 
 import type { ModelConfig } from './config.js'
 import { thinkingBody } from './thinking.js'
+import { resolveCapabilities } from './model-capabilities.js'
 import { ResourceBudget, withModelTimeouts } from './resources.js'
 
 export function modelFor(config: ModelConfig, thinking: string, outputLimit = config.maxOutputTokens, resources?: ResourceBudget): ChatModel {
-  const wrap = (model: ChatModel) => withModelRetries(resources ? resources.wrap(withModelTimeouts(model, resources.state.limits)) : withModelTimeouts(model))
+  const capabilities = resolveCapabilities(config.provider, config.model, config.capabilities)
+  const wrap = (model: ChatModel) => {
+    const projected: ChatModel = capabilities.tools ? model : { complete: ({ tools: _tools, ...request }) => model.complete(request) }
+    return withModelRetries(resources ? resources.wrap(withModelTimeouts(projected, resources.state.limits)) : withModelTimeouts(projected))
+  }
   const common = {
     apiKey: config.apiKey,
     model: config.model,
+    provider: config.provider,
+    ...(typeof config.vision === 'boolean' ? { vision: config.vision } : {}),
     baseUrl: config.baseUrl,
     maxOutputTokens: Math.min(config.maxOutputTokens, outputLimit),
-    body: thinkingBody(config.provider, config.model, thinking)
+    body: thinkingBody(config.provider, config.model, thinking, config.capabilities)
   }
-  if (config.provider === 'anthropic' || (config.provider === 'opencode-go' && /^(minimax-|qwen3\.)/.test(config.model))) {
+  if (capabilities.api === 'anthropic') {
     // Explicit prompt-cache breakpoints only against the real Anthropic API;
     // Anthropic-compatible proxies may reject the cache_control field.
     return wrap(new AnthropicModel({ ...common, cacheControl: config.provider === 'anthropic' }))
   }
-  if (config.provider === 'opencode-go' && config.model.startsWith('gpt-5.6')) {
+  if (capabilities.api === 'responses') {
     return wrap(new ResponsesModel(common))
   }
   return wrap(new OpenAIModel({
     ...common,
-    maxTokensField: ['openai', 'mimo'].includes(config.provider) ? 'max_completion_tokens' : 'max_tokens'
+    maxTokensField: capabilities.max_tokens_field
   }))
 }
 

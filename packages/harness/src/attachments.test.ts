@@ -47,7 +47,7 @@ test('desktop images and selected local files reach the model and resumable hist
   try {
     await writeFile(join(home, 'models.json'), JSON.stringify({
       active: 'local', profiles: [{
-        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock', vision: false,
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'mock', vision: true,
         base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000, max_output_tokens: 2_000
       }]
     }))
@@ -134,7 +134,7 @@ test('an upstream image rejection retains the failed turn and exposes only a sta
   try {
     await writeFile(join(home, 'models.json'), JSON.stringify({
       active: 'local', profiles: [{
-        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'text-only', vision: false,
+        id: 'local', name: 'Local', provider: 'openai-compatible', model: 'text-only',
         base_url: `http://127.0.0.1:${address.port}`, context_window: 100_000, max_output_tokens: 2_000
       }]
     }))

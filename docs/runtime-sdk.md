@@ -46,11 +46,15 @@ enter Core and external plugins cannot replace the verifier's tool registry.
 
 The Docker backend mounts only the workspace, uses a read-only root filesystem,
 bounds memory/CPU/processes, and disables networking by default. Verifier mounts
-are read-only. It requires Docker and an existing compatible image; Friday does
+are read-only and verifier networking is always disabled. The backend must set
+`readOnlyIsolation: true` to receive verifier Bash. It requires Docker and an existing compatible image; Friday does
 not pull an image or silently fall back to native execution. Long-lived managed
 background services currently require the native backend. Set
 `FRIDAY_EXECUTION_IMAGE=my-agent-tools:local` to select Docker in the gateway;
 `FRIDAY_VERIFIER_PROFILE=profile-id` selects a saved verifier profile.
+Desktop **Settings > General > Execution backend** stores the backend under
+the workspace's Friday project state. Changing it requires all sessions to be
+idle and reloads them while retaining the active conversation.
 
 Native commands and trusted in-process plugins retain host privileges. Docker
 isolates shell commands, not JavaScript plugin modules. Plugin authors must
@@ -93,6 +97,11 @@ ledger. Defaults are 100 model requests, 400 tool calls, 15 minutes, and the
 profile's `run_token_budget` (40 million by default). The final time reserve is
 30 seconds or 20% for shorter runs. A first-byte timer defaults to 60 seconds;
 stream-idle timeout is 45 seconds and includes non-text transport activity.
+
+The tool ledger charges actual validated execution, including independent
+verifier tools; permission-denied batches do not spend tool calls. Manual idle
+compaction, memory consolidation and title generation receive fresh maintenance
+budgets. A non-saving compaction rolls back instead of claiming success.
 
 Token accounting uses reported usage when available and conservative estimates
 otherwise; the ledger marks estimates. Remaining tokens constrain the next

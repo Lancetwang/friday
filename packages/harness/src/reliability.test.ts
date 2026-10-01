@@ -223,7 +223,7 @@ test('execution backend receives verifier read-only policy and GC preserves live
   const f = await fixture()
   try {
     const seen: boolean[] = []
-    const execution = { name: 'test-isolation', async execute(request: { readOnly: boolean }) { seen.push(request.readOnly); return { stdout: 'checked', exit_code: 0 } } }
+    const execution = { name: 'test-isolation', readOnlyIsolation: true, async execute(request: { readOnly: boolean }) { seen.push(request.readOnly); return { stdout: 'checked', exit_code: 0 } } }
     await buildTools(f.workspace, { execution }).find(tool => tool.name === 'Bash')!.execute({ command: 'echo checked' })
     await buildVerifierTools(f.workspace, execution).find(tool => tool.name === 'Bash')!.execute({ command: 'echo checked' })
     assert.deepEqual(seen, [false, true])

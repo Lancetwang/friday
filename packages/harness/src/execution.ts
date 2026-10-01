@@ -7,10 +7,11 @@ export function dockerExecution(options: { image: string; network?: 'none' | 'br
   if (!options.image || options.image.startsWith('-')) throw new Error('Docker image is required.')
   return {
     name: 'docker',
+    readOnlyIsolation: true,
     async execute(request) {
       if (request.workspace.includes(',')) throw new Error('Docker mount paths cannot contain commas.')
       const name = `friday-${randomUUID()}`
-      const args = ['run', '--rm', '--pull=never', '--name', name, '--network', options.network ?? 'none',
+      const args = ['run', '--rm', '--pull=never', '--name', name, '--network', request.readOnly ? 'none' : options.network ?? 'none',
         '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=256', '--memory', options.memory ?? '1g', '--cpus=2',
         '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m', '--workdir', '/workspace',
         '--mount', `type=bind,src=${request.workspace},dst=/workspace${request.readOnly ? ',readonly' : ''}`,

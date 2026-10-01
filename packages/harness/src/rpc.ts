@@ -4,6 +4,9 @@ export const PROTOCOL_VERSION = 1 as const
 export const MAX_RPC_BYTES = 32 * 1024 * 1024
 const METHODS = new Set(['session.info', 'session.current', 'session.resume_choices', 'session.tree', 'context.get', 'progress.get', 'trace.serve', 'trace.stop', 'memory.command', 'checkpoint.list', 'checkpoint.undo', 'plugin.list', 'plugin.toggle', 'skill.list', 'skill.get', 'artifact.get', 'attachment.prepare', 'model.list', 'projects.list', 'projects.close', 'settings.web.get', 'settings.compaction.get', 'settings.compaction.save', 'settings.web.key.get', 'settings.web.save', 'settings.user.save', 'settings.memory.read', 'settings.memory.save', 'settings.get', 'permission.set', 'approval.pending', 'session.reset', 'session.new', 'session.compact', 'session.resume', 'session.rename', 'session.fork', 'session.delete', 'goal.run', 'thinking.set', 'model.save', 'model.key.get', 'model.key.clear', 'model.refresh', 'model.enabled.set', 'model.select', 'model.delete', 'chat.send', 'chat.steer', 'chat.cancel', 'approval.approve', 'approval.instruct', 'approval.reject', 'session.list', 'session.messages', 'plugin.reload'])
 
+METHODS.add('gateway.shutdown')
+METHODS.add('settings.execution.save')
+
 export class RpcError extends Error {
   constructor(readonly code: number, message: string) { super(message); this.name = 'RpcError' }
 }

@@ -19,5 +19,6 @@ Start here:
 - [Skills](skills.md)
 - [Verification](verification.md)
 - [Evaluations](evaluation.md)
+- [Deferred evaluation work](todo.md)
 - [Observability](observability.md)
 - [Checkpoints](checkpoints.md)

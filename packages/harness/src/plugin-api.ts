@@ -1,4 +1,5 @@
 import type { ChatModel, JsonObject, Message, RunContext, Tool } from 'friday-agent-core'
+import type { ModelCapabilities } from 'friday-agent-protocol'
 
 /** Stable, deliberately narrow contract for Friday product plugins. */
 export type PluginApi = { workspace: string; sessionId?: string; signal?: AbortSignal }
@@ -6,10 +7,12 @@ export type PluginApi = { workspace: string; sessionId?: string; signal?: AbortS
 /** Host-selected execution boundary; plugins cannot replace verifier isolation. */
 export type ExecutionBackend = {
   name: string
+  /** Host guarantee: readOnly requests enforce filesystem and network isolation. */
+  readOnlyIsolation?: boolean
   execute(request: { workspace: string; command: string; timeoutSeconds: number; readOnly: boolean; signal?: AbortSignal; onProgress?: (content: string) => void; spillPath?: string }): Promise<JsonObject>
 }
 
-export type MemoryPreparation = { capture?: JsonObject; recall?: string }
+export type MemoryPreparation = { capture?: JsonObject; recall?: string; warnings?: string[] }
 
 export type MemoryProvider = {
   prepare(request: { sessionId: string; text: string; workspace: string; signal?: AbortSignal }): Promise<MemoryPreparation>
@@ -37,6 +40,7 @@ export type PluginModelConfig = {
   profileName: string
   provider: string
   vision?: boolean
+  capabilities?: ModelCapabilities
 }
 
 export type ContextCompaction = {

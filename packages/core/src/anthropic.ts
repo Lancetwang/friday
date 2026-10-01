@@ -1,12 +1,16 @@
 import { ModelStreamError, throwModelRequestError } from './errors.js'
 import { isObject, readSseJson } from './sse.js'
 import { normalizeTermination } from './termination.js'
+import { outputTokenLimit } from './output-limit.js'
+import { modelOrigin, projectMessages, withModelOrigin } from './messages.js'
 import type { AssistantMessage, ChatModel, JsonObject, Message, ModelRequest, ToolCall, ToolSchema } from './types.js'
 
 export type AnthropicModelOptions = {
   apiKey: string
   model: string
   baseUrl?: string
+  provider?: string
+  vision?: boolean
   maxOutputTokens?: number
   /**
    * Mark the prompt for Anthropic's explicit prompt cache: one breakpoint
@@ -25,7 +29,9 @@ export class AnthropicModel implements ChatModel {
   }
 
   async complete(request: ModelRequest): Promise<AssistantMessage> {
-    const { system, messages } = anthropicMessages(request.messages)
+    const origin = modelOrigin('anthropic', this.options)
+    const limit = outputTokenLimit(this.options.maxOutputTokens ?? 4_096, request.maxOutputTokens)!
+    const { system, messages } = anthropicMessages(projectMessages(request.messages, origin, this.options.vision))
     const cached = this.options.cacheControl === true
     if (cached) markCacheBreakpoint(messages)
     const response = await fetch(`${normalizeBaseUrl(this.options.baseUrl)}/v1/messages`, {
@@ -38,7 +44,6 @@ export class AnthropicModel implements ChatModel {
       body: JSON.stringify({
         model: this.options.model,
         messages,
-        max_tokens: Math.min(this.options.maxOutputTokens ?? 4_096, request.maxOutputTokens ?? Infinity),
         stream: true,
         ...(system
           ? { system: cached ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system }
@@ -46,13 +51,14 @@ export class AnthropicModel implements ChatModel {
         ...(request.tools?.length
           ? { tools: request.tools.map(anthropicTool), tool_choice: { type: request.toolChoice === 'none' ? 'none' : 'auto' } }
           : {}),
-        ...this.options.body
+        ...this.options.body,
+        max_tokens: limit
       }),
       ...(request.signal ? { signal: request.signal } : {})
     })
     if (!response.ok) await throwModelRequestError(response)
     if (!response.body) throw new Error('Model response had no body.')
-    return readAnthropicStream(response.body, request)
+    return withModelOrigin(await readAnthropicStream(response.body, request), origin)
   }
 }
 
@@ -78,7 +84,7 @@ export function anthropicMessages(source: readonly Message[]): { system: string;
     else if (message.role === 'assistant') {
       const content: JsonObject[] = []
       if (Array.isArray(message.reasoning_content)) {
-        content.push(...message.reasoning_content.filter(isObject).map(value => ({ ...value })))
+        content.push(...message.reasoning_content.filter(isObject).filter(value => value.type === 'thinking' || value.type === 'redacted_thinking').map(value => ({ ...value })))
       }
       const text = textContent(message.content)
       if (text) content.push({ type: 'text', text })
