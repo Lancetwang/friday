@@ -1,6 +1,6 @@
 {
   "name": "friday-agent-core",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Minimal model/tool loop powering Friday agents.",
   "license": "MIT",
   "repository": {

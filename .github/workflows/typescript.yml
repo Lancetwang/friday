@@ -42,15 +42,17 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run smoke:cli
+      - run: npm run smoke:types
       - run: npm run eval:runtime
       - run: npm ci --prefix ui-desktop
       - run: npm run test:math --prefix ui-desktop
       - run: npm run test:sources --prefix ui-desktop
+      - run: npm run test:runtime --prefix ui-desktop
       - run: npm run build --prefix ui-desktop
       - run: npm run sidecar
       - run: npm run smoke:sidecar
       - name: Check Tauri bridge
-        run: cargo check --manifest-path ui-desktop/src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path ui-desktop/src-tauri/Cargo.toml
 
   npm-packages:
     if: github.event_name != 'pull_request'

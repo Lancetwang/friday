@@ -2,6 +2,31 @@
 
 Friday records product releases here. Internal test builds and packaging retries are intentionally omitted.
 
+## v0.9.4 (2026-10-01)
+
+### Added
+- Model profiles can explicitly configure API dialect, reasoning settings, tool and vision support, and context/output limits. Desktop model settings expose these capabilities, and discovery preserves saved overrides.
+- Goal mode accepts fixed acceptance criteria, saves them before execution, and requires evidence for every criterion during verification. Criteria and verification results survive session resume.
+- Desktop General settings can select the existing optional Docker execution backend and its agent network policy per workspace. Native execution remains the default; verifier shell calls require enforced read-only filesystem and network isolation.
+
+### Fixed
+- Cancelled Write/Edit calls stop while waiting for file locks and finish atomic-write cleanup before releasing the workspace mutation lock, preventing late writes from interfering with subsequent runs.
+- Manual shell approval now covers quoted interpreter scripts, package scripts, compound commands, and dynamic evaluation. Native verification no longer exposes Bash; Docker verifier calls always disable networking.
+- Optional memory recall/capture failures emit a warning and continue after saving the user input, including requests too long for automatic memory capture.
+- Desktop shutdown requests graceful gateway cleanup before bounded process-tree termination. Windows Job Object ownership also reaps detached descendants.
+- Cross-provider history projection preserves original messages, replays private reasoning only for a compatible origin, repairs tool-result pairing, and handles target image capabilities.
+- Independent compaction, memory consolidation, and title operations receive fresh budgets. Compaction that does not reduce context leaves the original conversation intact.
+- Main execution and verification charge one shared tool ledger. Per-request output token caps apply across adapters, and Web tool error envelopes are recorded as failures and cannot become successful verification evidence.
+- Desktop RPC requests have typed results, bounded waits, and workspace matching; run-scoped events reject late updates from earlier turns. Published plugin declarations no longer depend on the private protocol workspace.
+
+### Changed
+- Session storage, history, metrics, maintenance, and desktop settings/transport responsibilities are split into focused modules while retaining the public session interface.
+- CI includes portable plugin-type checks, desktop runtime regressions, and Rust tests on every supported platform. Real-model Harbor benchmarking remains deferred in `docs/todo.md`.
+
+### Upgrade notes
+- Native Goal verification uses read-only file tools. When a criterion requires executing a command, configure an isolated backend or expect a blocked/inconclusive result; ordinary native agent shell execution remains available under its permission policy.
+- Historical messages without provider/API/model provenance retain their ordinary content and tool exchanges, but their private reasoning is omitted from replay.
+
 ## v0.9.3 (2026-09-11)
 
 ### Added
